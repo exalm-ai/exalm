@@ -61,6 +61,11 @@ type serveCLIFlags struct {
 	githubRepo       string
 	githubBaseBranch string
 	gitProvider      string
+
+	// noK8s starts the dashboard without connecting to a cluster. Useful for
+	// demos, offline exploration, and viewing DORA / timeline from the local
+	// SQLite store when no kubeconfig is available.
+	noK8s bool
 }
 
 // newServeCmd returns the top-level `exalm serve` cobra command.
@@ -110,6 +115,7 @@ Examples:
 	cmd.Flags().StringVar(&f.githubRepo, "github-repo", "", "git repo for fix PR: owner/repo (or GITHUB_REPO env var)")
 	cmd.Flags().StringVar(&f.githubBaseBranch, "github-base-branch", "main", "base branch for the fix PR")
 	cmd.Flags().StringVar(&f.gitProvider, "git-provider", "github", `git hosting provider: "github", "gitlab", "bitbucket", "azuredevops"`)
+	cmd.Flags().BoolVar(&f.noK8s, "no-k8s", false, "start the dashboard without a Kubernetes cluster (empty findings; DORA and timeline still load from local store)")
 
 	return cmd
 }
@@ -128,6 +134,26 @@ func runServe(ctx context.Context, root *rootFlags, f *serveCLIFlags) error {
 	}
 	cfg.Apply = root.apply
 	cfg.ShowRedactions = root.showRedactions
+
+	// --- No-k8s demo / offline mode ---------------------------------------
+	// Skip the LLM client, cluster watch, and SLO check entirely. The web
+	// server starts immediately with an empty findings report so the user can
+	// explore the dashboard UI and DORA / timeline data from the local store.
+	if f.noK8s {
+		dashToken := f.token
+		if dashToken == "" {
+			dashToken = os.Getenv("EXALM_TOKEN")
+		}
+		noK8sOpts := web.ServeOpts{
+			Port:        f.port,
+			BindAddr:    f.bind,
+			OpenBrowser: f.openBrowser,
+			Token:       dashToken,
+			CreatePR:    buildCreatePRFn(f),
+		}
+		fmt.Fprintf(os.Stderr, "exalm serve: --no-k8s mode — dashboard starting on http://localhost:%d\n", f.port) //nolint:errcheck // startup info to stderr
+		return web.Serve(ctx, plugin.Report{}, noK8sOpts)
+	}
 
 	// --- Fast-fail readiness check ----------------------------------------
 	// Validate provider, API key, and the data directory before the slow
