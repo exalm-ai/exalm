@@ -2,6 +2,7 @@ package tui_test
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -281,5 +282,101 @@ func TestModel_ResultViewport_ScrollKeysDoNotPanic(t *testing.T) {
 	// The success icon must still be visible.
 	if !strings.Contains(view, "✓") {
 		t.Errorf("expected success tick in scrollable result view, got:\n%s", view)
+	}
+}
+
+// ─── help overlay ─────────────────────────────────────────────────────────────
+
+// firstReturn discards the tea.Cmd so an Update call can be passed straight into
+// mustModel: mustModel(t, firstReturn(m.Update(msg))).
+func firstReturn(m tea.Model, _ tea.Cmd) tea.Model { return m }
+
+func mustModel(t *testing.T, m tea.Model) tui.Model {
+	t.Helper()
+	nm, ok := m.(tui.Model)
+	if !ok {
+		t.Fatal("Update did not return a tui.Model")
+	}
+	return nm
+}
+
+// TestModel_HelpOverlay_ToggleWithQuestionMark verifies that "?" opens the
+// keybinding overlay from the plugin list and a second "?" closes it.
+func TestModel_HelpOverlay_ToggleWithQuestionMark(t *testing.T) {
+	plugins := []plugin.Plugin{
+		&fakePlugin{name: "logs", subcmds: []plugin.Subcommand{{Name: "summarize"}}},
+	}
+	m := tui.NewModel(context.Background(), plugins, okRunner("ok"))
+
+	// "?" opens the overlay.
+	nm := mustModel(t, firstReturn(m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("?")})))
+	view := nm.View()
+	if !strings.Contains(view, "Keyboard shortcuts") {
+		t.Errorf("expected help overlay after '?', got:\n%s", view)
+	}
+	if !strings.Contains(view, "Quit") {
+		t.Errorf("expected keybinding rows in help overlay, got:\n%s", view)
+	}
+
+	// "?" again closes it and returns to the plugin list.
+	nm2 := mustModel(t, firstReturn(nm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("?")})))
+	view2 := nm2.View()
+	if strings.Contains(view2, "Keyboard shortcuts") {
+		t.Errorf("expected help overlay to close on second '?', got:\n%s", view2)
+	}
+	if !strings.Contains(view2, "logs") {
+		t.Errorf("expected to return to plugin list after closing help, got:\n%s", view2)
+	}
+}
+
+// TestModel_HelpOverlay_EscCloses verifies Esc dismisses the overlay.
+func TestModel_HelpOverlay_EscCloses(t *testing.T) {
+	plugins := []plugin.Plugin{
+		&fakePlugin{name: "logs", subcmds: []plugin.Subcommand{{Name: "summarize"}}},
+	}
+	m := tui.NewModel(context.Background(), plugins, okRunner("ok"))
+	nm := mustModel(t, firstReturn(m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("?")})))
+	if !strings.Contains(nm.View(), "Keyboard shortcuts") {
+		t.Fatal("help overlay did not open")
+	}
+	nm2 := mustModel(t, firstReturn(nm.Update(tea.KeyMsg{Type: tea.KeyEsc})))
+	if strings.Contains(nm2.View(), "Keyboard shortcuts") {
+		t.Error("Esc should close the help overlay")
+	}
+}
+
+// TestModel_HelpOverlay_SuppressedInFlagForm verifies "?" is treated as literal
+// text in the flag form (a path may legitimately contain it), so it must not
+// open the overlay there.
+func TestModel_HelpOverlay_SuppressedInFlagForm(t *testing.T) {
+	plugins := []plugin.Plugin{
+		&fakePlugin{name: "syslog", subcmds: []plugin.Subcommand{{Name: "analyze"}}},
+	}
+	m := tui.NewModel(context.Background(), plugins, okRunner("ok"))
+	// Enter → flag form (single subcommand skips the subcommand list).
+	fm := mustModel(t, firstReturn(m.Update(tea.KeyMsg{Type: tea.KeyEnter})))
+	fm2 := mustModel(t, firstReturn(fm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("?")})))
+	if strings.Contains(fm2.View(), "Keyboard shortcuts") {
+		t.Error("'?' should be literal text in the flag form, not open the help overlay")
+	}
+}
+
+// TestModel_RunningView_ShowsElapsed verifies the running view renders an
+// elapsed-seconds counter once a run is submitted.
+func TestModel_RunningView_ShowsElapsed(t *testing.T) {
+	plugins := []plugin.Plugin{
+		&fakePlugin{name: "syslog", subcmds: []plugin.Subcommand{{Name: "analyze"}}},
+	}
+	m := tui.NewModel(context.Background(), plugins, okRunner("ok"))
+	// Enter → flag form, Enter → submit → stateRunning.
+	fm := mustModel(t, firstReturn(m.Update(tea.KeyMsg{Type: tea.KeyEnter})))
+	rm := mustModel(t, firstReturn(fm.Update(tea.KeyMsg{Type: tea.KeyEnter})))
+
+	view := rm.View()
+	if !strings.Contains(view, "Running") {
+		t.Errorf("expected running view, got:\n%s", view)
+	}
+	if !regexp.MustCompile(`\d+s`).MatchString(view) {
+		t.Errorf("expected an elapsed-seconds counter (e.g. '0s') in the running view, got:\n%s", view)
 	}
 }

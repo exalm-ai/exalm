@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -125,10 +126,14 @@ type Model struct {
 	focusIndex int // which input is focused
 
 	// ── running / result ─────────────────────────────────────────────────
-	spin     spinner.Model
-	result   string
-	runErr   error
-	resultVP viewport.Model // scrollable output panel for the result screen
+	spin      spinner.Model
+	result    string
+	runErr    error
+	resultVP  viewport.Model // scrollable output panel for the result screen
+	startedAt time.Time      // when the current run began (drives the elapsed timer)
+
+	// ── help overlay ─────────────────────────────────────────────────────
+	showHelp bool // toggled by "?"; renders the keybinding reference panel
 
 	// ── terminal dimensions ──────────────────────────────────────────────
 	width  int
@@ -223,6 +228,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // View renders the current UI.
 func (m Model) View() string {
 	header := headerStyle.Render("  exalm tui  —  interactive ops assistant")
+
+	// The "?" help overlay takes over the body when active.
+	if m.showHelp {
+		return header + "\n\n" + m.viewHelp()
+	}
+
 	var body string
 
 	switch m.state {
@@ -247,13 +258,13 @@ func (m Model) View() string {
 
 func (m Model) viewPluginList() string {
 	return m.pluginList.View() +
-		helpStyle.Render("\n  ↑/↓ navigate  •  Enter select  •  / filter  •  q quit")
+		helpStyle.Render("\n  ↑/↓ navigate  •  Enter select  •  / filter  •  ? help  •  q quit")
 }
 
 func (m Model) viewSubcmdList() string {
 	return subtitleStyle.Render("Plugin: "+m.selectedPlugin.Name()) + "\n\n" +
 		m.subcmdList.View() +
-		helpStyle.Render("\n  ↑/↓ navigate  •  Enter select  •  Esc back  •  q quit")
+		helpStyle.Render("\n  ↑/↓ navigate  •  Enter select  •  Esc back  •  ? help  •  q quit")
 }
 
 func (m Model) viewFlagForm() string {
@@ -271,18 +282,48 @@ func (m Model) viewFlagForm() string {
 }
 
 func (m Model) viewRunning() string {
-	return fmt.Sprintf("\n  %s  Running %s %s …\n",
+	// The spinner ticks every frame, so re-deriving elapsed here keeps the
+	// counter live without a separate timer goroutine.
+	elapsed := ""
+	if !m.startedAt.IsZero() {
+		elapsed = subtitleStyle.Render(fmt.Sprintf(" %ds", int(time.Since(m.startedAt).Seconds())))
+	}
+	return fmt.Sprintf("\n  %s  Running %s %s …%s\n",
 		m.spin.View(),
 		selectedStyle.Render(m.selectedPlugin.Name()),
 		m.selectedSubcmd.Name,
+		elapsed,
 	)
+}
+
+// viewHelp renders the bordered keybinding reference toggled by "?".
+func (m Model) viewHelp() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("Keyboard shortcuts") + "\n\n")
+	rows := [][2]string{
+		{"↑ / ↓", "Navigate lists · scroll results"},
+		{"Enter", "Select · run the command"},
+		{"Tab / Shift+Tab", "Move between flag fields"},
+		{"/", "Filter the current list"},
+		{"PgUp / PgDn", "Page through results"},
+		{"r", "Run the last command again"},
+		{"Esc", "Go back one step"},
+		{"?", "Toggle this help"},
+		{"q / Ctrl+C", "Quit"},
+	}
+	for _, kv := range rows {
+		key := helpKeyStyle.Render(fmt.Sprintf("%-16s", kv[0]))
+		fmt.Fprintf(&b, "  %s  %s\n", key, kv[1])
+	}
+	b.WriteString("\n" + subtitleStyle.Render("Press ? or Esc to close"))
+	return helpPanelStyle.Render(b.String())
 }
 
 func (m Model) viewResult() string {
 	var b strings.Builder
 	if m.runErr != nil {
 		b.WriteString(errorStyle.Render("  ✗  Error: "+m.runErr.Error()) + "\n\n")
-		b.WriteString(helpStyle.Render("  r run again  •  Esc back to plugins  •  q quit"))
+		b.WriteString(helpStyle.Render("  r run again  •  Esc back to plugins  •  ? help  •  q quit"))
 	} else {
 		b.WriteString(successStyle.Render("  ✓  Complete") + "\n\n")
 		b.WriteString(m.resultVP.View() + "\n")
@@ -292,7 +333,7 @@ func (m Model) viewResult() string {
 			pct = int(m.resultVP.ScrollPercent() * 100)
 		}
 		b.WriteString(helpStyle.Render(fmt.Sprintf(
-			"  ↑/↓ scroll  •  PgUp/PgDn page  •  r run again  •  Esc back  •  q quit  [%d%%]",
+			"  ↑/↓ scroll  •  PgUp/PgDn page  •  r run again  •  Esc back  •  ? help  •  q quit  [%d%%]",
 			pct,
 		)))
 	}
@@ -315,6 +356,25 @@ func (m Model) formatResultContent() string {
 // ─── event handling ─────────────────────────────────────────────────────────
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Global help overlay. While it is up, "?" / Esc dismiss it and Ctrl+C / q
+	// still quit; every other key is swallowed so the panel stays put.
+	if m.showHelp {
+		switch msg.String() {
+		case "ctrl+c", "q":
+			m.state = stateQuit
+			return m, tea.Quit
+		case "?", "esc":
+			m.showHelp = false
+		}
+		return m, nil
+	}
+	// Open the overlay with "?" — but only when it would not shadow a text input
+	// or an active list filter, where "?" is a literal character.
+	if msg.String() == "?" && m.canToggleHelp() {
+		m.showHelp = true
+		return m, nil
+	}
+
 	switch m.state {
 
 	case statePluginList:
@@ -379,6 +439,22 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m.updateActiveComponent(msg)
+}
+
+// canToggleHelp reports whether "?" should open the help overlay rather than be
+// handled as literal text. It is suppressed while typing into a flag input or
+// while a list's filter is actively being edited.
+func (m Model) canToggleHelp() bool {
+	switch m.state {
+	case stateFlagForm:
+		return false
+	case statePluginList:
+		return m.pluginList.FilterState() != list.Filtering
+	case stateSubcmdList:
+		return m.subcmdList.FilterState() != list.Filtering
+	default:
+		return true
+	}
 }
 
 // ─── state transitions ───────────────────────────────────────────────────────
@@ -451,6 +527,7 @@ func (m Model) submitForm() (Model, tea.Cmd) {
 	ctx := m.ctx
 
 	m.state = stateRunning
+	m.startedAt = time.Now()
 	return m, tea.Batch(
 		m.spin.Tick,
 		func() tea.Msg {
