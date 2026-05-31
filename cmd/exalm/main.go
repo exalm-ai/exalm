@@ -473,8 +473,13 @@ func runSubcommand(ctx context.Context, p plugin.Plugin, sc plugin.Subcommand, f
 		return output.Markdown(os.Stdout, report)
 	}
 
-	// k8s analyze/watch: open the web dashboard with optional closures injected.
-	openWeb := p.Name() == "k8s" && (sc.Name == "analyze" || sc.Name == "watch") && cfg.OutputFormat == "markdown"
+	// k8s analyze/watch: open the web dashboard only when stdout is an
+	// interactive terminal. In CI / pipes / automated runs (no TTY), fall
+	// through to plain markdown output and exit cleanly.
+	stdoutStat, _ := os.Stdout.Stat()
+	openWeb := p.Name() == "k8s" && (sc.Name == "analyze" || sc.Name == "watch") &&
+		cfg.OutputFormat == "markdown" &&
+		stdoutStat != nil && (stdoutStat.Mode()&os.ModeCharDevice) != 0
 
 	switch {
 	case cfg.OutputFormat == "json":
