@@ -320,7 +320,10 @@ func TestCollectArgoCDApps_ParsesApps(t *testing.T) {
 		t.Errorf("SyncedAt = %v, want %v", parsed, syncedAt)
 	}
 
-	syncResult := opState["syncResult"].(map[string]interface{})
+	syncResult, ok := opState["syncResult"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("syncResult field is not a map")
+	}
 	revision, _ := syncResult["revision"].(string)
 	if !strings.HasPrefix(revision, "deadbeef") {
 		t.Errorf("revision = %q, want prefix %q", revision, "deadbeef")
