@@ -573,7 +573,7 @@ func dryRunPreview(cfg config.Config, p plugin.Plugin, sc plugin.Subcommand) err
 	b.WriteString("\n  " + cliui.Bold("Dry run — no LLM call, nothing mutated") + "\n")
 	b.WriteString("  ─────────────────────────────────────\n")
 	for _, r := range results {
-		b.WriteString(fmt.Sprintf("  %s  %-16s %s\n", statusIcon(r), r.Name, r.Message))
+		fmt.Fprintf(&b, "  %s  %-16s %s\n", statusIcon(r), r.Name, r.Message)
 	}
 
 	model := cfg.LLMModel
