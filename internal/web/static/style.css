@@ -528,6 +528,46 @@ body {
 .finding-title { font-weight: 600; font-size: 0.8rem; color: var(--text-hi); }
 
 .empty-state { color: var(--text-dim); font-size: 0.82rem; padding: 1rem 0; }
+.empty-state-title { color: var(--green); font-weight: 600; font-size: 0.9rem; margin: 0 0 0.5rem; }
+.empty-state-hint { color: var(--text-dim); margin: 0 0 0.4rem; }
+.empty-state-cmds { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.35rem; }
+.empty-state-cmds li { color: var(--text-dim); line-height: 1.5; }
+.empty-state-cmds code {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.1em 0.45em;
+  color: var(--text);
+  font-size: 0.78rem;
+}
+.empty-state-cmds a { color: var(--accent); text-decoration: none; }
+.empty-state-cmds a:hover { text-decoration: underline; }
+
+/* ── Loading spinner (shared by dashboard, timeline, DORA) ── */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spinner {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--border);
+  border-top-color: var(--brand);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  vertical-align: middle;
+}
+.loading-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  padding: 2rem 0;
+  color: var(--text-dim);
+  font-size: 0.875rem;
+}
+/* Respect reduced-motion: keep a gentle hint of motion without spinning fast. */
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation-duration: 2.4s; }
+}
 
 /* ── Fix buttons ── */
 .fix-btn {
