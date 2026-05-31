@@ -46,6 +46,11 @@ type Plugin interface {
 type Subcommand struct {
 	Name        string
 	Description string
+	// Mutates reports whether this specific subcommand can modify state in the
+	// user's environment. The CLI gates execution behind --apply when true.
+	// Plugins that expose a mix of read-only and mutating subcommands should set
+	// this per subcommand rather than relying solely on Plugin.Mutates().
+	Mutates bool
 	// Run executes the action and returns a structured Report.
 	Run func(ctx context.Context, args RunArgs) (Report, error)
 }

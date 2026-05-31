@@ -50,21 +50,25 @@ func (p *Plugin) Subcommands() []plugin.Subcommand {
 		{
 			Name:        "open",
 			Description: "Open a new incident record (requires --title, optional --severity)",
+			Mutates:     true, // writes a new incident record to the local store
 			Run:         p.open,
 		},
 		{
 			Name:        "list",
 			Description: "List all incidents (optionally filter by status with --status open|closed|mitigated)",
+			Mutates:     false, // read-only: no store writes
 			Run:         p.list,
 		},
 		{
 			Name:        "close",
 			Description: "Mark an incident as resolved (requires --incident-id)",
+			Mutates:     true, // updates the incident record in the local store
 			Run:         p.close,
 		},
 		{
 			Name:        "postmortem",
 			Description: "Generate an AI blameless postmortem for a closed incident (requires --incident-id)",
+			Mutates:     true, // persists the generated postmortem back to the incident record
 			Run:         p.postmortem,
 		},
 	}

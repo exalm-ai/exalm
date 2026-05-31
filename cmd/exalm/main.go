@@ -425,9 +425,11 @@ func runSubcommand(ctx context.Context, p plugin.Plugin, sc plugin.Subcommand, f
 	cfg.Apply = flags.apply
 	cfg.ShowRedactions = flags.showRedactions
 
-	// Safety gate: mutating plugins require --apply.
-	if p.Mutates() && !cfg.Apply {
-		return fmt.Errorf("plugin %q can mutate state; pass --apply to allow", p.Name())
+	// Safety gate: mutating subcommands require --apply.
+	// We check sc.Mutates (subcommand-level) so that read-only subcommands on
+	// a plugin where Mutates() == true (e.g. "incident list") are not blocked.
+	if sc.Mutates && !cfg.Apply {
+		return fmt.Errorf("subcommand %q of plugin %q can mutate state; pass --apply to allow", sc.Name, p.Name())
 	}
 
 	// Pass --apply state through to the plugin via flags so fix subcommand can read it.

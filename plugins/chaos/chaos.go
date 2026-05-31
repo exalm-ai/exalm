@@ -65,6 +65,7 @@ func (p *Plugin) Subcommands() []plugin.Subcommand {
 		{
 			Name:        "suggest",
 			Description: "Score services by resilience risk and suggest Litmus chaos experiments",
+			Mutates:     true, // --apply path prints Litmus YAML intended for kubectl apply
 			Run:         p.suggest,
 		},
 	}
