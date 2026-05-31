@@ -1,0 +1,84 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://exalm.com/schemas/v0/finding.json",
+  "title": "Finding",
+  "description": "A single diagnostic item produced by an Exalm plugin.",
+  "type": "object",
+  "required": ["severity", "title", "detail"],
+  "properties": {
+    "severity": {
+      "type": "string",
+      "enum": ["info", "low", "medium", "high", "critical"],
+      "description": "How severe the finding is."
+    },
+    "category": {
+      "type": "string",
+      "description": "Logical grouping (e.g. Pods, Security, Networking, Resources, Cost)."
+    },
+    "source": {
+      "type": "string",
+      "description": "Plugin or data source that produced this finding (e.g. k8s/prod-cluster)."
+    },
+    "title": {
+      "type": "string",
+      "description": "Short one-line description of the finding."
+    },
+    "detail": {
+      "type": "string",
+      "description": "Longer explanation with evidence and context."
+    },
+    "suggestion": {
+      "type": "string",
+      "description": "Recommended remediation steps."
+    },
+    "remediation": {
+      "$ref": "#/$defs/RemediationAction"
+    },
+    "likely_cause": {
+      "$ref": "#/$defs/ChangeRef"
+    },
+    "evidence": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/EvidenceItem"}
+    }
+  },
+  "$defs": {
+    "RemediationAction": {
+      "type": "object",
+      "required": ["kind", "namespace", "resource", "name"],
+      "properties": {
+        "kind": {"type": "string", "enum": ["rollout-restart", "resume-cronjob", "delete-pod"]},
+        "namespace": {"type": "string"},
+        "resource": {"type": "string"},
+        "name": {"type": "string"},
+        "patch_json": {"type": "string"},
+        "kubectl_cmd": {"type": "string"},
+        "description": {"type": "string"}
+      }
+    },
+    "ChangeRef": {
+      "type": "object",
+      "required": ["id", "kind", "name"],
+      "properties": {
+        "id": {"type": "string"},
+        "kind": {"type": "string"},
+        "namespace": {"type": "string"},
+        "name": {"type": "string"},
+        "actor": {"type": "string"},
+        "ago_seconds": {"type": "integer"},
+        "diff_url": {"type": "string"}
+      }
+    },
+    "EvidenceItem": {
+      "type": "object",
+      "required": ["kind", "source"],
+      "properties": {
+        "kind": {"type": "string", "enum": ["log", "metric", "event", "change"]},
+        "source": {"type": "string"},
+        "excerpt": {"type": "string"},
+        "at": {"type": "string", "format": "date-time"},
+        "anchor": {"type": "string"}
+      }
+    }
+  }
+}

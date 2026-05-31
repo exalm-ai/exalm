@@ -1,0 +1,198 @@
+Scope: payments | Total pods: 22 | Unhealthy: 11
+
+## DEPLOYMENTS
+- payments/payments-api: desired=8 available=0 unavailable=8 stall=ProgressDeadlineExceeded
+- payments/payments-worker: desired=3 available=0 unavailable=3 stall=ProgressDeadlineExceeded
+
+## HPAs
+- payments/payments-api-hpa → Deployment/payments-api: current=8 desired=8 min=3 max=8 issue=ScalingLimited: MaxReplicasReached
+
+--- payments/postgres-primary-0 ---
+Phase: Running | Reason: OOMKilled | Restarts: 3 | Age: 52m
+
+Events:
+  [OOMKilling] Memory cgroup out of memory: Killed process 891 (postgres) total-vm:8388608kB anon-rss:4194304kB (x3, 8m ago)
+  [BackOff] Back-off restarting failed container (x6, 5m ago)
+
+Log signals:
+  [db-error] x2 — ERROR: could not write to file "pg_wal/000000010000000000000001": No space left on device
+  [oom-system] x1 — memory cgroup out of memory: Killed process 891 (postgres)
+
+Logs (postgres):
+```
+2026-05-11T08:00:01Z INFO  PostgreSQL 15.3 on x86_64-pc-linux-gnu, compiled by gcc
+2026-05-11T08:00:04Z INFO  database system is ready to accept connections
+2026-05-11T08:00:04Z INFO  autovacuum launcher started
+2026-05-11T08:32:11Z WARNING connection pool: 95/100 connections active
+2026-05-11T08:32:39Z WARNING autovacuum: found orphan temp file "base/pgsql_tmp/pgsql_tmp14391.0"
+2026-05-11T08:32:44Z ERROR  out of memory for query result: could not resize shared memory segment
+2026-05-11T08:32:44Z ERROR  memory cgroup out of memory: Killed process 891 (postgres)
+2026-05-11T08:32:45Z FATAL  terminating connection due to administrator command
+Killed
+```
+
+--- payments/payments-api-8f3bc-x2p4k ---
+Phase: Running | Reason: CrashLoopBackOff | Restarts: 21 | Age: 48m
+
+Events:
+  [BackOff] Back-off restarting failed container (x42, 25s ago)
+
+Log signals:
+  [db-error] x14 — dial tcp 10.96.4.18:5432: connect: connection refused
+
+Logs (api):
+```
+2026-05-11T08:33:02Z INFO  payments-api v3.2.1 starting
+2026-05-11T08:33:02Z INFO  env: POSTGRES_HOST=postgres-primary.payments.svc POSTGRES_PORT=5432
+2026-05-11T08:33:02Z INFO  Connecting to postgres://app@postgres-primary.payments.svc:5432/payments
+2026-05-11T08:33:07Z ERROR dial tcp 10.96.4.18:5432: connect: connection refused
+2026-05-11T08:33:07Z ERROR failed to ping database after 5 retries: driver: bad connection
+2026-05-11T08:33:07Z FATAL database unreachable, shutting down
+```
+
+--- payments/payments-api-8f3bc-a1b2c ---
+Phase: Running | Reason: CrashLoopBackOff | Restarts: 19 | Age: 48m
+
+Events:
+  [BackOff] Back-off restarting failed container (x38, 40s ago)
+
+Log signals:
+  [db-error] x11 — dial tcp 10.96.4.18:5432: connect: connection refused
+
+Logs (api):
+```
+2026-05-11T08:33:04Z INFO  payments-api v3.2.1 starting
+2026-05-11T08:33:09Z ERROR dial tcp 10.96.4.18:5432: connect: connection refused
+2026-05-11T08:33:09Z ERROR failed to ping database after 5 retries: driver: bad connection
+2026-05-11T08:33:09Z FATAL database unreachable, shutting down
+```
+
+--- payments/payments-api-8f3bc-d3e4f ---
+Phase: Running | Reason: CrashLoopBackOff | Restarts: 17 | Age: 47m
+
+Events:
+  [BackOff] Back-off restarting failed container (x34, 1m ago)
+
+Log signals:
+  [db-error] x13 — dial tcp 10.96.4.18:5432: connect: connection refused
+
+Logs (api):
+```
+2026-05-11T08:33:05Z INFO  payments-api v3.2.1 starting
+2026-05-11T08:33:10Z ERROR dial tcp 10.96.4.18:5432: connect: connection refused
+2026-05-11T08:33:10Z FATAL database unreachable, shutting down
+```
+
+--- payments/payments-api-8f3bc-g5h6i ---
+Phase: Running | Reason: CrashLoopBackOff | Restarts: 16 | Age: 47m
+
+Events:
+  [BackOff] Back-off restarting failed container (x32, 1m ago)
+
+Log signals:
+  [db-error] x10 — connection pool exhausted: timeout acquiring connection after 5000ms
+
+Logs (api):
+```
+2026-05-11T08:33:06Z INFO  payments-api v3.2.1 starting
+2026-05-11T08:33:11Z ERROR connection pool exhausted: timeout acquiring connection after 5000ms
+2026-05-11T08:33:11Z FATAL database unreachable, shutting down
+```
+
+--- payments/payments-api-8f3bc-j7k8l ---
+Phase: Running | Reason: CrashLoopBackOff | Restarts: 15 | Age: 46m
+
+Events:
+  [BackOff] Back-off restarting failed container (x30, 2m ago)
+
+Log signals:
+  [db-error] x9 — dial tcp 10.96.4.18:5432: connect: connection refused
+
+Logs (api):
+```
+2026-05-11T08:33:07Z INFO  payments-api v3.2.1 starting
+2026-05-11T08:33:12Z ERROR dial tcp 10.96.4.18:5432: connect: connection refused
+2026-05-11T08:33:12Z FATAL database unreachable, shutting down
+```
+
+--- payments/payments-api-8f3bc-m9n0p ---
+Phase: Running | Reason: CrashLoopBackOff | Restarts: 14 | Age: 46m
+
+Events:
+  [BackOff] Back-off restarting failed container (x28, 2m ago)
+
+Log signals:
+  [db-error] x8 — driver: bad connection
+
+Logs (api):
+```
+2026-05-11T08:33:08Z INFO  payments-api v3.2.1 starting
+2026-05-11T08:33:13Z ERROR driver: bad connection
+2026-05-11T08:33:13Z FATAL database unreachable, shutting down
+```
+
+--- payments/payments-api-8f3bc-q1r2s ---
+Phase: Running | Reason: CrashLoopBackOff | Restarts: 13 | Age: 45m
+
+Events:
+  [BackOff] Back-off restarting failed container (x26, 3m ago)
+
+Log signals:
+  [db-error] x7 — dial tcp 10.96.4.18:5432: connect: connection refused
+
+Logs (api):
+```
+2026-05-11T08:33:09Z INFO  payments-api v3.2.1 starting
+2026-05-11T08:33:14Z ERROR dial tcp 10.96.4.18:5432: connect: connection refused
+2026-05-11T08:33:14Z FATAL database unreachable, shutting down
+```
+
+--- payments/payments-api-8f3bc-t3u4v ---
+Phase: Running | Reason: CrashLoopBackOff | Restarts: 12 | Age: 45m
+
+Events:
+  [BackOff] Back-off restarting failed container (x24, 3m ago)
+
+Log signals:
+  [db-error] x6 — connection pool exhausted: timeout acquiring connection after 5000ms
+
+Logs (api):
+```
+2026-05-11T08:33:10Z INFO  payments-api v3.2.1 starting
+2026-05-11T08:33:15Z ERROR connection pool exhausted: timeout acquiring connection after 5000ms
+2026-05-11T08:33:15Z FATAL database unreachable, shutting down
+```
+
+--- payments/payments-worker-7c9ab-r4s5t ---
+Phase: Running | Reason: CrashLoopBackOff | Restarts: 12 | Age: 43m
+
+Events:
+  [BackOff] Back-off restarting failed container (x24, 1m ago)
+
+Log signals:
+  [db-error] x9 — connection pool exhausted: timeout acquiring connection after 5000ms
+
+Logs (worker):
+```
+2026-05-11T08:33:10Z INFO  payments-worker v3.2.1 starting, pool_size=10
+2026-05-11T08:33:10Z INFO  Connecting to postgres://worker@postgres-primary.payments.svc:5432/payments
+2026-05-11T08:33:15Z ERROR connection pool exhausted: timeout acquiring connection after 5000ms
+2026-05-11T08:33:15Z ERROR failed to acquire connection from pool after 3 attempts
+2026-05-11T08:33:15Z FATAL cannot start worker: database connection unavailable
+```
+
+--- payments/payments-worker-7c9ab-u5v6w ---
+Phase: Running | Reason: CrashLoopBackOff | Restarts: 10 | Age: 42m
+
+Events:
+  [BackOff] Back-off restarting failed container (x20, 2m ago)
+
+Log signals:
+  [db-error] x7 — dial tcp 10.96.4.18:5432: connect: connection refused
+
+Logs (worker):
+```
+2026-05-11T08:33:12Z INFO  payments-worker v3.2.1 starting, pool_size=10
+2026-05-11T08:33:17Z ERROR dial tcp 10.96.4.18:5432: connect: connection refused
+2026-05-11T08:33:17Z FATAL cannot start worker: database connection unavailable
+```

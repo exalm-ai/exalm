@@ -1,0 +1,46 @@
+Scope: data-pipeline | Total pods: 30 | Unhealthy: 5
+
+--- data-pipeline/spark-driver-job-42-x8p1q ---
+Phase: Pending | Reason: Pending | Restarts: 0 | Age: 18m
+
+Events:
+  [FailedScheduling] 0/6 nodes are available: 3 Insufficient cpu, 3 Insufficient memory. preemption: 0/6 nodes are eligible for preemption: 3 No preemption victims found for incoming pod, 3 Preemption is not helpful for scheduling. (x18, 1m ago)
+
+Logs (driver): [empty]
+
+--- data-pipeline/spark-executor-job-42-0-r3k7n ---
+Phase: Pending | Reason: Pending | Restarts: 0 | Age: 17m
+
+Events:
+  [FailedScheduling] 0/6 nodes are available: 3 Insufficient cpu, 3 Insufficient memory. preemption: 0/6 nodes are eligible for preemption: 3 No preemption victims found for incoming pod, 3 Preemption is not helpful for scheduling. (x17, 2m ago)
+
+Logs (executor): [empty]
+
+--- data-pipeline/spark-executor-job-42-1-m9v2w ---
+Phase: Pending | Reason: Pending | Restarts: 0 | Age: 17m
+
+Events:
+  [FailedScheduling] 0/6 nodes are available: 3 Insufficient cpu, 3 Insufficient memory. (x16, 2m ago)
+
+Logs (executor): [empty]
+
+--- data-pipeline/spark-executor-job-42-2-t4b5p ---
+Phase: Pending | Reason: Pending | Restarts: 0 | Age: 16m
+
+Events:
+  [FailedScheduling] 0/6 nodes are available: 3 Insufficient cpu, 3 Insufficient memory. (x15, 3m ago)
+
+Logs (executor): [empty]
+
+--- data-pipeline/spark-executor-job-42-3-k6d8q ---
+Phase: Pending | Reason: Pending | Restarts: 0 | Age: 16m
+
+Events:
+  [FailedScheduling] 0/6 nodes are available: 3 Insufficient cpu, 3 Insufficient memory. (x14, 4m ago)
+
+Logs (executor): [empty]
+
+## NODE ISSUES
+- ip-10-0-1-12.eu-west-1.compute.internal: MemoryPressure, DiskPressure
+- ip-10-0-2-44.eu-west-1.compute.internal: MemoryPressure
+- ip-10-0-3-89.eu-west-1.compute.internal: MemoryPressure

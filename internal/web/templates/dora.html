@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Exalm — DORA Metrics</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    .dora-page { max-width: 1200px; margin: 0 auto; padding: 1.5rem 1rem; }
+    .dora-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .dora-card {
+      background: var(--surface, #161b22);
+      border: 1px solid var(--border, #30363d);
+      border-radius: 8px;
+      padding: 1.25rem 1.5rem;
+    }
+    .dora-card-name {
+      font-size: 0.78rem;
+      color: var(--text-dim, #8b949e);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 0.5rem;
+    }
+    .dora-card-value {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--text, #e6edf3);
+      font-family: monospace;
+      margin-bottom: 0.5rem;
+    }
+    .dora-card-na { color: var(--text-dim, #8b949e); }
+    .dora-band {
+      display: inline-block;
+      border-radius: 4px;
+      padding: 0.2em 0.6em;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .band-Elite  { background: #1a4731; color: #3fb950; }
+    .band-High   { background: #1a3052; color: #58a6ff; }
+    .band-Medium { background: #3d2e00; color: #d29922; }
+    .band-Low    { background: #3d1a1a; color: #f85149; }
+    .band-NA     { background: #21262d; color: #8b949e; }
+    .dora-section {
+      background: var(--surface, #161b22);
+      border: 1px solid var(--border, #30363d);
+      border-radius: 8px;
+      padding: 1.25rem 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+    .dora-section h2 {
+      margin: 0 0 1rem;
+      font-size: 1rem;
+      color: var(--text, #e6edf3);
+    }
+    .dora-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+    }
+    .dora-table th {
+      text-align: left;
+      padding: 0.5rem 0.75rem;
+      border-bottom: 1px solid var(--border, #30363d);
+      color: var(--text-dim, #8b949e);
+      font-weight: 600;
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    .dora-table td {
+      padding: 0.5rem 0.75rem;
+      border-bottom: 1px solid var(--border, #21262d);
+      color: var(--text, #e6edf3);
+      vertical-align: middle;
+    }
+    .dora-table tr:last-child td { border-bottom: none; }
+    .deploy-success { color: #3fb950; }
+    .deploy-fail    { color: #f85149; }
+    .dora-loading   { color: var(--text-dim, #8b949e); font-size: 0.875rem; padding: 1rem 0; }
+    .overall-row {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 1.25rem;
+    }
+    .overall-label { color: var(--text-dim, #8b949e); font-size: 0.85rem; }
+    .nav-back {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      color: var(--blue, #58a6ff);
+      font-size: 0.875rem;
+      text-decoration: none;
+      margin-bottom: 1.25rem;
+    }
+    .nav-back:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+
+<header class="header">
+  <div class="header-brand">&#x2B21; exalm</div>
+  <span class="status-dot" title="Connected"></span>
+  <div class="header-title">DORA Engineering Metrics</div>
+  <div class="header-actions"></div>
+  <div class="header-timestamp" id="ts"></div>
+  <button class="btn-theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark mode" aria-label="Toggle theme">&#x2600;</button>
+</header>
+
+<div class="dora-page">
+  <a href="/" class="nav-back">&#x2190; Dashboard</a>
+
+  <div id="overall-row" class="overall-row" style="display:none">
+    <span class="overall-label">Overall band:</span>
+    <span id="overall-band" class="dora-band"></span>
+  </div>
+
+  <div class="dora-cards" id="dora-cards">
+    <div class="dora-card"><div class="dora-loading">Loading metrics&#x2026;</div></div>
+  </div>
+
+  <div class="dora-section">
+    <h2>Recent Deployments</h2>
+    <div id="deploy-table-wrap">
+      <div class="dora-loading">Loading&#x2026;</div>
+    </div>
+  </div>
+</div>
+
+<footer class="footer">
+  <span><a href="https://exalm.com" target="_blank" rel="noopener">exalm.com</a></span>
+  <span class="auto-refresh-note">auto-refreshes every 60s</span>
+</footer>
+
+<script>
+'use strict';
+
+function esc(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function bandClass(b) {
+  return 'dora-band band-' + (b || 'NA').replace(/\s/g, '-');
+}
+
+function bandLabel(b) {
+  var icons = { Elite: '&#x1F7E2;', High: '&#x1F535;', Medium: '&#x1F7E1;', Low: '&#x1F534;' };
+  return (icons[b] || '&#x2B1C;') + ' ' + esc(b || 'N/A');
+}
+
+function fmtFreq(v, total) {
+  if (!total) return 'N/A';
+  return v.toFixed(2) + '/day';
+}
+
+function fmtCFR(v, total) {
+  if (!total) return 'N/A';
+  return (v * 100).toFixed(1) + '%';
+}
+
+function fmtMTTR(h) {
+  if (h === 0) return 'N/A';
+  if (h < 1) return Math.round(h * 60) + 'm';
+  if (h < 24) return h.toFixed(1) + 'h';
+  return (h / 24).toFixed(1) + 'd';
+}
+
+function fmtDate(iso) {
+  if (!iso) return '';
+  var d = new Date(iso);
+  return d.getFullYear() + '-' +
+    String(d.getMonth() + 1).padStart(2, '0') + '-' +
+    String(d.getDate()).padStart(2, '0') + ' ' +
+    String(d.getHours()).padStart(2, '0') + ':' +
+    String(d.getMinutes()).padStart(2, '0');
+}
+
+function renderCards(m) {
+  var cards = [
+    {
+      name: 'Deployment Frequency',
+      value: fmtFreq(m.deployment_frequency, m.total_deployments),
+      band: m.deployment_frequency_band,
+      sub: m.total_deployments + ' deployments'
+    },
+    {
+      name: 'Lead Time for Changes',
+      value: 'N/A',
+      band: m.lead_time_band,
+      sub: 'git integration required'
+    },
+    {
+      name: 'Change Failure Rate',
+      value: fmtCFR(m.cfr, m.total_deployments),
+      band: m.cfr_band,
+      sub: m.total_incidents + ' incidents'
+    },
+    {
+      name: 'MTTR',
+      value: fmtMTTR(m.mttr_hours),
+      band: m.mttr_band,
+      sub: m.total_incidents + ' incidents'
+    }
+  ];
+
+  var html = cards.map(function(c) {
+    return '<div class="dora-card">' +
+      '<div class="dora-card-name">' + esc(c.name) + '</div>' +
+      '<div class="dora-card-value' + (c.value === 'N/A' ? ' dora-card-na' : '') + '">' + esc(c.value) + '</div>' +
+      '<span class="' + bandClass(c.band) + '">' + bandLabel(c.band) + '</span>' +
+      '<div style="font-size:0.75rem;color:var(--text-dim,#8b949e);margin-top:0.4rem">' + esc(c.sub) + '</div>' +
+      '</div>';
+  }).join('');
+
+  document.getElementById('dora-cards').innerHTML = html;
+
+  // Overall band.
+  var overall = document.getElementById('overall-band');
+  var overallRow = document.getElementById('overall-row');
+  if (overall) {
+    overall.innerHTML = bandLabel(m.overall_band);
+    overall.className = bandClass(m.overall_band);
+  }
+  if (overallRow) overallRow.style.display = 'flex';
+}
+
+function renderDeployments(list) {
+  var wrap = document.getElementById('deploy-table-wrap');
+  if (!wrap) return;
+  if (!list || list.length === 0) {
+    wrap.innerHTML = '<div class="dora-loading">No deployments recorded. Run <code>exalm dora log-deploy --service &lt;name&gt;</code> to add one.</div>';
+    return;
+  }
+  var rows = list.map(function(d) {
+    var ok = d.success;
+    return '<tr>' +
+      '<td style="font-family:monospace;font-size:0.8rem">' + esc(d.id) + '</td>' +
+      '<td>' + esc(d.service) + '</td>' +
+      '<td>' + esc(d.namespace || '') + '</td>' +
+      '<td>' + esc(d.version || '') + '</td>' +
+      '<td>' + esc(fmtDate(d.deployed_at)) + '</td>' +
+      '<td>' + esc(d.deployed_by || '') + '</td>' +
+      '<td class="' + (ok ? 'deploy-success' : 'deploy-fail') + '">' + (ok ? '&#x2713; success' : '&#x2717; failed') + '</td>' +
+      '</tr>';
+  }).join('');
+
+  wrap.innerHTML = '<table class="dora-table">' +
+    '<thead><tr><th>ID</th><th>Service</th><th>Namespace</th><th>Version</th>' +
+    '<th>Deployed At</th><th>By</th><th>Status</th></tr></thead>' +
+    '<tbody>' + rows + '</tbody></table>';
+}
+
+function loadDORA() {
+  fetch('/api/dora')
+    .then(function(r) { return r.json(); })
+    .then(function(m) {
+      if (m.error) throw new Error(m.error);
+      renderCards(m);
+      renderDeployments(m.recent_deployments || []);
+      var ts = document.getElementById('ts');
+      if (ts) ts.textContent = new Date().toUTCString();
+    })
+    .catch(function(err) {
+      document.getElementById('dora-cards').innerHTML =
+        '<div class="dora-loading">Failed to load DORA metrics: ' + esc(err.message) + '</div>';
+    });
+}
+
+// ── Theme (mirrors app.js) ─────────────────────────────────────────────────
+var THEME_KEY = 'exalm-theme';
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  var btn = document.getElementById('theme-toggle');
+  if (btn) btn.textContent = theme === 'light' ? '\u{1F319}' : '☀';
+}
+function toggleTheme() {
+  var cur  = document.documentElement.getAttribute('data-theme') || 'dark';
+  var next = cur === 'dark' ? 'light' : 'dark';
+  applyTheme(next);
+  try { localStorage.setItem(THEME_KEY, next); } catch (e) { /**/ }
+}
+(function() {
+  try {
+    var t = localStorage.getItem(THEME_KEY);
+    applyTheme((t === 'light' || t === 'dark') ? t : 'dark');
+  } catch (e) { applyTheme('dark'); }
+  loadDORA();
+  setInterval(loadDORA, 60000);
+})();
+</script>
+</body>
+</html>

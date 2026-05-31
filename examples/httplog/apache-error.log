@@ -1,0 +1,6 @@
+[Mon May 13 09:00:02.123456 2026] [proxy_fcgi:error] [pid 1234:tid 5678] [client 203.0.113.12:51442] AH01067: Failed to read FastCGI header
+[Mon May 13 09:00:02.789012 2026] [proxy_fcgi:error] [pid 1234:tid 5679] [client 203.0.113.13:51443] AH01067: Failed to read FastCGI header
+[Mon May 13 09:00:03.221110 2026] [core:warn] [pid 1234] AH00045: child process 9214 still did not exit, sending a SIGTERM
+[Mon May 13 09:00:04.881234 2026] [proxy_fcgi:error] [pid 1234:tid 5680] [client 203.0.113.14:51444] AH01067: Failed to read FastCGI header
+[Mon May 13 09:00:05.112233 2026] [security2:error] [pid 1234:tid 5681] [client 198.51.100.99:51445] ModSecurity: Access denied with code 403 (phase 2). Matched "Operator `Rx' with parameter `(?:\\.\\./|\\./)' against variable `REQUEST_URI'"
+[Mon May 13 09:01:00.997755 2026] [proxy_fcgi:error] [pid 1234:tid 5682] [client 203.0.113.16:51446] AH01067: Failed to read FastCGI header

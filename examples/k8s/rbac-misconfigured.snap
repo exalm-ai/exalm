@@ -1,0 +1,81 @@
+Scope: operations | Total pods: 14 | Unhealthy: 4
+
+## DEPLOYMENTS
+- operations/config-syncer: desired=2 available=0 unavailable=2 stall=ProgressDeadlineExceeded
+- operations/audit-agent: desired=2 available=0 unavailable=2 stall=ProgressDeadlineExceeded
+
+--- operations/config-syncer-6d8bc-x4k2p ---
+Phase: Running | Reason: CrashLoopBackOff | Restarts: 8 | Age: 28m
+
+Events:
+  [BackOff] Back-off restarting failed container (x16, 45s ago)
+
+Log signals:
+  [http-5xx] x4 — 403 Forbidden: User "system:serviceaccount:operations:config-syncer" cannot list resource "configmaps"
+
+Logs (syncer):
+```
+2026-05-11T09:15:01Z INFO  config-syncer v1.3.0 starting
+2026-05-11T09:15:01Z INFO  ServiceAccount: config-syncer in namespace: operations
+2026-05-11T09:15:02Z INFO  Attempting to list cluster-wide ConfigMaps for bootstrap
+2026-05-11T09:15:02Z ERROR forbidden: User "system:serviceaccount:operations:config-syncer" cannot list resource "configmaps" in API group "" at the cluster scope
+2026-05-11T09:15:02Z ERROR 403 Forbidden: insufficient permissions to read cluster configuration
+2026-05-11T09:15:02Z ERROR kubernetes API error: configmaps is forbidden: User "system:serviceaccount:operations:config-syncer" cannot list resource "configmaps"
+2026-05-11T09:15:02Z FATAL cannot load configuration from cluster, exiting
+```
+
+--- operations/config-syncer-6d8bc-y5l3q ---
+Phase: Running | Reason: CrashLoopBackOff | Restarts: 7 | Age: 27m
+
+Events:
+  [BackOff] Back-off restarting failed container (x14, 1m ago)
+
+Log signals:
+  [http-5xx] x3 — 403 Forbidden: User "system:serviceaccount:operations:config-syncer" cannot list resource "configmaps"
+
+Logs (syncer):
+```
+2026-05-11T09:16:01Z INFO  config-syncer v1.3.0 starting
+2026-05-11T09:16:01Z INFO  ServiceAccount: config-syncer in namespace: operations
+2026-05-11T09:16:02Z ERROR forbidden: User "system:serviceaccount:operations:config-syncer" cannot list resource "configmaps" in API group "" at the cluster scope
+2026-05-11T09:16:02Z ERROR 403 Forbidden: insufficient permissions to read cluster configuration
+2026-05-11T09:16:02Z FATAL cannot load configuration from cluster, exiting
+```
+
+--- operations/audit-agent-5c7ab-z6m4r ---
+Phase: Running | Reason: CrashLoopBackOff | Restarts: 9 | Age: 32m
+
+Events:
+  [BackOff] Back-off restarting failed container (x18, 30s ago)
+
+Log signals:
+  [http-5xx] x5 — 403 Forbidden: User "system:serviceaccount:operations:audit-agent" cannot get resource "pods"
+
+Logs (agent):
+```
+2026-05-11T09:11:01Z INFO  audit-agent v0.9.2 starting
+2026-05-11T09:11:01Z INFO  ServiceAccount: audit-agent in namespace: operations
+2026-05-11T09:11:02Z INFO  Initializing cluster audit: listing all pods
+2026-05-11T09:11:02Z ERROR forbidden: User "system:serviceaccount:operations:audit-agent" cannot get resource "pods" in API group "" in the namespace "default"
+2026-05-11T09:11:02Z ERROR 403 Forbidden: missing ClusterRole binding for pod read access
+2026-05-11T09:11:02Z ERROR cannot get resource "events" in API group "" at the cluster scope
+2026-05-11T09:11:02Z FATAL cluster audit initialization failed, exiting
+```
+
+--- operations/audit-agent-5c7ab-a7n5s ---
+Phase: Running | Reason: CrashLoopBackOff | Restarts: 8 | Age: 31m
+
+Events:
+  [BackOff] Back-off restarting failed container (x16, 45s ago)
+
+Log signals:
+  [http-5xx] x4 — 403 Forbidden: User "system:serviceaccount:operations:audit-agent" cannot get resource "pods"
+
+Logs (agent):
+```
+2026-05-11T09:12:01Z INFO  audit-agent v0.9.2 starting
+2026-05-11T09:12:01Z INFO  ServiceAccount: audit-agent in namespace: operations
+2026-05-11T09:12:02Z ERROR forbidden: User "system:serviceaccount:operations:audit-agent" cannot get resource "pods" in API group "" in the namespace "default"
+2026-05-11T09:12:02Z ERROR 403 Forbidden: missing ClusterRole binding for pod read access
+2026-05-11T09:12:02Z FATAL cluster audit initialization failed, exiting
+```

@@ -1,0 +1,67 @@
+Scope: api-gateway | Total pods: 8 | Unhealthy: 3
+
+--- api-gateway/gateway-6d8bc-p4k7r ---
+Phase: Running | Reason: NotReady | Restarts: 0 | Age: 35m
+
+Events:
+  [Unhealthy] Readiness probe failed: HTTP probe failed with statuscode: 503 (x40, 10s ago) [spike: 2.3/s]
+
+Log signals:
+  [http-5xx] x28 — 10.0.0.1 - - "POST /api/checkout HTTP/1.1" 503 892
+  [latency] x15 — took 4231ms to process /api/checkout
+  [dependency] x12 — circuit breaker open for payments-svc: upstream unavailable
+
+Logs (gateway):
+```
+2026-05-10T11:20:01Z INFO  gateway starting
+2026-05-10T11:20:02Z INFO  Routes loaded: 47
+2026-05-10T11:22:14Z ERROR upstream payments-svc returned 503: circuit breaker open
+2026-05-10T11:22:15Z ERROR upstream payments-svc returned 503: circuit breaker open
+2026-05-10T11:22:16Z INFO  10.0.0.1 - - "POST /api/checkout HTTP/1.1" 503 892
+2026-05-10T11:22:17Z WARNING took 4231ms to process /api/checkout (threshold: 2000ms)
+2026-05-10T11:22:18Z INFO  10.0.0.2 - - "GET /api/products HTTP/1.1" 200 1204
+2026-05-10T11:22:19Z INFO  10.0.0.3 - - "POST /api/checkout HTTP/1.1" 503 892
+2026-05-10T11:22:20Z WARNING took 5102ms to process /api/checkout (threshold: 2000ms)
+```
+
+--- api-gateway/search-svc-3a7fb-n8k2p ---
+Phase: Running | Reason: NotReady | Restarts: 1 | Age: 45m
+
+Events:
+  [Unhealthy] Readiness probe failed: Get "http://10.244.2.7:8080/health": context deadline exceeded (x20, 30s ago)
+
+Log signals:
+  [db-error] x8 — ERROR connection pool exhausted: timeout acquiring connection after 5000ms
+  [latency] x22 — duration=3.2s for query SELECT * FROM products WHERE category=?
+
+Logs (search):
+```
+2026-05-10T11:10:01Z INFO  search-svc starting
+2026-05-10T11:10:02Z INFO  Connected to search-db cluster (3 nodes)
+2026-05-10T11:10:02Z INFO  Listening on :8080
+2026-05-10T11:15:33Z WARNING connection pool at 90% capacity (18/20 connections active)
+2026-05-10T11:15:44Z ERROR connection pool exhausted: timeout acquiring connection after 5000ms
+2026-05-10T11:15:44Z ERROR connection pool exhausted: timeout acquiring connection after 5000ms
+2026-05-10T11:15:45Z WARNING duration=3.2s for query SELECT * FROM products WHERE category=?
+2026-05-10T11:15:46Z WARNING duration=4.1s for query SELECT * FROM products WHERE category=?
+2026-05-10T11:15:47Z ERROR readiness check failed: database query took 5.0s (limit: 2.0s)
+```
+
+--- api-gateway/auth-svc-9c2de-q5m1x ---
+Phase: Running | Reason: NotReady | Restarts: 0 | Age: 12m
+
+Events:
+  [Unhealthy] Readiness probe failed: HTTP probe failed with statuscode: 500 (x8, 1m ago)
+
+Log signals:
+  [http-5xx] x4 — {"status": 500, "error": "JWT signing key not found", "path": "/auth/token"}
+
+Logs (auth):
+```
+2026-05-10T11:48:01Z INFO  auth-svc starting
+2026-05-10T11:48:02Z WARNING JWT signing key not found in secret store, falling back to env
+2026-05-10T11:48:02Z WARNING JWT_SIGNING_KEY env var is empty
+2026-05-10T11:48:02Z INFO  Listening on :8080
+2026-05-10T11:49:11Z ERROR {"status": 500, "error": "JWT signing key not found", "path": "/auth/token"}
+2026-05-10T11:49:22Z ERROR readiness check failed: cannot sign test token
+```

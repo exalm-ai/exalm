@@ -1,0 +1,55 @@
+Scope: ml-platform | Total pods: 12 | Unhealthy: 3
+
+--- ml-platform/feature-server-5f7bc-q8r1t ---
+Phase: Running | Reason: OOMKilled | Restarts: 6 | Age: 1h
+
+Events:
+  [OOMKilling] Memory cgroup out of memory: Killed process 1182 (python) total-vm:4194304kB anon-rss:2097152kB (x6, 2m ago)
+  [BackOff] Back-off restarting failed container (x12, 1m ago)
+
+Logs (server):
+```
+2026-05-10T10:14:01Z INFO  Loading model weights from /models/embedding-v3/
+2026-05-10T10:14:08Z INFO  Model loaded (2.1 GB resident)
+2026-05-10T10:14:08Z INFO  Starting gRPC server on :9090
+2026-05-10T10:14:22Z INFO  Processing batch request: 4096 vectors
+2026-05-10T10:14:35Z INFO  Processing batch request: 4096 vectors
+2026-05-10T10:14:49Z INFO  Processing batch request: 8192 vectors
+2026-05-10T10:14:51Z WARNING RSS memory usage: 1842 MB / 2048 MB limit (89%)
+2026-05-10T10:14:58Z INFO  Processing batch request: 8192 vectors
+Killed
+```
+
+--- ml-platform/feature-server-5f7bc-p2k9w ---
+Phase: Running | Reason: OOMKilled | Restarts: 5 | Age: 1h
+
+Events:
+  [OOMKilling] Memory cgroup out of memory: Killed process 1204 (python) total-vm:4194304kB anon-rss:2097152kB (x5, 4m ago)
+  [BackOff] Back-off restarting failed container (x10, 3m ago)
+
+Logs (server):
+```
+2026-05-10T10:15:01Z INFO  Loading model weights from /models/embedding-v3/
+2026-05-10T10:15:09Z INFO  Model loaded (2.1 GB resident)
+2026-05-10T10:15:09Z INFO  Starting gRPC server on :9090
+2026-05-10T10:15:30Z INFO  Processing batch request: 8192 vectors
+2026-05-10T10:15:44Z WARNING RSS memory usage: 1901 MB / 2048 MB limit (92%)
+2026-05-10T10:15:51Z INFO  Processing batch request: 8192 vectors
+Killed
+```
+
+--- ml-platform/feature-server-5f7bc-n7x2m ---
+Phase: Running | Reason: OOMKilled | Restarts: 4 | Age: 1h
+
+Events:
+  [OOMKilling] Memory cgroup out of memory: Killed process 1196 (python) total-vm:4194304kB anon-rss:2097152kB (x4, 7m ago)
+
+Logs (server):
+```
+2026-05-10T10:18:02Z INFO  Loading model weights from /models/embedding-v3/
+2026-05-10T10:18:10Z INFO  Model loaded (2.1 GB resident)
+2026-05-10T10:18:10Z INFO  Starting gRPC server on :9090
+2026-05-10T10:18:33Z INFO  Processing batch request: 8192 vectors
+2026-05-10T10:18:47Z WARNING RSS memory usage: 1960 MB / 2048 MB limit (95%)
+Killed
+```

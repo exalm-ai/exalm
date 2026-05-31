@@ -1,0 +1,60 @@
+apiVersion: v2
+name: exalm-agent
+description: |
+  Exalm — open-source AI ops agent for Kubernetes.
+
+  Installs a single read-only diagnostic agent that watches your cluster
+  and serves an AI-powered findings dashboard on localhost:7433.
+type: application
+version: 0.1.0
+appVersion: "0.2.0"
+kubeVersion: ">=1.24.0-0"
+
+keywords:
+  - exalm
+  - ai
+  - sre
+  - ops
+  - observability
+  - kubernetes
+  - troubleshooting
+
+home: https://exalm.com
+sources:
+  - https://github.com/exalm-ai/exalm
+icon: https://exalm.com/icon.png
+
+maintainers:
+  - name: Exalm Maintainers
+    url: https://github.com/exalm-ai
+
+annotations:
+  category: Monitoring
+  licenses: Apache-2.0
+
+# Optional LGTM-lite subcharts. Disabled by default — flip storage.enabled=true
+# in values.yaml to install Loki + Prometheus + Grafana alongside the agent.
+#
+# Phase 1: these are installed but NOT yet queried by the dashboard.
+# Phase 2: dashboard will read LogQL / PromQL from these sources.
+#
+# Subcharts are intentionally NOT listed in this file in Phase 1 so a vanilla
+# `helm install` works offline without a `helm dependency update`. To enable
+# storage, uncomment the dependencies below and run:
+#
+#   helm dependency update deploy/helm/exalm-agent
+#   helm install exalm deploy/helm/exalm-agent --set storage.enabled=true
+#
+# dependencies:
+#   - name: loki
+#     version: "~5.47.0"
+#     repository: https://grafana.github.io/helm-charts
+#     condition: storage.enabled
+#   - name: prometheus
+#     version: "~25.20.0"
+#     repository: https://prometheus-community.github.io/helm-charts
+#     condition: storage.enabled
+#   - name: grafana
+#     version: "~7.3.0"
+#     repository: https://grafana.github.io/helm-charts
+#     condition: storage.enabled

@@ -1,0 +1,65 @@
+Scope: data | Total pods: 15 | Unhealthy: 6
+
+## DEPLOYMENTS
+- data/etl-pipeline: desired=2 available=0 unavailable=2 stall=ProgressDeadlineExceeded
+
+## PVC ISSUES
+- data/postgres-data-pvc: Pending | storageClass=fast-ssd | reason=no volume plugin matches the name "fast-ssd.csi.example.com"
+- data/redis-data-pvc: Pending | storageClass=fast-ssd | reason=no volume plugin matches the name "fast-ssd.csi.example.com"
+- data/kafka-data-0-pvc: Pending | storageClass=fast-ssd | reason=no volume plugin matches the name "fast-ssd.csi.example.com"
+- data/kafka-data-1-pvc: Pending | storageClass=fast-ssd | reason=no volume plugin matches the name "fast-ssd.csi.example.com"
+
+--- data/postgres-primary-0 ---
+Phase: Pending | Reason: Init:0/1 | Restarts: 0 | Age: 42m
+
+Events:
+  [FailedMount] Unable to attach or mount volumes: unmounted volumes=[data], unattached volumes=[data kube-api-access-xq7r2]: timed out waiting for the condition (x28, 90s ago)
+  [FailedMount] MountVolume.SetUp failed for volume "postgres-data-pvc": couldn't find key in Secret storageclass.storage.k8s.io/provisioner: fast-ssd.csi.example.com not found in secrets "csi-provisioner-secret" (x22, 3m ago)
+  [FailedScheduling] running Pre-bind plugin "VolumeBinding": binding volumes: timed out waiting for the condition (x5, 8m ago)
+
+Logs (postgres): [empty]
+
+--- data/redis-master-0 ---
+Phase: Pending | Reason: Init:0/1 | Restarts: 0 | Age: 40m
+
+Events:
+  [FailedMount] Unable to attach or mount volumes: unmounted volumes=[data], unattached volumes=[data kube-api-access-ab3c4]: timed out waiting for the condition (x26, 2m ago)
+  [FailedMount] MountVolume.SetUp failed for volume "redis-data-pvc": couldn't find key in Secret storageclass.storage.k8s.io/provisioner: fast-ssd.csi.example.com not found (x20, 4m ago)
+
+Logs (redis): [empty]
+
+--- data/kafka-0 ---
+Phase: Pending | Reason: Init:0/1 | Restarts: 0 | Age: 38m
+
+Events:
+  [FailedMount] Unable to attach or mount volumes: unmounted volumes=[data], unattached volumes=[data kube-api-access-cd5e6]: timed out waiting for the condition (x24, 3m ago)
+  [FailedMount] MountVolume.SetUp failed for volume "kafka-data-0-pvc": no volume plugin matches the name "fast-ssd.csi.example.com" (x18, 5m ago)
+
+Logs (kafka): [empty]
+
+--- data/kafka-1 ---
+Phase: Pending | Reason: Init:0/1 | Restarts: 0 | Age: 38m
+
+Events:
+  [FailedMount] Unable to attach or mount volumes: unmounted volumes=[data], unattached volumes=[data kube-api-access-ef7g8]: timed out waiting for the condition (x24, 3m ago)
+  [FailedMount] MountVolume.SetUp failed for volume "kafka-data-1-pvc": no volume plugin matches the name "fast-ssd.csi.example.com" (x18, 5m ago)
+
+Logs (kafka): [empty]
+
+--- data/etl-pipeline-8a3bc-h9i0j ---
+Phase: Pending | Reason: Init:0/1 | Restarts: 0 | Age: 35m
+
+Events:
+  [FailedMount] Unable to attach or mount volumes: unmounted volumes=[shared-storage], unattached volumes=[shared-storage kube-api-access-gh1i2]: timed out waiting for the condition (x20, 4m ago)
+  [FailedMount] MountVolume.SetUp failed for volume "etl-shared-pvc": no volume plugin matches the name "fast-ssd.csi.example.com" (x15, 6m ago)
+
+Logs (etl): [empty]
+
+--- data/etl-pipeline-8a3bc-k1l2m ---
+Phase: Pending | Reason: Init:0/1 | Restarts: 0 | Age: 35m
+
+Events:
+  [FailedMount] Unable to attach or mount volumes: unmounted volumes=[shared-storage], unattached volumes=[shared-storage kube-api-access-ij3k4]: timed out waiting for the condition (x20, 4m ago)
+  [FailedMount] MountVolume.SetUp failed for volume "etl-shared-pvc": no volume plugin matches the name "fast-ssd.csi.example.com" (x15, 6m ago)
+
+Logs (etl): [empty]

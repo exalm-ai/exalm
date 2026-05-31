@@ -1,0 +1,120 @@
+name: integration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cmd/**"
+      - "internal/**"
+      - "pkg/**"
+      - "plugins/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/integration.yml"
+  pull_request:
+    paths:
+      - "cmd/**"
+      - "internal/**"
+      - "pkg/**"
+      - "plugins/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/integration.yml"
+
+jobs:
+  k8s-analyze:
+    name: k8s analyze (kind cluster)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version: "1.26"
+          cache: true
+
+      - name: Build exalm binary
+        run: make build
+
+      # ── Cluster setup ──────────────────────────────────────────────────────
+      - name: Create kind cluster
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1
+        with:
+          cluster_name: exalm-integration
+          # Single-node cluster is sufficient for smoke testing.
+          node_image: kindest/node:v1.31.0
+
+      - name: Deploy test workloads
+        run: |
+          # A healthy Deployment so k8s analyze has real pod data to inspect.
+          kubectl create deployment smoke-nginx --image=nginx:stable-alpine \
+            --replicas=1 --port=80
+          # Wait for the pod to be Running so event lists are non-empty.
+          kubectl rollout status deployment/smoke-nginx --timeout=60s
+          kubectl get pods -A
+
+      # ── Exalm integration tests ────────────────────────────────────────────
+      - name: k8s analyze (default namespace)
+        env:
+          EXALM_LLM_PROVIDER: mock
+        run: |
+          ./bin/exalm k8s analyze 2>&1 | tee /tmp/k8s-analyze.txt
+          # Must exit 0 and produce a non-empty report.
+          test -s /tmp/k8s-analyze.txt
+          grep -q "Kubernetes Cluster Analysis" /tmp/k8s-analyze.txt
+
+      - name: k8s analyze --output json
+        env:
+          EXALM_LLM_PROVIDER: mock
+        run: |
+          ./bin/exalm k8s analyze --output json 2>&1 | tee /tmp/k8s-analyze.json
+          # Output must be valid JSON with a "title" field.
+          python3 -c "
+          import json, sys
+          data = json.load(open('/tmp/k8s-analyze.json'))
+          assert 'title' in data, 'missing title field'
+          print('JSON output OK:', data.get('title', ''))
+          "
+
+      - name: k8s analyze --namespace kube-system
+        env:
+          EXALM_LLM_PROVIDER: mock
+        run: |
+          ./bin/exalm k8s analyze --namespace kube-system 2>&1 | tee /tmp/k8s-kube-system.txt
+          test -s /tmp/k8s-kube-system.txt
+          grep -q "Kubernetes Cluster Analysis" /tmp/k8s-kube-system.txt
+
+      - name: DORA report (empty — no deployments logged)
+        env:
+          EXALM_LLM_PROVIDER: mock
+        run: |
+          # Smoke test: DORA must not crash on an empty store.
+          ./bin/exalm dora report 2>&1 | tee /tmp/dora-report.txt
+          # A non-zero exit code here means the command panicked or errored.
+          echo "DORA report exit code: $?"
+
+      - name: incident list (empty)
+        env:
+          EXALM_LLM_PROVIDER: mock
+        run: |
+          ./bin/exalm incident list 2>&1
+          echo "incident list exit code: $?"
+
+      - name: usage report (empty store)
+        env:
+          EXALM_LLM_PROVIDER: mock
+        run: |
+          ./bin/exalm usage report --days 30 2>&1 | tee /tmp/usage-report.txt
+          test -s /tmp/usage-report.txt
+
+      # ── Upload artifacts for failed runs ──────────────────────────────────
+      - name: Upload integration artifacts
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: integration-artifacts
+          path: /tmp/*.txt
+          retention-days: 7

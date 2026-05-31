@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/exalm-ai/exalm/security/advisories/new
+    about: Please report security vulnerabilities via GitHub Security Advisories, not as issues.
+  - name: Discussions
+    url: https://github.com/exalm-ai/exalm/discussions
+    about: For questions, ideas, and general discussion use GitHub Discussions.

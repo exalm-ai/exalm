@@ -1,0 +1,200 @@
+# Default values for exalm-agent.
+# Override these via `--values my-values.yaml` or `--set key=value`.
+#
+# Quick start:
+#   helm install exalm deploy/helm/exalm-agent \
+#       --set llm.provider=claude \
+#       --set llm.apiKey=$ANTHROPIC_API_KEY
+
+# -----------------------------------------------------------------------------
+# Container image
+# -----------------------------------------------------------------------------
+image:
+  repository: ghcr.io/exalm-ai/exalm
+  # tag defaults to the chart's appVersion when empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Phase 1 keeps replicaCount=1. Multi-replica leader-elected mode lands in Phase 2.
+replicaCount: 1
+
+# -----------------------------------------------------------------------------
+# LLM provider
+# -----------------------------------------------------------------------------
+llm:
+  # provider: claude | openai | ollama | openrouter
+  provider: ollama
+
+  # Override the provider's default model. Examples:
+  #   claude      → "claude-sonnet-4-6"
+  #   openai      → "gpt-4o" / "gpt-4o-mini"
+  #   ollama      → "qwen2.5:0.5b" / "llama3.1:8b"
+  #   openrouter  → "qwen/qwen-2.5-0.5b-instruct"
+  model: ""
+
+  # Inline API key. When non-empty AND existingSecret is empty, the chart
+  # creates a Secret named "<release>-<chart>" with the key value.
+  #
+  # ⚠ NEVER commit values.yaml with a real apiKey to a public repo. Use
+  # --set llm.apiKey=$ENV_VAR or an existingSecret instead.
+  apiKey: ""
+
+  # Reference a pre-existing Secret instead of creating one. The Secret must
+  # contain one of these keys depending on llm.provider:
+  #
+  #   provider=claude     → key "anthropic-api-key"
+  #   provider=openai     → key "openai-api-key"
+  #   provider=openrouter → key "openrouter-api-key"
+  existingSecret: ""
+
+  # Ollama URL — only used when llm.provider=ollama.
+  # For in-cluster Ollama, point to its Service: http://ollama.ollama.svc:11434
+  ollamaURL: "http://localhost:11434"
+
+  # OpenAI-compatible base URL override. Set this for Azure OpenAI, LM Studio,
+  # LocalAI, Groq, Together, etc. Leave empty for the standard api.openai.com.
+  openaiBaseURL: ""
+
+# -----------------------------------------------------------------------------
+# Dashboard authentication
+# -----------------------------------------------------------------------------
+# Set auth.token to require a Bearer token for every dashboard request.
+# Recommended for any deployment exposed beyond localhost.
+#
+# Usage:
+#   helm install exalm ... --set auth.token=$(openssl rand -hex 32)
+#
+# If existingSecret is set the chart reads the token from that secret's
+# "dashboard-token" key instead of creating one from auth.token.
+auth:
+  token: ""
+  existingSecret: ""
+
+# -----------------------------------------------------------------------------
+# K8s watch loop
+# -----------------------------------------------------------------------------
+watch:
+  # Empty = watch all namespaces. Set to "default" / "production" / etc. to scope.
+  namespace: ""
+  # How often to re-collect cluster state. Minimum 10s.
+  interval: "60s"
+
+# -----------------------------------------------------------------------------
+# SLO integration (optional)
+# -----------------------------------------------------------------------------
+slo:
+  enabled: false
+
+  # In-container path to the SLO spec JSON. Typically populated via specConfigMap.
+  specFile: "/etc/exalm/slo/specs.json"
+
+  # Mount the SLO specs from this pre-existing ConfigMap (key "specs.json").
+  # If empty AND slo.enabled=true, the specFile must be supplied another way
+  # (e.g. an additional volume defined via your own kustomization).
+  specConfigMap: ""
+
+  # Prometheus base URL for live error budgets. Empty = synthesized samples.
+  # Example: http://prometheus-server.monitoring.svc:9090
+  prometheusURL: ""
+
+# -----------------------------------------------------------------------------
+# Service exposing the dashboard
+# -----------------------------------------------------------------------------
+service:
+  type: ClusterIP
+  port: 7433
+  annotations: {}
+
+# -----------------------------------------------------------------------------
+# Ingress (optional)
+# -----------------------------------------------------------------------------
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: exalm.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# -----------------------------------------------------------------------------
+# RBAC
+# -----------------------------------------------------------------------------
+# By default the agent gets read-only verbs on the K8s API surface needed for
+# diagnostics. Set allowApply=true to also grant patch verbs required for the
+# "Apply Fix" dashboard button — equivalent to running with --apply on the CLI.
+rbac:
+  create: true
+  allowApply: false
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# -----------------------------------------------------------------------------
+# Pod resources & scheduling
+# -----------------------------------------------------------------------------
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+podAnnotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  privileged: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65532
+  capabilities:
+    drop:
+      - ALL
+
+# -----------------------------------------------------------------------------
+# Optional: LGTM-lite (Loki + Prometheus + Grafana) subcharts
+# -----------------------------------------------------------------------------
+# Phase 1: dashboard does NOT yet query these — they install alongside so the
+# environment is ready for Phase 2 LogQL/PromQL widgets.
+#
+# To enable, uncomment the dependencies in Chart.yaml, then:
+#   helm dependency update deploy/helm/exalm-agent
+#   helm install exalm deploy/helm/exalm-agent --set storage.enabled=true
+storage:
+  enabled: false
+
+# -----------------------------------------------------------------------------
+# Persistent storage for ~/.exalm data directory
+# -----------------------------------------------------------------------------
+# IMPORTANT: Without persistence enabled, all DORA and incident data is lost
+# on pod restart because the root filesystem is read-only.
+persistence:
+  enabled: true
+  # storageClass: ""  # leave empty for cluster default; set to "-" to disable provisioning
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 1Gi
+  # existingClaim: ""  # set to reuse an existing PVC instead of creating a new one
+  existingClaim: ""

@@ -1,0 +1,13 @@
+2026-05-09T08:14:23.412Z INFO  payments-api Starting up version 2.4.1
+2026-05-09T08:14:23.890Z INFO  payments-api Connected to postgres://app:[REDACTED]@db.internal:5432/payments
+2026-05-09T08:14:24.001Z INFO  payments-api Listening on :8080
+2026-05-09T08:21:11.230Z WARN  payments-api Slow query in /v2/checkout: 1842ms (threshold 500ms)
+2026-05-09T08:21:45.881Z WARN  payments-api Slow query in /v2/checkout: 2103ms (threshold 500ms)
+2026-05-09T08:22:08.451Z WARN  payments-api Slow query in /v2/checkout: 2890ms (threshold 500ms)
+2026-05-09T08:22:33.991Z ERROR payments-api Failed to acquire DB connection: timeout after 5s
+2026-05-09T08:22:34.103Z ERROR payments-api Failed to acquire DB connection: timeout after 5s
+2026-05-09T08:23:01.119Z FATAL payments-api Memory cgroup out of memory: Killed process 8123 (payments-api) total-vm:2104832kB, anon-rss:1048576kB, file-rss:0kB
+2026-05-09T08:23:18.402Z INFO  payments-api Starting up version 2.4.1
+2026-05-09T08:23:18.901Z INFO  payments-api Connected to postgres://app:[REDACTED]@db.internal:5432/payments
+2026-05-09T08:23:19.012Z INFO  payments-api Listening on :8080
+2026-05-09T08:24:55.218Z FATAL payments-api Memory cgroup out of memory: Killed process 8512 (payments-api) total-vm:2114112kB, anon-rss:1048576kB, file-rss:0kB

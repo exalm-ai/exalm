@@ -1,0 +1,25 @@
+{{/*
+Non-secret runtime configuration. Mounted as env vars on the agent Deployment.
+This ConfigMap is always created so envFrom in deployment.yaml can be unconditional.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "exalm-agent.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "exalm-agent.labels" . | nindent 4 }}
+data:
+  EXALM_LLM_PROVIDER: {{ .Values.llm.provider | quote }}
+  {{- if .Values.llm.model }}
+  EXALM_LLM_MODEL: {{ .Values.llm.model | quote }}
+  {{- end }}
+  {{- if eq .Values.llm.provider "ollama" }}
+  EXALM_OLLAMA_URL: {{ .Values.llm.ollamaURL | quote }}
+  {{- end }}
+  {{- if .Values.llm.openaiBaseURL }}
+  OPENAI_BASE_URL: {{ .Values.llm.openaiBaseURL | quote }}
+  {{- end }}
+  {{- if and .Values.slo.enabled .Values.slo.prometheusURL }}
+  EXALM_PROMETHEUS_URL: {{ .Values.slo.prometheusURL | quote }}
+  {{- end }}

@@ -1,0 +1,53 @@
+Scope: payments | Total pods: 22 | Unhealthy: 4
+
+## RESOURCE QUOTAS
+- payments/cpu: 950m / 1 (95%)
+- payments/memory: 7680Mi / 8Gi (93%)
+- payments/pods: 22 / 25 (88%)
+
+--- payments/payment-gateway-8b3fc-pending ---
+Phase: Pending | Reason: Pending | Restarts: 0 | Age: 25m
+
+Events:
+  [FailedScheduling] 0/3 nodes are available: exceeded quota: payments, requested: cpu=500m, used: cpu=950m, limited: cpu=1. (x15, 30s ago)
+
+Logs (gateway): [empty]
+
+--- payments/payment-gateway-8b3fc-pending2 ---
+Phase: Pending | Reason: Pending | Restarts: 0 | Age: 22m
+
+Events:
+  [FailedScheduling] 0/3 nodes are available: exceeded quota: payments, requested: cpu=500m, used: cpu=950m, limited: cpu=1. (x12, 1m ago)
+
+Logs (gateway): [empty]
+
+--- payments/fraud-detector-3d7ab-k9x2p ---
+Phase: Running | Reason: OOMKilled | Restarts: 2 | Age: 1h
+Warning: one or more containers have no CPU/memory limits.
+
+Events:
+  [OOMKilling] Memory cgroup out of memory: Killed process 1204 (fraud-detector) (x2, 5m ago)
+
+Logs (detector):
+```
+2026-05-10T09:00:01Z INFO  fraud-detector starting, loading ML model
+2026-05-10T09:00:08Z INFO  Loaded fraud detection model (1.8 GB)
+2026-05-10T09:00:08Z INFO  Listening on :9090
+2026-05-10T09:15:33Z INFO  Processing batch of 50000 transactions
+2026-05-10T09:15:41Z WARNING Memory usage: 6.9 GB
+Killed
+```
+
+--- payments/audit-logger-4c8de-m3n7r ---
+Phase: Running | Reason: NotReady | Restarts: 0 | Age: 3m
+
+Events:
+  [Unhealthy] Readiness probe failed: HTTP probe failed with statuscode: 503 (x6, 20s ago)
+
+Logs (logger):
+```
+2026-05-10T11:57:01Z INFO  audit-logger starting
+2026-05-10T11:57:02Z INFO  Connecting to audit-db.payments.svc:5432
+2026-05-10T11:57:07Z ERROR too many connections: max_connections (100) reached on audit-db
+2026-05-10T11:57:07Z ERROR readiness check failed: cannot connect to database
+```

@@ -1,0 +1,31 @@
+Scope: payments | Total pods: 8 | Unhealthy: 2
+
+--- payments/payments-api-7d9fc-x2p4k ---
+Phase: Running | Reason: CrashLoopBackOff | Restarts: 14 | Age: 3h
+
+Events:
+  [BackOff] Back-off restarting failed container (x28, 1m ago)
+  [Failed] Error: failed to create containerd task: failed to create shim: OCI runtime create failed (x2, 5m ago)
+
+Logs (api):
+```
+2026-05-10T09:01:22Z INFO  payments-api Starting up version 3.1.2
+2026-05-10T09:01:22Z INFO  payments-api Connecting to postgres://app:[REDACTED:CONN_PASSWORD]@db-primary.payments.svc:5432/payments
+2026-05-10T09:01:27Z ERROR payments-api dial tcp 10.96.4.18:5432: connect: connection refused
+2026-05-10T09:01:27Z ERROR payments-api failed to ping database after 3 retries: driver: bad connection
+2026-05-10T09:01:27Z FATAL payments-api database unreachable, shutting down
+```
+
+--- payments/payments-worker-6b8df-j9m3n ---
+Phase: Running | Reason: CrashLoopBackOff | Restarts: 14 | Age: 3h
+
+Events:
+  [BackOff] Back-off restarting failed container (x28, 1m ago)
+
+Logs (worker):
+```
+2026-05-10T09:01:24Z INFO  payments-worker Starting worker pool (concurrency=10)
+2026-05-10T09:01:24Z INFO  payments-worker Connecting to postgres://worker:[REDACTED:CONN_PASSWORD]@db-primary.payments.svc:5432/payments
+2026-05-10T09:01:29Z ERROR payments-worker dial tcp 10.96.4.18:5432: connect: connection refused
+2026-05-10T09:01:29Z FATAL payments-worker cannot connect to job queue database, exiting
+```

@@ -1,0 +1,6 @@
+{"__REALTIME_TIMESTAMP":"1747126801000000","PRIORITY":"6","_HOSTNAME":"web01","_SYSTEMD_UNIT":"nginx.service","MESSAGE":"server start"}
+{"__REALTIME_TIMESTAMP":"1747126812000000","PRIORITY":"3","_HOSTNAME":"web01","_SYSTEMD_UNIT":"nginx.service","MESSAGE":"upstream timed out (110: Connection timed out) while connecting to upstream"}
+{"__REALTIME_TIMESTAMP":"1747126820000000","PRIORITY":"3","_HOSTNAME":"web01","_SYSTEMD_UNIT":"nginx.service","MESSAGE":"upstream timed out (110: Connection timed out) while connecting to upstream"}
+{"__REALTIME_TIMESTAMP":"1747126825000000","PRIORITY":"4","_HOSTNAME":"web01","_SYSTEMD_UNIT":"nginx.service","MESSAGE":"worker process exited on signal 11"}
+{"__REALTIME_TIMESTAMP":"1747126830000000","PRIORITY":"2","_HOSTNAME":"db01","_SYSTEMD_UNIT":"postgresql.service","MESSAGE":"out of memory: cannot allocate 524288 bytes for shared buffer"}
+{"__REALTIME_TIMESTAMP":"1747126835000000","PRIORITY":"6","_HOSTNAME":"db01","_SYSTEMD_UNIT":"postgresql.service","MESSAGE":"checkpoint complete: wrote 124 buffers"}

@@ -1,0 +1,68 @@
+[
+  {
+    "TimeCreated": "2026-05-13T09:14:22.123",
+    "Id": 4625,
+    "Level": 2,
+    "LevelDisplayName": "Error",
+    "ProviderName": "Microsoft-Windows-Security-Auditing",
+    "LogName": "Security",
+    "MachineName": "DC01",
+    "Message": "An account failed to log on.\nSubject:\n\tSecurity ID: S-1-5-18\n\tAccount Name: SYSTEM\nLogon Type: 3\nAccount For Which Logon Failed:\n\tAccount Name: jdoe\nFailure Information:\n\tFailure Reason: Unknown user name or bad password.\n\tStatus: 0xC000006D\n\tSub Status: 0xC000006A\nNetwork Information:\n\tWorkstation Name: WS-DEMO\n\tSource Network Address: 198.51.100.40",
+    "RecordId": 1042001
+  },
+  {
+    "TimeCreated": "2026-05-13T09:14:25.451",
+    "Id": 4625,
+    "Level": 2,
+    "LevelDisplayName": "Error",
+    "ProviderName": "Microsoft-Windows-Security-Auditing",
+    "LogName": "Security",
+    "MachineName": "DC01",
+    "Message": "An account failed to log on. Account Name: jdoe. Status: 0xC000006A.",
+    "RecordId": 1042002
+  },
+  {
+    "TimeCreated": "2026-05-13T09:14:31.882",
+    "Id": 4625,
+    "Level": 2,
+    "LevelDisplayName": "Error",
+    "ProviderName": "Microsoft-Windows-Security-Auditing",
+    "LogName": "Security",
+    "MachineName": "DC01",
+    "Message": "An account failed to log on. Account Name: jdoe. Source Network Address: 198.51.100.40",
+    "RecordId": 1042003
+  },
+  {
+    "TimeCreated": "2026-05-13T09:14:45.011",
+    "Id": 4625,
+    "Level": 2,
+    "LevelDisplayName": "Error",
+    "ProviderName": "Microsoft-Windows-Security-Auditing",
+    "LogName": "Security",
+    "MachineName": "DC01",
+    "Message": "An account failed to log on. Account Name: administrator. Source Network Address: 198.51.100.40",
+    "RecordId": 1042004
+  },
+  {
+    "TimeCreated": "2026-05-13T09:15:02.221",
+    "Id": 4672,
+    "Level": 4,
+    "LevelDisplayName": "Information",
+    "ProviderName": "Microsoft-Windows-Security-Auditing",
+    "LogName": "Security",
+    "MachineName": "DC01",
+    "Message": "Special privileges assigned to new logon.",
+    "RecordId": 1042005
+  },
+  {
+    "TimeCreated": "2026-05-13T09:15:55.110",
+    "Id": 1102,
+    "Level": 1,
+    "LevelDisplayName": "Critical",
+    "ProviderName": "Microsoft-Windows-Eventlog",
+    "LogName": "Security",
+    "MachineName": "DC01",
+    "Message": "The audit log was cleared. Subject: Account Name: administrator",
+    "RecordId": 1042006
+  }
+]

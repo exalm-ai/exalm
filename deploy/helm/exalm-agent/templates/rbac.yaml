@@ -1,0 +1,92 @@
+{{- if .Values.rbac.create -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "exalm-agent.fullname" . }}
+  labels:
+    {{- include "exalm-agent.labels" . | nindent 4 }}
+rules:
+  # ---------------------------------------------------------------------------
+  # Read-only resources required by plugins/k8s/collect.go
+  # ---------------------------------------------------------------------------
+  - apiGroups: [""]
+    resources:
+      - namespaces
+      - pods
+      - pods/log
+      - events
+      - endpoints
+      - services
+      - persistentvolumeclaims
+      - nodes
+      - resourcequotas
+      - configmaps
+    verbs: ["get", "list", "watch"]
+
+  # Secrets are listed (NAMES ONLY — exalm never reads Secret payloads) so the
+  # plugin can detect referenced-but-missing secrets in workload specs.
+  # "get" is intentionally omitted: listing metadata is sufficient and prevents
+  # the agent from ever reading raw Secret values.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["list", "watch"]
+
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+      - statefulsets
+      - replicasets
+      - daemonsets
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "ingressclasses"]
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles", "clusterrolebindings", "roles", "rolebindings"]
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+
+  {{- if .Values.rbac.allowApply }}
+  # ---------------------------------------------------------------------------
+  # Mutation verbs — ONLY granted when rbac.allowApply=true.
+  # Required for the dashboard "Apply Fix" button (plugins/k8s/remediate.go).
+  # ---------------------------------------------------------------------------
+  - apiGroups: [""]
+    resources: ["services", "persistentvolumeclaims", "nodes"]
+    verbs: ["patch", "update"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete"]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "exalm-agent.fullname" . }}
+  labels:
+    {{- include "exalm-agent.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "exalm-agent.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ include "exalm-agent.fullname" . }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

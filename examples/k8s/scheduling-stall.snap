@@ -1,0 +1,69 @@
+Scope: ml-jobs | Total pods: 12 | Unhealthy: 5
+
+## RESOURCE QUOTAS
+- ml-jobs/cpu: 47500m / 48000m (98%)
+- ml-jobs/memory: 191Gi / 192Gi (99%)
+- ml-jobs/pods: 12 / 15 (80%)
+
+--- ml-jobs/training-job-gpt4-finetune-0 ---
+Phase: Pending | Reason: Pending | Restarts: 0 | Age: 38m
+
+Events:
+  [FailedScheduling] 0/8 nodes are available: 3 Insufficient cpu, 2 Insufficient memory, 3 node(s) had taint {gpu: required} that the pod didn't tolerate (x18, 2m ago)
+
+Logs (trainer): [empty]
+
+--- ml-jobs/training-job-gpt4-finetune-1 ---
+Phase: Pending | Reason: Pending | Restarts: 0 | Age: 38m
+
+Events:
+  [FailedScheduling] 0/8 nodes are available: 8 Insufficient cpu (x15, 3m ago)
+
+Logs (trainer): [empty]
+
+--- ml-jobs/training-job-bert-distil-0 ---
+Phase: Pending | Reason: Pending | Restarts: 0 | Age: 55m
+
+Events:
+  [FailedScheduling] 0/8 nodes are available: 5 node(s) didn't match Pod's node affinity/selector, 3 Insufficient memory (x24, 1m ago)
+
+Logs (trainer): [empty]
+
+--- ml-jobs/feature-pipeline-2c8df-k3n1x ---
+Phase: Running | Reason: CrashLoopBackOff | Restarts: 8 | Age: 62m
+
+Events:
+  [BackOff] Back-off restarting failed container (x16, 25s ago)
+
+Log signals:
+  [cpu-throttle] x22 — container cpu usage 98% throttled; CFS throttle events detected
+  [disk-error] x4 — no space left on device: cannot write checkpoint to /tmp/model-cache
+
+Logs (pipeline):
+```
+2026-05-16T08:30:01Z INFO  feature-pipeline v4.1 starting
+2026-05-16T08:30:02Z INFO  Loading base model from s3://ml-models/bert-base-uncased
+2026-05-16T08:31:45Z WARNING cpu usage 98% throttled; CFS throttle events detected
+2026-05-16T08:31:46Z WARNING cpu usage 100%: container cpu limit reached
+2026-05-16T08:32:01Z ERROR no space left on device: cannot write checkpoint to /tmp/model-cache
+2026-05-16T08:32:01Z FATAL pipeline failed: disk full
+```
+
+--- ml-jobs/data-loader-7a1bc-p9q2r ---
+Phase: Running | Reason: OOMKilled | Restarts: 5 | Age: 71m
+
+Events:
+  [OOMKilling] Memory limit exceeded for container data-loader: limit=4Gi, usage=4.1Gi (x5, 12m ago)
+
+Log signals:
+  [oom-system] x2 — killed process 1241 (python) total-vm:8192MiB anon-rss:4096MiB
+
+Logs (data-loader):
+```
+2026-05-16T08:15:00Z INFO  data-loader starting: batch_size=512 workers=8
+2026-05-16T08:15:01Z INFO  Loading dataset shard 1/16 (12.4GB)
+2026-05-16T08:15:44Z WARNING memory usage at 90% (3.6Gi / 4Gi limit)
+2026-05-16T08:15:51Z WARNING memory usage at 98% (3.9Gi / 4Gi limit)
+2026-05-16T08:15:55Z ERROR killed process 1241 (python) total-vm:8192MiB anon-rss:4096MiB
+Killed
+```

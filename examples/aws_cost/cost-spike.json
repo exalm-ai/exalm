@@ -1,0 +1,43 @@
+{
+  "ResultsByTime": [
+    {
+      "TimePeriod": {
+        "Start": "2024-03-01",
+        "End": "2024-04-01"
+      },
+      "Total": {
+        "BlendedCost": {"Amount": "1843.27", "Unit": "USD"}
+      },
+      "Groups": [
+        {"Keys": ["Amazon EC2"], "Metrics": {"BlendedCost": {"Amount": "892.14", "Unit": "USD"}}},
+        {"Keys": ["Amazon RDS"], "Metrics": {"BlendedCost": {"Amount": "412.88", "Unit": "USD"}}},
+        {"Keys": ["Amazon S3"], "Metrics": {"BlendedCost": {"Amount": "198.43", "Unit": "USD"}}},
+        {"Keys": ["AWS Lambda"], "Metrics": {"BlendedCost": {"Amount": "87.22", "Unit": "USD"}}},
+        {"Keys": ["Amazon CloudFront"], "Metrics": {"BlendedCost": {"Amount": "124.56", "Unit": "USD"}}},
+        {"Keys": ["AWS Data Transfer"], "Metrics": {"BlendedCost": {"Amount": "76.34", "Unit": "USD"}}},
+        {"Keys": ["Amazon Route 53"], "Metrics": {"BlendedCost": {"Amount": "51.70", "Unit": "USD"}}}
+      ],
+      "Estimated": false
+    },
+    {
+      "TimePeriod": {
+        "Start": "2024-04-01",
+        "End": "2024-05-01"
+      },
+      "Total": {
+        "BlendedCost": {"Amount": "4312.89", "Unit": "USD"}
+      },
+      "Groups": [
+        {"Keys": ["Amazon EC2"], "Metrics": {"BlendedCost": {"Amount": "2241.67", "Unit": "USD"}}},
+        {"Keys": ["Amazon RDS"], "Metrics": {"BlendedCost": {"Amount": "419.34", "Unit": "USD"}}},
+        {"Keys": ["Amazon S3"], "Metrics": {"BlendedCost": {"Amount": "612.78", "Unit": "USD"}}},
+        {"Keys": ["AWS Lambda"], "Metrics": {"BlendedCost": {"Amount": "91.44", "Unit": "USD"}}},
+        {"Keys": ["Amazon CloudFront"], "Metrics": {"BlendedCost": {"Amount": "134.21", "Unit": "USD"}}},
+        {"Keys": ["AWS Data Transfer"], "Metrics": {"BlendedCost": {"Amount": "398.44", "Unit": "USD"}}},
+        {"Keys": ["Amazon Route 53"], "Metrics": {"BlendedCost": {"Amount": "52.11", "Unit": "USD"}}},
+        {"Keys": ["Amazon EKS"], "Metrics": {"BlendedCost": {"Amount": "362.90", "Unit": "USD"}}}
+      ],
+      "Estimated": false
+    }
+  ]
+}

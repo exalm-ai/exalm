@@ -1,0 +1,145 @@
+{{- include "exalm-agent.validateProvider" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "exalm-agent.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "exalm-agent.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "exalm-agent.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "exalm-agent.selectorLabels" . | nindent 8 }}
+      annotations:
+        # Force pod restart when ConfigMap or Secret content changes.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- $needsKey := has .Values.llm.provider (list "claude" "openai" "openrouter") }}
+        {{- if and $needsKey .Values.llm.apiKey (not .Values.llm.existingSecret) }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      # Explicit host-isolation denials — the agent never needs host-level
+      # network, PID, or IPC access. Hardcoded; not overrideable via values.
+      hostNetwork: false
+      hostPID: false
+      hostIPC: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "exalm-agent.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: exalm
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - "serve"
+            - "--port={{ .Values.service.port }}"
+            - "--open-browser=false"
+            - "--interval={{ .Values.watch.interval }}"
+            {{- if .Values.watch.namespace }}
+            - "--namespace={{ .Values.watch.namespace }}"
+            {{- end }}
+            {{- if .Values.slo.enabled }}
+            {{- if .Values.slo.specFile }}
+            - "--slo-file={{ .Values.slo.specFile }}"
+            {{- end }}
+            {{- if .Values.slo.prometheusURL }}
+            - "--prometheus-url={{ .Values.slo.prometheusURL }}"
+            {{- end }}
+            {{- end }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "exalm-agent.fullname" . }}
+          env:
+            {{- $envName := include "exalm-agent.providerEnvName" . }}
+            {{- $needsKey := has .Values.llm.provider (list "claude" "openai" "openrouter") }}
+            {{- if and $needsKey $envName }}
+            - name: {{ $envName }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "exalm-agent.secretName" . }}
+                  key: {{ include "exalm-agent.providerSecretKey" . }}
+            {{- end }}
+            {{- if or .Values.auth.token .Values.auth.existingSecret }}
+            - name: EXALM_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.existingSecret | default (printf "%s-token" (include "exalm-agent.fullname" .)) }}
+                  key: dashboard-token
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            # readOnlyRootFilesystem=true requires a writable tmp dir for any
+            # transient files the binary may write.
+            - name: tmp
+              mountPath: /tmp
+            {{- if and .Values.slo.enabled .Values.slo.specConfigMap }}
+            - name: slo-specs
+              mountPath: /etc/exalm/slo
+              readOnly: true
+            {{- end }}
+            {{- if .Values.persistence.enabled }}
+            - name: exalm-data
+              mountPath: /home/nonroot/.exalm
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- if and .Values.slo.enabled .Values.slo.specConfigMap }}
+        - name: slo-specs
+          configMap:
+            name: {{ .Values.slo.specConfigMap }}
+        {{- end }}
+        {{- if .Values.persistence.enabled }}
+        - name: exalm-data
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (printf "%s-data" (include "exalm-agent.fullname" .)) }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

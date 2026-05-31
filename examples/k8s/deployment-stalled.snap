@@ -1,0 +1,41 @@
+Scope: staging | Total pods: 18 | Unhealthy: 3
+
+## DEPLOYMENTS
+- staging/order-processor: desired=4 available=4 unavailable=0 stall=ProgressDeadlineExceeded
+- staging/notification-worker: desired=2 available=0 unavailable=2
+
+--- staging/order-processor-7c9ab-new-x4k2p ---
+Phase: Pending | Reason: Pending | Restarts: 0 | Age: 12m
+
+Events:
+  [FailedScheduling] 0/3 nodes are available: 3 Insufficient cpu. (x8, 2m ago)
+
+Logs (processor): [empty]
+
+--- staging/notification-worker-5f8dc-r2n9q ---
+Phase: Running | Reason: CrashLoopBackOff | Restarts: 7 | Age: 18m
+
+Events:
+  [BackOff] Back-off restarting failed container (x14, 1m ago)
+
+Logs (worker):
+```
+2026-05-10T09:40:01Z INFO  notification-worker v2.1.0 starting
+2026-05-10T09:40:02Z INFO  Connecting to RabbitMQ at rabbitmq.staging.svc:5672
+2026-05-10T09:40:02Z ERROR dial tcp 10.96.44.2:5672: connect: connection refused
+2026-05-10T09:40:02Z FATAL cannot connect to message broker after 3 attempts, exiting
+```
+
+--- staging/notification-worker-5f8dc-k7m3x ---
+Phase: Running | Reason: CrashLoopBackOff | Restarts: 7 | Age: 18m
+
+Events:
+  [BackOff] Back-off restarting failed container (x14, 55s ago)
+
+Logs (worker):
+```
+2026-05-10T09:40:05Z INFO  notification-worker v2.1.0 starting
+2026-05-10T09:40:06Z INFO  Connecting to RabbitMQ at rabbitmq.staging.svc:5672
+2026-05-10T09:40:06Z ERROR dial tcp 10.96.44.2:5672: connect: connection refused
+2026-05-10T09:40:06Z FATAL cannot connect to message broker after 3 attempts, exiting
+```

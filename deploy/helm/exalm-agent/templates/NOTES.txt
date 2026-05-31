@@ -1,0 +1,82 @@
+────────────────────────────────────────────────────────────────────────────
+ Exalm agent installed!
+────────────────────────────────────────────────────────────────────────────
+
+Release   : {{ .Release.Name }}
+Namespace : {{ .Release.Namespace }}
+Provider  : {{ .Values.llm.provider }}
+{{- if .Values.llm.model }}
+Model     : {{ .Values.llm.model }}
+{{- else }}
+Model     : (provider default)
+{{- end }}
+
+1. Wait for the agent pod to be ready:
+
+   kubectl -n {{ .Release.Namespace }} rollout status deployment/{{ include "exalm-agent.fullname" . }} --timeout=120s
+
+2. Port-forward the dashboard:
+
+{{- if .Values.ingress.enabled }}
+{{- range $host := .Values.ingress.hosts }}
+{{- range .paths }}
+   http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}{{ .path }}
+{{- end }}
+{{- end }}
+{{- else if contains "NodePort" .Values.service.type }}
+   export NODE_PORT=$(kubectl -n {{ .Release.Namespace }} get -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "exalm-agent.fullname" . }})
+   export NODE_IP=$(kubectl -n {{ .Release.Namespace }} get nodes -o jsonpath="{.items[0].status.addresses[0].address}")
+   echo "Open http://$NODE_IP:$NODE_PORT"
+{{- else }}
+   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "exalm-agent.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+{{- end }}
+
+3. Open the dashboard:
+
+   http://localhost:{{ .Values.service.port }}
+
+{{- if and .Values.llm.apiKey (not .Values.llm.existingSecret) }}
+
+⚠️  SECURITY: llm.apiKey was set inline. Helm stores release values in a
+   Secret in the kube-system namespace, so the key is accessible to anyone
+   who can read Helm release history. For production, prefer an existing
+   Secret and reference it with:
+
+     helm upgrade {{ .Release.Name }} {{ .Chart.Name }} \
+       --reuse-values \
+       --set llm.apiKey="" \
+       --set llm.existingSecret=<your-secret-name>
+{{- end }}
+
+{{- if eq .Values.llm.provider "ollama" }}
+
+⚠️  Ollama provider selected. Make sure an Ollama server is reachable at:
+       {{ .Values.llm.ollamaURL }}
+   from inside the cluster. If running Ollama on your laptop, you'll need
+   to expose it via a Service (or set llm.ollamaURL to a cluster-routable
+   address).
+{{- else if not (or .Values.llm.apiKey .Values.llm.existingSecret) }}
+
+⚠️  Provider "{{ .Values.llm.provider }}" needs an API key, but neither
+   llm.apiKey nor llm.existingSecret was supplied. The agent will fail to
+   start. Fix with:
+
+     helm upgrade {{ .Release.Name }} {{ .Chart.Name }} \
+       --reuse-values \
+       --set llm.apiKey=$YOUR_KEY
+{{- end }}
+
+{{- if .Values.rbac.allowApply }}
+
+⚠️  rbac.allowApply=true — the agent has PATCH permissions and the "Apply Fix"
+   button will execute kubectl-equivalent mutations against your cluster.
+   Disable with --set rbac.allowApply=false if this is not what you want.
+{{- end }}
+
+Stream the agent logs:
+
+   kubectl -n {{ .Release.Namespace }} logs -f deployment/{{ include "exalm-agent.fullname" . }}
+
+Uninstall:
+
+   helm uninstall {{ .Release.Name }} -n {{ .Release.Namespace }}

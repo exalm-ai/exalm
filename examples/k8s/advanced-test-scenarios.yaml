@@ -1,0 +1,568 @@
+# Exalm advanced Kubernetes test scenarios
+#
+# Covers failure modes that the basic multi-namespace-workloads.yaml does not:
+#   OOMKilled pods, deadlocked init containers, HPA saturation, multi-container
+#   failures, StatefulSet rolling-update stuck, PodDisruptionBudget violations,
+#   RBAC secret access denial, resource-quota exhaustion, termination-stuck pods,
+#   and high-cardinality label churn.
+#
+# Designed for minikube with at least 4 CPUs and 8GB RAM:
+#   minikube start --cpus=4 --memory=8192 --driver=docker
+#
+# Apply:
+#   kubectl apply -f examples/k8s/advanced-test-scenarios.yaml
+#
+# Run exalm after ~60s to let failures materialise:
+#   ./bin/exalm.exe k8s analyze --namespaces exalm-adv-a,exalm-adv-b,exalm-adv-c --output web
+#
+# Clean up:
+#   kubectl delete namespace exalm-adv-a exalm-adv-b exalm-adv-c
+
+# ── Namespaces ────────────────────────────────────────────────────────────────
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: exalm-adv-a
+  labels: {purpose: exalm-testing, scenario: memory-cpu-failures}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: exalm-adv-b
+  labels: {purpose: exalm-testing, scenario: scheduling-rbac}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: exalm-adv-c
+  labels: {purpose: exalm-testing, scenario: statefulset-hpa}
+
+# ── ResourceQuota for exalm-adv-b (triggers quota-exhausted findings) ────────
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: tight-quota
+  namespace: exalm-adv-b
+spec:
+  hard:
+    requests.cpu: "500m"
+    requests.memory: "256Mi"
+    pods: "3"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# NAMESPACE: exalm-adv-a — Memory / CPU failure patterns
+# ══════════════════════════════════════════════════════════════════════════════
+
+# 1. OOMKilled pod ─ memory limit set below the container's actual usage.
+#    The stress command allocates 200 MB but the limit is 64 Mi.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: memory-hog
+  namespace: exalm-adv-a
+  annotations:
+    exalm.io/scenario: "OOMKilled — limit 64Mi, allocating 200MB"
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: memory-hog}
+  template:
+    metadata:
+      labels: {app: memory-hog, tier: worker}
+    spec:
+      containers:
+      - name: hog
+        image: polinux/stress:latest
+        command: ["stress"]
+        args: ["--vm", "1", "--vm-bytes", "200M", "--vm-hang", "0"]
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+          limits:
+            cpu: "200m"
+            memory: "64Mi"   # too low → OOMKilled
+
+# 2. Init container deadlock ─ init container exits 1 forever.
+#    Main container never starts → pod stays in Init:CrashLoopBackOff.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: init-deadlock
+  namespace: exalm-adv-a
+  annotations:
+    exalm.io/scenario: "Init CrashLoopBackOff — init container always exits 1"
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: init-deadlock}
+  template:
+    metadata:
+      labels: {app: init-deadlock}
+    spec:
+      initContainers:
+      - name: check-db
+        image: busybox:1.36
+        command: ["sh", "-c", "echo 'checking DB...'; sleep 2; echo 'DB not ready'; exit 1"]
+        resources:
+          requests: {cpu: "10m", memory: "8Mi"}
+          limits:  {cpu: "50m",  memory: "16Mi"}
+      containers:
+      - name: app
+        image: nginx:1.25-alpine
+        resources:
+          requests: {cpu: "50m", memory: "64Mi"}
+          limits:  {cpu: "200m", memory: "128Mi"}
+
+# 3. Multi-container pod — one sidecar always crashes, main is healthy.
+#    Exalm should identify the specific failing container by name.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sidecar-crashloop
+  namespace: exalm-adv-a
+  annotations:
+    exalm.io/scenario: "Multi-container: main=OK, log-shipper sidecar crashes"
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: sidecar-crashloop}
+  template:
+    metadata:
+      labels: {app: sidecar-crashloop}
+    spec:
+      containers:
+      - name: main-app
+        image: nginx:1.25-alpine
+        resources:
+          requests: {cpu: "50m", memory: "64Mi"}
+          limits:  {cpu: "200m", memory: "128Mi"}
+      - name: log-shipper
+        image: busybox:1.36
+        command:
+        - sh
+        - -c
+        - |
+          echo "log-shipper: connecting to logstash.logging.svc.cluster.local:5044"
+          sleep 3
+          echo "ERROR: connection refused, logstash unreachable"
+          exit 1
+        resources:
+          requests: {cpu: "10m", memory: "16Mi"}
+          limits:  {cpu: "50m",  memory: "32Mi"}
+
+# 4. CPU throttle canary — requests 10m but spins a hot loop.
+#    Pod runs but is severely CPU-throttled, causing latency spikes.
+#    Exalm should flag "requests too low relative to usage".
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cpu-throttle-canary
+  namespace: exalm-adv-a
+  annotations:
+    exalm.io/scenario: "CPU throttle — requests 10m but runs hot loop, limit 100m"
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: cpu-throttle}
+  template:
+    metadata:
+      labels: {app: cpu-throttle}
+    spec:
+      containers:
+      - name: burner
+        image: busybox:1.36
+        command: ["sh", "-c", "while true; do :; done"]
+        resources:
+          requests: {cpu: "10m",  memory: "16Mi"}
+          limits:  {cpu: "100m", memory: "32Mi"}
+
+# 5. Termination-stuck pod — preStop hook sleeps 120s.
+#    On rollout the old pod appears "Terminating" long past gracePeriod.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: termination-stuck
+  namespace: exalm-adv-a
+  annotations:
+    exalm.io/scenario: "Long preStop hook (120s) — pod gets stuck Terminating on rollout"
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: termination-stuck}
+  template:
+    metadata:
+      labels: {app: termination-stuck}
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+      - name: app
+        image: nginx:1.25-alpine
+        lifecycle:
+          preStop:
+            exec:
+              command: ["sh", "-c", "echo 'draining...'; sleep 120"]
+        resources:
+          requests: {cpu: "50m", memory: "64Mi"}
+          limits:  {cpu: "200m", memory: "128Mi"}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# NAMESPACE: exalm-adv-b — Scheduling and RBAC failures
+# ══════════════════════════════════════════════════════════════════════════════
+
+# 6. Quota-busting deployment — tries to schedule more pods than quota allows.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: quota-buster
+  namespace: exalm-adv-b
+  annotations:
+    exalm.io/scenario: "ResourceQuota exceeded — 5 pods requested, quota.pods=3"
+spec:
+  replicas: 5
+  selector:
+    matchLabels: {app: quota-buster}
+  template:
+    metadata:
+      labels: {app: quota-buster}
+    spec:
+      containers:
+      - name: app
+        image: nginx:1.25-alpine
+        resources:
+          requests: {cpu: "80m", memory: "48Mi"}
+          limits:  {cpu: "200m", memory: "64Mi"}
+
+# 7. RBAC misconfiguration — pod tries to call the Kubernetes API (list Secrets)
+#    but has no ServiceAccount with the necessary ClusterRole.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: app-reader
+  namespace: exalm-adv-b
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: secret-lister
+  namespace: exalm-adv-b
+  annotations:
+    exalm.io/scenario: "RBAC: pod tries kubectl get secrets — no RoleBinding → 403"
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: secret-lister}
+  template:
+    metadata:
+      labels: {app: secret-lister}
+    spec:
+      serviceAccountName: app-reader    # exists but has NO rolebinding
+      containers:
+      - name: auditor
+        image: bitnami/kubectl:latest
+        command:
+        - sh
+        - -c
+        - |
+          while true; do
+            echo "listing secrets..."
+            kubectl get secrets -n exalm-adv-b 2>&1 || echo "RBAC denied — no role binding for list secrets"
+            sleep 30
+          done
+        resources:
+          requests: {cpu: "20m", memory: "32Mi"}
+          limits:  {cpu: "100m", memory: "64Mi"}
+
+# 8. Node-selector mismatch — wants a GPU node that doesn't exist on minikube.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gpu-workload
+  namespace: exalm-adv-b
+  annotations:
+    exalm.io/scenario: "Unschedulable — nodeSelector accelerator=nvidia-tesla-a100 (no such node)"
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: gpu-workload}
+  template:
+    metadata:
+      labels: {app: gpu-workload}
+    spec:
+      nodeSelector:
+        accelerator: nvidia-tesla-a100   # no such node on minikube
+      containers:
+      - name: training
+        image: busybox:1.36
+        command: ["sleep", "3600"]
+        resources:
+          requests: {cpu: "100m", memory: "128Mi"}
+          limits:  {cpu: "500m", memory: "256Mi"}
+
+# 9. Toleration mismatch — requires taint that minikube doesn't apply.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: taint-required
+  namespace: exalm-adv-b
+  annotations:
+    exalm.io/scenario: "Unschedulable — requires taint zone=eu-west-1a:NoSchedule which no node has"
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: taint-required}
+  template:
+    metadata:
+      labels: {app: taint-required}
+    spec:
+      tolerations:
+      - key: "zone"
+        operator: "Equal"
+        value: "eu-west-1a"
+        effect: "NoSchedule"
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: zone
+                operator: In
+                values: ["eu-west-1a"]
+      containers:
+      - name: app
+        image: nginx:1.25-alpine
+        resources:
+          requests: {cpu: "50m", memory: "64Mi"}
+          limits:  {cpu: "200m", memory: "128Mi"}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# NAMESPACE: exalm-adv-c — StatefulSet and HPA scenarios
+# ══════════════════════════════════════════════════════════════════════════════
+
+# 10. StatefulSet rolling update stuck — v2 pod crashloops, updateStrategy
+#     blocks progression. Max unavailable = 1 but pod never becomes Ready.
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: message-queue
+  namespace: exalm-adv-c
+  annotations:
+    exalm.io/scenario: "StatefulSet rolling update stuck — ordinal-1 crashloops, update blocked"
+spec:
+  serviceName: message-queue
+  replicas: 3
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      partition: 1   # only update ordinals >= 1; ordinal 0 stays on old version
+  selector:
+    matchLabels: {app: message-queue}
+  template:
+    metadata:
+      labels: {app: message-queue, version: v2}
+    spec:
+      containers:
+      - name: mq
+        image: busybox:1.36
+        command:
+        - sh
+        - -c
+        - |
+          HOSTNAME=$(hostname)
+          ORDINAL="${HOSTNAME##*-}"
+          if [ "$ORDINAL" -ge "1" ]; then
+            echo "message-queue-$ORDINAL: v2 startup failed — config schema mismatch"
+            exit 1
+          fi
+          echo "message-queue-$ORDINAL: v1 running OK"
+          sleep 3600
+        resources:
+          requests: {cpu: "50m", memory: "64Mi"}
+          limits:  {cpu: "200m", memory: "128Mi"}
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: message-queue
+  namespace: exalm-adv-c
+spec:
+  clusterIP: None
+  selector: {app: message-queue}
+  ports:
+  - port: 5672
+
+# 11. HPA with no metrics-server — HPA created but metrics unavailable,
+#     so it shows "unknown" for current utilization → can't scale.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: autoscaled-api
+  namespace: exalm-adv-c
+  annotations:
+    exalm.io/scenario: "HPA — metrics-server absent or unreachable, current CPU unknown"
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: autoscaled-api}
+  template:
+    metadata:
+      labels: {app: autoscaled-api}
+    spec:
+      containers:
+      - name: api
+        image: nginx:1.25-alpine
+        resources:
+          requests: {cpu: "100m", memory: "128Mi"}
+          limits:  {cpu: "500m", memory: "256Mi"}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: autoscaled-api-hpa
+  namespace: exalm-adv-c
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: autoscaled-api
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 60
+
+# 12. PodDisruptionBudget that prevents all voluntary disruptions.
+#     maxUnavailable=0 with minAvailable=ALL — even kubectl drain will block.
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: zero-disruption-pdb
+  namespace: exalm-adv-c
+  annotations:
+    exalm.io/scenario: "PDB minAvailable=ALL — prevents node drain and rolling updates"
+spec:
+  minAvailable: 3    # same as replica count — no pod can ever be disrupted
+  selector:
+    matchLabels: {app: pdb-protected-svc}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pdb-protected-svc
+  namespace: exalm-adv-c
+spec:
+  replicas: 3
+  selector:
+    matchLabels: {app: pdb-protected-svc}
+  template:
+    metadata:
+      labels: {app: pdb-protected-svc}
+    spec:
+      containers:
+      - name: app
+        image: nginx:1.25-alpine
+        resources:
+          requests: {cpu: "50m", memory: "64Mi"}
+          limits:  {cpu: "200m", memory: "128Mi"}
+
+# 13. Liveness probe kills a healthy pod — probe targets wrong port.
+#     Pod starts, runs, but liveness probe hits :9000 while app serves :8080.
+#     Kubernetes kills it after failureThreshold → Restart loop at low cadence.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wrong-probe-port
+  namespace: exalm-adv-c
+  annotations:
+    exalm.io/scenario: "Liveness probe on wrong port :9000 — pod restarts every ~30s"
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: wrong-probe-port}
+  template:
+    metadata:
+      labels: {app: wrong-probe-port}
+    spec:
+      containers:
+      - name: api
+        image: nginx:1.25-alpine
+        ports:
+        - containerPort: 8080    # nginx default is 80; 8080 is also wrong but predictable
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 9000           # nothing listens here → probe always fails
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          failureThreshold: 3
+        resources:
+          requests: {cpu: "50m", memory: "64Mi"}
+          limits:  {cpu: "200m", memory: "128Mi"}
+
+# 14. Evicted pod pattern — set a very tight ephemeral-storage limit so the
+#     container's log writes trigger eviction.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: log-flood
+  namespace: exalm-adv-c
+  annotations:
+    exalm.io/scenario: "Ephemeral storage eviction — container writes logs faster than 1Mi limit"
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: log-flood}
+  template:
+    metadata:
+      labels: {app: log-flood}
+    spec:
+      containers:
+      - name: logger
+        image: busybox:1.36
+        command:
+        - sh
+        - -c
+        - |
+          i=0
+          while true; do
+            echo "log line $i — $(date) — padding: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            i=$((i+1))
+            sleep 0.01
+          done
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "16Mi"
+            ephemeral-storage: "512Ki"
+          limits:
+            cpu: "50m"
+            memory: "32Mi"
+            ephemeral-storage: "1Mi"    # evicted once logs exceed 1Mi

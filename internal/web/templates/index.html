@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Exalm — {{.Title}}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header class="header">
+  <div class="header-brand">⬡ exalm</div>
+  <span class="status-dot" title="Connected to cluster"></span>
+  <div class="header-title">{{.Title}}</div>
+  <div class="header-actions">
+    {{if and .HasApplyFix (gt .FixableCount 0)}}
+    <button class="btn-fix-all" onclick="openFixAll()">Fix All ({{.FixableCount}})</button>
+    {{end}}
+    {{if .HasCreatePR}}
+    <button class="btn-create-pr" onclick="createPR(this)">Create PR</button>
+    {{end}}
+  </div>
+  <div class="header-timestamp" id="ts">{{.Timestamp}}</div>
+  <button class="btn-theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark mode" aria-label="Toggle theme">☀</button>
+</header>
+
+<div class="summary-bar">
+  <div class="summary-badges">
+    {{if gt (index .SeverityCounts "critical") 0}}
+    <span class="badge critical">critical: {{index .SeverityCounts "critical"}}</span>
+    {{end}}
+    {{if gt (index .SeverityCounts "high") 0}}
+    <span class="badge high">high: {{index .SeverityCounts "high"}}</span>
+    {{end}}
+    {{if gt (index .SeverityCounts "medium") 0}}
+    <span class="badge medium">medium: {{index .SeverityCounts "medium"}}</span>
+    {{end}}
+    {{if gt (index .SeverityCounts "low") 0}}
+    <span class="badge low">low: {{index .SeverityCounts "low"}}</span>
+    {{end}}
+    {{if gt (index .SeverityCounts "info") 0}}
+    <span class="badge info">info: {{index .SeverityCounts "info"}}</span>
+    {{end}}
+  </div>
+  <div class="summary-cats">
+    {{range $cat, $count := .CategoryCounts}}
+    <span class="cat-pill">{{$cat}} <strong>{{$count}}</strong></span>
+    {{end}}
+  </div>
+  <span class="summary-text">{{.Summary}}</span>
+</div>
+
+<!-- Phase 6 — Top status bar (Komodor signature) -->
+<div id="status-bar-top" class="status-bar-top" aria-label="Cluster status overview">
+  <div class="status-stat">
+    <span class="status-stat-label">Health</span>
+    <strong id="status-health">—</strong>
+  </div>
+  <div class="status-stat-divider"></div>
+  <div class="status-stat">
+    <span class="status-stat-label">Incidents</span>
+    <strong id="status-incidents">0</strong>
+  </div>
+  <div class="status-stat-divider"></div>
+  <div class="status-stat">
+    <span class="status-stat-label">SLO</span>
+    <span id="status-slo" class="status-chip status-chip--green">all green</span>
+  </div>
+  <div class="status-stat-divider"></div>
+  <div class="status-stat">
+    <span class="status-stat-label">Last deploy</span>
+    <strong id="status-last-deploy">—</strong>
+  </div>
+</div>
+
+<!-- Change timeline strip (Phase 4 — Komodor signature) -->
+<div id="change-timeline" class="change-timeline" style="display:none" aria-label="Recent cluster changes (last 24h)"></div>
+
+<!-- Charts row -->
+<div class="charts-row">
+  <div class="chart-cell health-ring-cell">
+    <div class="chart-label">Cluster Health</div>
+    <div id="health-ring" class="health-ring-wrap"></div>
+  </div>
+  <div class="chart-cell">
+    <div class="chart-label">Severity</div>
+    <div id="donut-chart" class="donut-wrap"></div>
+  </div>
+  <div class="chart-cell chart-cell--bar">
+    <div class="chart-label">By Category</div>
+    <div id="category-chart" class="category-wrap"></div>
+  </div>
+  <div class="chart-cell chart-cell--bar">
+    <div class="chart-label">Distribution</div>
+    <div id="severity-chart" class="bar-wrap" aria-label="Severity distribution chart"></div>
+  </div>
+</div>
+
+<main class="main-layout">
+
+  <section class="findings-panel">
+    <div class="panel-heading-row">
+      <h2 class="panel-heading">Findings ({{len .Findings}})</h2>
+      <div class="filter-row" id="filter-row">
+        <button class="filter-btn active" data-sev="all" onclick="filterBySeverity(this)">All</button>
+        <button class="filter-btn" data-sev="critical" onclick="filterBySeverity(this)">Critical</button>
+        <button class="filter-btn" data-sev="high" onclick="filterBySeverity(this)">High</button>
+        <button class="filter-btn" data-sev="medium" onclick="filterBySeverity(this)">Med</button>
+        <button class="filter-btn" data-sev="low" onclick="filterBySeverity(this)">Low</button>
+      </div>
+    </div>
+
+    <div id="ns-filter-row" class="ns-filter-row"></div>
+
+    <div class="time-filter-row" id="time-filter-row">
+      <span class="time-filter-label">Changes:</span>
+      <button class="time-btn" data-since="1h" onclick="setTimeFilter(this)">1h</button>
+      <button class="time-btn active" data-since="24h" onclick="setTimeFilter(this)">24h</button>
+      <button class="time-btn" data-since="7d" onclick="setTimeFilter(this)">7d</button>
+      <button class="time-btn" data-since="all" onclick="setTimeFilter(this)">All</button>
+    </div>
+
+    <div class="search-row" id="search-row">
+      <input type="search" id="findings-search" class="findings-search"
+             placeholder="Search findings..." autocomplete="off" spellcheck="false"
+             oninput="onSearchInput(this.value)" />
+    </div>
+
+    {{if .Findings}}
+    <div id="findings-groups">
+      {{range $cat, $items := .GroupedFindings}}
+      <div class="finding-group" data-category="{{$cat}}">
+        <button class="group-header" aria-expanded="true" onclick="toggleGroup(this)">
+          <span class="group-icon">{{catIcon $cat}}</span>
+          <span class="group-name">{{$cat}}</span>
+          <span class="group-count">{{len $items}}</span>
+          <span class="group-chevron">▾</span>
+        </button>
+        <div class="group-body">
+          {{range $items}}
+          {{$remJSON := remediationJSON .Remediation}}
+          {{$platform := sourcePlatform .Source}}
+          {{$host := sourceHost .Source}}
+          <div class="finding-card finding-{{.Severity}}"
+               data-severity="{{.Severity}}"
+               data-title="{{.Title}}"
+               data-category="{{.Category}}"
+               data-detail="{{.Detail}}"
+               data-suggestion="{{.Suggestion}}"
+               data-source="{{.Source}}"
+               {{if .Remediation}}data-remediation='{{$remJSON}}'{{end}}>
+            <div class="finding-header" onclick="toggleCard(this.closest('.finding-card'))">
+              <span class="severity-badge {{.Severity}}">{{.Severity}}</span>
+              <div class="finding-header-text">
+                <span class="finding-title">{{.Title}}</span>
+                <span class="root-cause-line" style="display:none"></span>
+              </div>
+              <div class="finding-header-actions">
+                {{if $host}}<span class="source-badge source-{{$platform}}" title="Source: {{.Source}}">{{if eq $platform "windows"}}🪟{{else if eq $platform "linux"}}🐧{{else if eq $platform "k8s"}}⬡{{end}} {{$host}}</span>{{end}}
+                {{if .Remediation}}
+                <button class="fix-btn" onclick="event.stopPropagation(); applyFix(this.closest('.finding-card'))">Fix</button>
+                {{end}}
+                <span class="card-chevron">▾</span>
+              </div>
+            </div>
+            <div class="finding-body">
+              <div class="root-cause-section" style="display:none">
+                <div class="section-label">Root Cause</div>
+                <div class="root-cause-text"></div>
+                <div class="fix-warning" style="display:none">
+                  <span class="warn-icon">⚠</span>
+                  <span class="fix-warning-text"></span>
+                </div>
+              </div>
+              <div class="related-section" style="display:none">
+                <div class="section-label">Related Findings</div>
+                <ul class="related-list"></ul>
+              </div>
+              <div class="detail-section">
+                {{if .Detail}}<p class="finding-detail">{{.Detail}}</p>{{end}}
+                {{if .Suggestion}}<p class="finding-suggestion">→ {{.Suggestion}}</p>{{end}}
+              </div>
+              <div class="investigation-section" style="display:none">
+                <div class="section-label">Investigation Steps</div>
+                <ol class="investigation-steps"></ol>
+              </div>
+              {{if .Remediation}}
+              <div class="remediation-section">
+                <div class="section-label">Remediation
+                  {{if eq .Remediation.Shell "powershell"}}<span class="shell-badge shell-ps">🪟 PowerShell</span>{{else if eq .Remediation.Shell "bash"}}<span class="shell-badge shell-bash">🐧 bash</span>{{else}}<span class="shell-badge shell-kubectl">⬡ kubectl</span>{{end}}
+                </div>
+                {{if .Remediation.Warning}}
+                <div class="rem-warning"><span class="warn-icon">⚠</span> {{.Remediation.Warning}}</div>
+                {{end}}
+                <div class="remediation-cmd-row">
+                  <code class="remediation-cmd">{{.Remediation.KubectlCmd}}</code>
+                  <button class="copy-btn" onclick="event.stopPropagation(); copyText(this, '{{.Remediation.KubectlCmd}}')">copy</button>
+                </div>
+                <button class="fix-btn-full" onclick="event.stopPropagation(); applyFix(this.closest('.finding-card'))">Apply Fix</button>
+              </div>
+              {{end}}
+            </div>
+          </div>
+          {{end}}
+        </div>
+      </div>
+      {{end}}
+    </div>
+    {{else}}
+    <p class="empty-state">No structured findings.</p>
+    {{end}}
+  </section>
+
+  <section class="narrative-panel">
+    <div class="panel-heading-row">
+      <h2 class="panel-heading">LLM Analysis</h2>
+      <div class="tabs" id="narrative-tabs">
+        <button class="tab-btn active" data-tab="all" onclick="switchTab(this)">All</button>
+        <button class="tab-btn" data-tab="verdict" onclick="switchTab(this)">Verdict</button>
+        <button class="tab-btn" data-tab="incidents" onclick="switchTab(this)">Incidents</button>
+        <button class="tab-btn" data-tab="rbac" onclick="switchTab(this)">RBAC</button>
+        <button class="tab-btn" data-tab="prevention" onclick="switchTab(this)">Prevention</button>
+      </div>
+    </div>
+    <div id="narrative-content"
+         class="narrative-body"
+         data-raw="{{.RawEscaped}}">
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <span><a href="https://exalm.com" target="_blank" rel="noopener">exalm.com</a></span>
+  <span class="auto-refresh-note">auto-refreshes every 30s</span>
+</footer>
+
+<!-- Per-finding confirmation modal -->
+<div id="fix-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <div class="modal-backdrop" onclick="closeFixModal()"></div>
+  <div class="modal-box">
+    <h3 id="modal-title" class="modal-title">Confirm Remediation</h3>
+    <p id="modal-description" class="modal-description"></p>
+    <div id="modal-root-cause-warn" class="modal-root-warn hidden">
+      <span class="warn-icon">⚠</span>
+      <span id="modal-root-cause-text"></span>
+    </div>
+    <pre id="modal-kubectl" class="modal-kubectl"></pre>
+    <div id="modal-result" class="modal-result hidden"></div>
+    <div class="modal-actions">
+      <button id="modal-apply-btn" class="btn-apply" onclick="confirmFix()">Apply</button>
+      <button class="btn-cancel" onclick="closeFixModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Fix All modal -->
+<div id="fix-all-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="fix-all-title">
+  <div class="modal-backdrop" onclick="closeFixAllModal()"></div>
+  <div class="modal-box modal-box--wide">
+    <h3 id="fix-all-title" class="modal-title">Apply All Fixes</h3>
+    <p class="modal-description">The following remediations will be applied in safe order (restarts before deletes). Review carefully — some fixes address symptoms, not root causes.</p>
+    <div id="fix-all-list" class="fix-all-list"></div>
+    <div id="fix-all-result" class="modal-result hidden"></div>
+    <div class="modal-actions">
+      <button id="fix-all-apply-btn" class="btn-apply" onclick="confirmFixAll()">Apply All</button>
+      <button class="btn-cancel" onclick="closeFixAllModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,64 @@
+[
+  {
+    "name": "checkout-api-availability",
+    "service": "checkout-api",
+    "namespace": "checkout",
+    "window": "30d",
+    "objective": 0.999,
+    "sli": {
+      "good_query": "sum(rate(http_requests_total{service=\"checkout-api\",status!~\"5..\"}[5m]))",
+      "total_query": "sum(rate(http_requests_total{service=\"checkout-api\"}[5m]))"
+    },
+    "annotations": {
+      "team": "checkout",
+      "tier": "critical"
+    }
+  },
+  {
+    "name": "checkout-api-latency-p99",
+    "service": "checkout-api",
+    "namespace": "checkout",
+    "window": "7d",
+    "objective": 0.95,
+    "sli": {
+      "good_query": "sum(rate(http_request_duration_seconds_bucket{service=\"checkout-api\",route=\"/api/checkout\",le=\"0.5\"}[5m]))",
+      "total_query": "sum(rate(http_request_duration_seconds_count{service=\"checkout-api\",route=\"/api/checkout\"}[5m]))"
+    },
+    "annotations": {
+      "team": "checkout",
+      "tier": "critical",
+      "note": "95% of checkout requests must complete in under 500ms"
+    }
+  },
+  {
+    "name": "payments-availability",
+    "service": "payments-api",
+    "namespace": "payments",
+    "window": "30d",
+    "objective": 0.9999,
+    "sli": {
+      "good_query": "sum(rate(http_requests_total{service=\"payments-api\",status!~\"5..\"}[5m]))",
+      "total_query": "sum(rate(http_requests_total{service=\"payments-api\"}[5m]))"
+    },
+    "annotations": {
+      "team": "payments",
+      "tier": "critical",
+      "note": "Four nines — payments must not fail"
+    }
+  },
+  {
+    "name": "inventory-query-latency",
+    "service": "inventory-svc",
+    "namespace": "checkout",
+    "window": "7d",
+    "objective": 0.99,
+    "sli": {
+      "good_query": "sum(rate(db_query_duration_seconds_bucket{service=\"inventory-svc\",le=\"1.0\"}[5m]))",
+      "total_query": "sum(rate(db_query_duration_seconds_count{service=\"inventory-svc\"}[5m]))"
+    },
+    "annotations": {
+      "team": "platform",
+      "tier": "high"
+    }
+  }
+]

@@ -1,0 +1,106 @@
+Scope: platform | Total pods: 18 | Unhealthy: 5
+
+## DEPLOYMENTS
+- platform/api-gateway: desired=6 available=0 unavailable=6 stall=ProgressDeadlineExceeded
+- platform/payment-proxy: desired=3 available=0 unavailable=3 stall=ProgressDeadlineExceeded
+
+## HPAs
+- platform/api-gateway-hpa → Deployment/api-gateway: current=6 desired=6 min=2 max=6 issue=ScalingLimited: MaxReplicasReached
+
+--- platform/api-gateway-5d9bc-k2p4r ---
+Phase: Running | Reason: NotReady | Restarts: 0 | Age: 2h10m
+
+Events:
+  [Unhealthy] Readiness probe failed: Get "https://10.244.1.5:8443/health": x509: certificate has expired or is not yet valid: current time 2026-05-11T10:00:05Z is after 2026-05-10T23:59:59Z (x148, 3s ago) [spike: 2.5/s]
+  [Unhealthy] Liveness probe failed: Get "https://10.244.1.5:8443/healthz": x509: certificate has expired or is not yet valid (x52, 15s ago)
+
+Log signals:
+  [cert-expiry] x38 — ERROR x509: certificate has expired or is not yet valid: current time 2026-05-11
+  [http-5xx] x42 — "status": 503, "error": "TLS handshake failed", "path": "/api/checkout"
+
+Logs (gateway):
+```
+2026-05-11T07:58:01Z INFO  api-gateway v5.1.0 starting
+2026-05-11T07:58:01Z INFO  loading TLS certificate from /etc/tls/tls.crt
+2026-05-11T07:58:02Z WARNING TLS certificate CN=api.internal expires at 2026-05-10T23:59:59Z (in -1h0m0s)
+2026-05-11T07:58:02Z INFO  Listening on :8443 (TLS)
+2026-05-11T10:00:05Z ERROR x509: certificate has expired or is not yet valid: current time 2026-05-11T10:00:05Z is after 2026-05-10T23:59:59Z
+2026-05-11T10:00:05Z ERROR TLS handshake failed with client 10.0.0.1:54312: certificate has expired
+2026-05-11T10:00:06Z ERROR {"status": 503, "error": "TLS handshake failed", "path": "/api/checkout", "latency_ms": 0}
+2026-05-11T10:00:06Z ERROR {"status": 503, "error": "TLS handshake failed", "path": "/api/v2/users", "latency_ms": 0}
+2026-05-11T10:00:07Z ERROR {"status": 503, "error": "TLS handshake failed", "path": "/api/payments", "latency_ms": 0}
+```
+
+--- platform/api-gateway-5d9bc-n8m3q ---
+Phase: Running | Reason: NotReady | Restarts: 0 | Age: 2h10m
+
+Events:
+  [Unhealthy] Readiness probe failed: Get "https://10.244.1.6:8443/health": x509: certificate has expired or is not yet valid (x141, 5s ago) [spike: 2.4/s]
+
+Log signals:
+  [cert-expiry] x36 — ERROR x509: certificate has expired or is not yet valid
+  [http-5xx] x39 — "status": 503, "error": "TLS handshake failed"
+
+Logs (gateway):
+```
+2026-05-11T07:58:03Z INFO  api-gateway v5.1.0 starting
+2026-05-11T07:58:03Z WARNING TLS certificate CN=api.internal expires at 2026-05-10T23:59:59Z (in -1h0m0s)
+2026-05-11T10:00:05Z ERROR x509: certificate has expired or is not yet valid
+2026-05-11T10:00:06Z ERROR TLS handshake failed with client 10.0.1.4:42100: certificate has expired
+2026-05-11T10:00:06Z ERROR {"status": 503, "error": "TLS handshake failed", "path": "/api/inventory"}
+```
+
+--- platform/api-gateway-5d9bc-p9r5s ---
+Phase: Running | Reason: NotReady | Restarts: 0 | Age: 2h8m
+
+Events:
+  [Unhealthy] Readiness probe failed: Get "https://10.244.2.3:8443/health": x509: certificate has expired or is not yet valid (x130, 8s ago) [spike: 2.2/s]
+
+Log signals:
+  [cert-expiry] x31 — ERROR x509: certificate has expired or is not yet valid
+  [http-5xx] x35 — "status": 503, "error": "TLS handshake failed"
+
+Logs (gateway):
+```
+2026-05-11T08:00:01Z INFO  api-gateway v5.1.0 starting
+2026-05-11T08:00:01Z WARNING TLS certificate CN=api.internal expires at 2026-05-10T23:59:59Z
+2026-05-11T10:00:05Z ERROR x509: certificate has expired or is not yet valid
+2026-05-11T10:00:07Z ERROR {"status": 503, "error": "TLS handshake failed", "path": "/api/orders"}
+```
+
+--- platform/payment-proxy-6ab2c-t1u2v ---
+Phase: Running | Reason: NotReady | Restarts: 0 | Age: 1h55m
+
+Events:
+  [Unhealthy] Readiness probe failed: Get "https://10.244.3.7:9443/ready": x509: certificate has expired or is not yet valid: current time 2026-05-11T10:00:05Z is after 2026-05-10T23:59:59Z (x118, 10s ago) [spike: 2.0/s]
+
+Log signals:
+  [cert-expiry] x28 — ERROR TLS handshake failed: certificate has expired or is not yet valid
+  [http-5xx] x31 — status 503: upstream TLS certificate invalid
+
+Logs (proxy):
+```
+2026-05-11T08:10:01Z INFO  payment-proxy v2.4.0 starting, upstream=api-gateway:8443
+2026-05-11T08:10:02Z WARNING upstream TLS cert expires at 2026-05-10T23:59:59Z
+2026-05-11T10:00:06Z ERROR TLS handshake failed: certificate has expired or is not yet valid
+2026-05-11T10:00:06Z ERROR status 503: upstream TLS certificate invalid, retry in 5s
+2026-05-11T10:00:11Z ERROR status 503: upstream TLS certificate invalid, retry in 5s
+```
+
+--- platform/payment-proxy-6ab2c-w3x4y ---
+Phase: Running | Reason: NotReady | Restarts: 0 | Age: 1h55m
+
+Events:
+  [Unhealthy] Readiness probe failed: Get "https://10.244.3.8:9443/ready": x509: certificate has expired or is not yet valid (x110, 12s ago) [spike: 1.8/s]
+
+Log signals:
+  [cert-expiry] x25 — ERROR TLS handshake failed: certificate has expired or is not yet valid
+  [http-5xx] x28 — status 503: upstream TLS certificate invalid
+
+Logs (proxy):
+```
+2026-05-11T08:10:03Z INFO  payment-proxy v2.4.0 starting, upstream=api-gateway:8443
+2026-05-11T08:10:04Z WARNING upstream TLS cert expires at 2026-05-10T23:59:59Z
+2026-05-11T10:00:06Z ERROR TLS handshake failed: certificate has expired or is not yet valid
+2026-05-11T10:00:07Z ERROR status 503: upstream TLS certificate invalid
+```

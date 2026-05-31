@@ -1,0 +1,12 @@
+<6>May 13 09:00:01 web01 systemd[1]: Started Daily apt activities.
+<3>May 13 09:00:42 web01 sshd[1234]: Failed password for root from 198.51.100.40 port 50211 ssh2
+<3>May 13 09:00:48 web01 sshd[1234]: Failed password for root from 198.51.100.40 port 50213 ssh2
+<3>May 13 09:00:51 web01 sshd[1234]: Failed password for invalid user admin from 198.51.100.40 port 50214 ssh2
+<3>May 13 09:00:55 web01 sshd[1234]: Failed password for invalid user oracle from 198.51.100.40 port 50217 ssh2
+<2>May 13 09:01:11 web01 kernel: Out of memory: Killed process 8123 (payments-api) total-vm:1842136kB, anon-rss:1456040kB
+<3>May 13 09:01:12 web01 systemd[1]: payments-api.service: Main process exited, code=killed, status=9/KILL
+<3>May 13 09:01:12 web01 systemd[1]: payments-api.service: Failed with result 'signal'.
+<6>May 13 09:01:13 web01 systemd[1]: payments-api.service: Scheduled restart job, restart counter is at 3.
+<2>May 13 09:02:33 web01 kernel: Out of memory: Killed process 9241 (payments-api) total-vm:1900112kB, anon-rss:1488912kB
+<4>May 13 09:03:02 web01 nginx: 2026/05/13 09:03:02 [warn] 4321#0: *55 upstream server temporarily disabled while connecting to upstream
+<6>May 13 09:03:05 web01 cron[2222]: starting hourly cron job

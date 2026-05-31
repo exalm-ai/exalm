@@ -1,0 +1,97 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.6.3",
+  "resource_changes": [
+    {
+      "address": "aws_db_instance.production",
+      "type": "aws_db_instance",
+      "name": "production",
+      "change": {
+        "actions": ["delete"],
+        "before": {
+          "identifier": "production-postgres",
+          "engine": "postgres",
+          "engine_version": "14.7",
+          "instance_class": "db.t3.medium",
+          "multi_az": true,
+          "storage": 100
+        },
+        "after": null
+      }
+    },
+    {
+      "address": "aws_security_group.web",
+      "type": "aws_security_group",
+      "name": "web",
+      "change": {
+        "actions": ["delete", "create"],
+        "before": {
+          "ingress": [{"cidr_blocks": ["10.0.0.0/8"], "from_port": 443, "to_port": 443}]
+        },
+        "after": {
+          "ingress": [{"cidr_blocks": ["0.0.0.0/0"], "from_port": 443, "to_port": 443}]
+        }
+      }
+    },
+    {
+      "address": "aws_iam_role_policy.api_role_policy",
+      "type": "aws_iam_role_policy",
+      "name": "api_role_policy",
+      "change": {
+        "actions": ["update"],
+        "before": {"policy": "{\"Effect\":\"Allow\",\"Action\":[\"s3:GetObject\"],\"Resource\":\"arn:aws:s3:::my-bucket/*\"}"},
+        "after":  {"policy": "{\"Effect\":\"Allow\",\"Action\":[\"s3:*\"],\"Resource\":\"*\"}"}
+      }
+    },
+    {
+      "address": "aws_autoscaling_group.api",
+      "type": "aws_autoscaling_group",
+      "name": "api",
+      "change": {
+        "actions": ["update"],
+        "before": {"min_size": 2, "max_size": 10, "desired_capacity": 3},
+        "after":  {"min_size": 1, "max_size": 5, "desired_capacity": 2}
+      }
+    },
+    {
+      "address": "aws_s3_bucket.archive",
+      "type": "aws_s3_bucket",
+      "name": "archive",
+      "change": {
+        "actions": ["delete"],
+        "before": {"bucket": "company-archive-2019", "versioning_enabled": true},
+        "after": null
+      }
+    },
+    {
+      "address": "aws_cloudwatch_log_group.api",
+      "type": "aws_cloudwatch_log_group",
+      "name": "api",
+      "change": {
+        "actions": ["update"],
+        "before": {"retention_in_days": 30},
+        "after":  {"retention_in_days": 14}
+      }
+    },
+    {
+      "address": "aws_lambda_function.image_processor",
+      "type": "aws_lambda_function",
+      "name": "image_processor",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {"function_name": "image-processor", "runtime": "python3.11", "memory_size": 512}
+      }
+    },
+    {
+      "address": "aws_s3_bucket.uploads",
+      "type": "aws_s3_bucket",
+      "name": "uploads",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {"bucket": "company-uploads-v2"}
+      }
+    }
+  ]
+}

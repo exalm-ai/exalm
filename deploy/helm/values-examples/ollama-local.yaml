@@ -1,0 +1,49 @@
+# Example: install exalm-agent using a local Ollama server as the LLM provider.
+#
+# Ollama runs entirely offline — no API key, no cloud dependency. Good for
+# air-gapped environments and homelab installs.
+#
+# Prerequisites:
+#   1. Run Ollama somewhere reachable from the cluster. Two common patterns:
+#
+#      (a) On a node, exposed via a hostPort or NodePort Service:
+#          ollama serve  # on the node
+#          # Then set llm.ollamaURL to the node IP / service URL.
+#
+#      (b) As a sidecar / in-cluster Deployment:
+#          helm install ollama ollama-helm/ollama   # community chart
+#          # Set llm.ollamaURL to http://ollama.ollama.svc:11434
+#
+#   2. Pull the model you want to use:
+#          ollama pull qwen2.5:0.5b
+#
+# Usage:
+#
+#   helm install exalm ./deploy/helm/exalm-agent \
+#       --values ./deploy/helm/values-examples/ollama-local.yaml \
+#       --set llm.ollamaURL=http://ollama.ollama.svc:11434
+
+llm:
+  provider: ollama
+  # Ollama uses ':' as the variant separator. See `ollama list` on the
+  # machine running Ollama for available tags.
+  model: "qwen2.5:0.5b"
+  # Override this — defaults to localhost which is NOT reachable from a pod.
+  ollamaURL: "http://ollama.ollama.svc:11434"
+
+watch:
+  namespace: ""
+  interval: "60s"
+
+# Local models are typically slower than cloud — give the agent more memory
+# headroom so it can buffer larger prompts.
+resources:
+  requests:
+    cpu: 200m
+    memory: 384Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+rbac:
+  allowApply: false

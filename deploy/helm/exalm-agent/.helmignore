@@ -1,0 +1,26 @@
+# Patterns to ignore when building Helm chart packages.
+# https://helm.sh/docs/chart_template_guide/builtin_objects/
+.DS_Store
+# Common VCS dirs
+.git/
+.gitignore
+.bzr/
+.bzrignore
+.hg/
+.hgignore
+.svn/
+# Common backup files
+*.swp
+*.bak
+*.tmp
+*.orig
+*~
+# Various IDEs
+.project
+.idea/
+*.tmproj
+.vscode/
+# Test results / docs / examples that don't belong in the package
+.helmignore
+ci/
+README.md.bak

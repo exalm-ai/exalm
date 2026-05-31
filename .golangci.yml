@@ -1,0 +1,40 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck       # find unchecked errors
+    - staticcheck    # SA* rules: bugs, simplifications, deprecated API usage
+    - govet          # reports suspicious constructs
+    - ineffassign    # detects assignments to variables that are never read
+    - unused         # find unused code
+    - gosec          # security checks
+    # gosimple merged into staticcheck in golangci-lint v2 — no longer separate
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: false   # _ = err is common in defer-close patterns
+    gosec:
+      excludes:
+        - G104  # errors unhandled: we use //nolint where intentional
+      severity: medium
+      confidence: medium
+
+  exclusions:
+    # Exclude vendor/ and generated files.
+    paths:
+      - vendor
+    rules:
+      # Close errors in defers are explicitly suppressed project-wide.
+      - linters: [errcheck]
+        text: 'Error return value of `.*\.Close` is not checked'
+      # Test helpers commonly use t.Fatal directly.
+      - path: "_test\\.go"
+        linters: [gosec]
+
+issues:
+  # Max 10 issues per linter before truncation.
+  max-issues-per-linter: 10

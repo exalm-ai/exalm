@@ -1,0 +1,32 @@
+# Enforce LF line endings for all text files — prevents gofmt CRLF failures in CI.
+* text=auto eol=lf
+
+# Go source — always LF
+*.go text eol=lf
+
+# Shell scripts — LF
+*.sh text eol=lf
+
+# YAML / JSON / TOML — LF
+*.yaml text eol=lf
+*.yml  text eol=lf
+*.json text eol=lf
+*.toml text eol=lf
+
+# Markdown — LF
+*.md text eol=lf
+
+# Windows-specific: batch files use CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary files — no conversion
+*.exe binary
+*.dll binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.zip binary
+*.tar.gz binary

@@ -1,0 +1,39 @@
+# Binaries
+bin/
+*.exe
+*.test
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Local config
+.env
+.env.local
+*.local
+
+# Go
+vendor/
+
+# Build artifacts
+dist/
+
+# Not part of the OSS CLI — lives in its own private repo
+site/
+
+# Old scaffold directory — stale, not part of the project
+# /exalm/ anchored to repo root so it does NOT match cmd/exalm/
+/exalm/
+
+# Claude Code — internal tooling config, never publish
+.claude/
+
+# Internal development notes — not for public repo
+needed installation.txt
+COMPETITIVE_GAPS.md
+ROADMAP.md
+docs/LAUNCH_CONTENT.md

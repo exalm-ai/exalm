@@ -1,0 +1,39 @@
+# Exclude everything the build doesn't need so the build context stays small.
+.git/
+.github/
+.claude/
+.idea/
+.vscode/
+
+# Built artifacts and binaries
+bin/
+dist/
+*.exe
+*.test
+*.out
+
+# Marketing site lives in a separate repo
+site/
+
+# Stale scaffold directory
+/exalm/
+
+# Vendor dir (we don't vendor)
+vendor/
+
+# Docs site is built separately
+docs/
+
+# Local env files
+.env
+.env.local
+*.local
+
+# Helm chart — not needed inside the container
+deploy/
+
+# Examples — bundled separately when needed
+examples/
+
+# Plan files / personal artifacts
+.claude/worktrees/

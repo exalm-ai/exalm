@@ -1,0 +1,94 @@
+Scope: production | Total pods: 47 | Unhealthy: 6
+
+--- production/checkout-api-8f3bc-k2p9r ---
+Phase: Running | Reason: CrashLoopBackOff | Restarts: 22 | Age: 5h
+
+Events:
+  [BackOff] Back-off restarting failed container (x44, 30s ago)
+
+Logs (api):
+```
+2026-05-10T07:30:11Z INFO  checkout-api v4.2.1 starting
+2026-05-10T07:30:11Z INFO  Loading config from /etc/checkout/config.yaml
+2026-05-10T07:30:11Z ERROR config: required field "STRIPE_WEBHOOK_SECRET" is empty
+2026-05-10T07:30:11Z FATAL missing required environment variables, refusing to start
+```
+
+--- production/inventory-svc-9d4fc-n5m2k ---
+Phase: Running | Reason: OOMKilled | Restarts: 3 | Age: 2h
+
+Events:
+  [OOMKilling] Memory cgroup out of memory: Killed process 891 (inventory-svc) total-vm:1048576kB anon-rss:524288kB (x3, 8m ago)
+  [BackOff] Back-off restarting failed container (x6, 4m ago)
+
+Logs (svc):
+```
+2026-05-10T08:55:01Z INFO  inventory-svc starting, loading product catalog
+2026-05-10T08:55:04Z INFO  Loaded 2400000 products into memory cache (480 MB)
+2026-05-10T08:55:04Z INFO  Listening on :8081
+2026-05-10T08:57:22Z INFO  Cache refresh triggered: loading updated catalog
+2026-05-10T08:57:31Z INFO  Loaded 2400000 products into memory cache (481 MB)
+2026-05-10T08:59:44Z INFO  Cache refresh triggered: loading updated catalog
+2026-05-10T08:59:53Z WARNING Heap in use: 498 MB (limit: 512 MB)
+2026-05-10T09:00:01Z INFO  Cache refresh triggered: loading updated catalog
+Killed
+```
+
+--- production/recommendation-engine-7c5ab-p1x4w ---
+Phase: Running | Reason: ImagePullBackOff | Restarts: 0 | Age: 45m
+
+Events:
+  [Failed] Failed to pull image "registry.internal/ml/recommendation:v1.9.2": manifest unknown: manifest tagged by "v1.9.2" is not found (x5, 6m ago)
+  [BackOff] Back-off pulling image "registry.internal/ml/recommendation:v1.9.2" (x8, 2m ago)
+
+Logs (engine): [empty]
+
+--- production/user-profile-svc-4b9dc-q7r3n ---
+Phase: Running | Reason: NotReady | Restarts: 0 | Age: 12m
+
+Events:
+  [Unhealthy] Readiness probe failed: HTTP probe failed with statuscode: 503 (x24, 10s ago)
+
+Logs (svc):
+```
+2026-05-10T11:03:12Z INFO  user-profile-svc starting
+2026-05-10T11:03:14Z INFO  Connected to Redis cluster at redis-cluster.production.svc:6379
+2026-05-10T11:03:14Z INFO  Listening on :8080
+2026-05-10T11:04:01Z WARNING Downstream service user-events-svc returned 503: circuit breaker open
+2026-05-10T11:04:05Z WARNING Downstream service user-events-svc returned 503: circuit breaker open
+2026-05-10T11:04:09Z WARNING Downstream service user-events-svc returned 503: circuit breaker open
+2026-05-10T11:04:10Z ERROR readiness check failed: dependency user-events-svc is unhealthy
+2026-05-10T11:04:14Z ERROR readiness check failed: dependency user-events-svc is unhealthy
+```
+
+--- production/user-events-svc-2a7fb-x8k1p ---
+Phase: Running | Reason: CrashLoopBackOff | Restarts: 9 | Age: 15m
+
+Events:
+  [BackOff] Back-off restarting failed container (x18, 40s ago)
+
+Logs (svc):
+```
+2026-05-10T11:01:44Z INFO  user-events-svc starting
+2026-05-10T11:01:44Z INFO  Connecting to Kafka at kafka-brokers.production.svc:9092
+2026-05-10T11:01:49Z ERROR kafka: dial tcp 10.96.12.5:9092: i/o timeout
+2026-05-10T11:01:49Z ERROR kafka: dial tcp 10.96.12.6:9092: i/o timeout
+2026-05-10T11:01:49Z ERROR kafka: dial tcp 10.96.12.7:9092: i/o timeout
+2026-05-10T11:01:49Z FATAL all Kafka brokers unreachable after 5s, exiting
+```
+
+--- production/kafka-broker-2 ---
+Phase: Running | Reason: NotReady | Restarts: 1 | Age: 20m
+
+Events:
+  [Unhealthy] Readiness probe failed: Get "http://10.244.3.8:9092/health": dial tcp 10.244.3.8:9092: connect: connection refused (x40, 5s ago)
+  [Unhealthy] Liveness probe failed: Get "http://10.244.3.8:9092/health": dial tcp 10.244.3.8:9092: connect: connection refused (x2, 3m ago)
+
+Logs (broker):
+```
+2026-05-10T10:58:01Z INFO  Kafka broker starting, node.id=2
+2026-05-10T10:58:03Z INFO  Loading log segments from /var/kafka/data/
+2026-05-10T10:58:03Z ERROR java.io.IOException: No space left on device
+2026-05-10T10:58:03Z ERROR Failed to load log segment for topic __consumer_offsets partition 31
+2026-05-10T10:58:03Z FATAL Unclean shutdown detected for log dir /var/kafka/data/, refusing to start
+```

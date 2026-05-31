@@ -1,0 +1,37 @@
+Scope: staging | Total pods: 20 | Unhealthy: 4
+
+--- staging/api-gateway-6c9db-m3p8k ---
+Phase: Running | Reason: ImagePullBackOff | Restarts: 0 | Age: 22m
+
+Events:
+  [Failed] Failed to pull image "registry.internal/platform/api-gateway:v2.8.0-rc3": rpc error: code = Unknown desc = failed to pull and unpack image: failed to resolve reference "registry.internal/platform/api-gateway:v2.8.0-rc3": unexpected status code 401 Unauthorized (x4, 3m ago)
+  [BackOff] Back-off pulling image "registry.internal/platform/api-gateway:v2.8.0-rc3" (x6, 1m ago)
+
+Logs (gateway): [empty]
+
+--- staging/auth-service-5b7fc-k1n4r ---
+Phase: Running | Reason: ImagePullBackOff | Restarts: 0 | Age: 22m
+
+Events:
+  [Failed] Failed to pull image "registry.internal/platform/auth-service:v2.8.0-rc3": rpc error: code = Unknown desc = failed to pull and unpack image: failed to resolve reference "registry.internal/platform/auth-service:v2.8.0-rc3": unexpected status code 401 Unauthorized (x4, 3m ago)
+  [BackOff] Back-off pulling image "registry.internal/platform/auth-service:v2.8.0-rc3" (x6, 1m ago)
+
+Logs (auth): [empty]
+
+--- staging/order-svc-7d8ec-p5q2t ---
+Phase: Running | Reason: ImagePullBackOff | Restarts: 0 | Age: 21m
+
+Events:
+  [Failed] Failed to pull image "registry.internal/platform/order-svc:v2.8.0-rc3": rpc error: code = Unknown desc = failed to pull and unpack image: failed to resolve reference "registry.internal/platform/order-svc:v2.8.0-rc3": unexpected status code 401 Unauthorized (x3, 5m ago)
+  [BackOff] Back-off pulling image "registry.internal/platform/order-svc:v2.8.0-rc3" (x5, 2m ago)
+
+Logs (orders): [empty]
+
+--- staging/notification-svc-9f2ab-x7w3k ---
+Phase: Running | Reason: ImagePullBackOff | Restarts: 0 | Age: 20m
+
+Events:
+  [Failed] Failed to pull image "registry.internal/platform/notification-svc:v2.8.0-rc3": rpc error: code = Unknown desc = failed to pull and unpack image: failed to resolve reference "registry.internal/platform/notification-svc:v2.8.0-rc3": unexpected status code 401 Unauthorized (x3, 6m ago)
+  [BackOff] Back-off pulling image "registry.internal/platform/notification-svc:v2.8.0-rc3" (x4, 3m ago)
+
+Logs (notifications): [empty]

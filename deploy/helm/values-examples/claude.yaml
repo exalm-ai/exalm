@@ -1,0 +1,31 @@
+# Example: install exalm-agent using Anthropic Claude as the LLM provider.
+#
+# Pass the API key on the command line so it never lives in version control:
+#
+#   helm install exalm ./deploy/helm/exalm-agent \
+#       --values ./deploy/helm/values-examples/claude.yaml \
+#       --set llm.apiKey=$ANTHROPIC_API_KEY
+
+llm:
+  provider: claude
+  # Override the chart default if you want a different Claude variant.
+  # See https://docs.anthropic.com/claude/docs/models-overview for options.
+  model: "claude-sonnet-4-6"
+
+watch:
+  # Watch a specific namespace. Empty = all namespaces.
+  namespace: ""
+  interval: "60s"
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# Read-only by default. Flip to true once you've reviewed the findings and
+# trust the agent to mutate cluster state from the dashboard.
+rbac:
+  allowApply: false

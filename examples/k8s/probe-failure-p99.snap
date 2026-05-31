@@ -1,0 +1,76 @@
+Scope: checkout | Total pods: 6 | Unhealthy: 3
+
+## DEPLOYMENTS
+- checkout/checkout-api: desired=4 available=1 unavailable=3 stall=ProgressDeadlineExceeded
+
+--- checkout/checkout-api-7f4bc-r9p2k ---
+Phase: Running | Reason: NotReady | Restarts: 0 | Age: 22m
+
+Events:
+  [Unhealthy] Readiness probe failed: HTTP probe failed with statuscode: 503 (x35, 15s ago) [spike: 2.1/s]
+
+Log signals:
+  [probe-failure] x18 — readiness probe failed: http probe returned 503 after 3 retries
+  [latency-p99] x6 — p99=4231ms for POST /api/checkout (SLA threshold: 500ms)
+  [http-5xx] x11 — 10.0.0.1 - - "POST /api/checkout HTTP/1.1" 503 412
+
+Logs (api):
+```
+2026-05-16T09:01:00Z INFO  checkout-api v2.4.1 starting
+2026-05-16T09:01:01Z INFO  Listening on :8080
+2026-05-16T09:01:01Z INFO  Connected to inventory-svc (3 replicas available)
+2026-05-16T09:05:33Z INFO  metrics: p50=82ms p95=1240ms p99=4231ms for POST /api/checkout (SLA threshold: 500ms)
+2026-05-16T09:05:34Z WARNING p99=4231ms exceeds SLA threshold of 500ms for route /api/checkout
+2026-05-16T09:05:35Z ERROR readiness probe failed: http probe returned 503 after 3 retries
+2026-05-16T09:05:35Z ERROR readiness probe failed: http probe returned 503 after 3 retries
+2026-05-16T09:05:36Z INFO  10.0.0.1 - - "POST /api/checkout HTTP/1.1" 503 412
+2026-05-16T09:05:37Z INFO  10.0.0.2 - - "GET /api/cart HTTP/1.1" 200 882
+2026-05-16T09:05:38Z WARNING p99=5102ms exceeds SLA threshold of 500ms for route /api/checkout
+2026-05-16T09:05:39Z ERROR health check failed: downstream inventory-svc not responding
+```
+
+--- checkout/checkout-api-7f4bc-n5m1w ---
+Phase: Running | Reason: NotReady | Restarts: 2 | Age: 28m
+
+Events:
+  [Unhealthy] Liveness probe failed: Get "http://10.244.1.8:8080/healthz": dial tcp: connection refused (x12, 2m ago)
+  [BackOff] Back-off restarting failed container (x4, 90s ago)
+
+Log signals:
+  [probe-failure] x9 — liveness probe failed: Get "http://10.244.1.8:8080/healthz": dial tcp connection refused
+  [latency-p99] x4 — 99th percentile latency: 3.8s (p50=95ms p95=2100ms p99=3800ms)
+  [dependency] x7 — upstream inventory-svc returned 503: service unavailable
+
+Logs (api):
+```
+2026-05-16T08:58:00Z INFO  checkout-api v2.4.1 starting
+2026-05-16T08:58:01Z INFO  Listening on :8080
+2026-05-16T09:02:11Z WARNING 99th percentile latency: 3.8s (p50=95ms p95=2100ms p99=3800ms)
+2026-05-16T09:02:12Z ERROR upstream inventory-svc returned 503: service unavailable
+2026-05-16T09:02:13Z ERROR liveness probe failed: Get "http://10.244.1.8:8080/healthz": dial tcp connection refused
+2026-05-16T09:02:14Z ERROR upstream inventory-svc returned 503: service unavailable
+2026-05-16T09:03:22Z FATAL healthcheck failed: liveness probe exceeded 3 consecutive failures, container restarting
+```
+
+--- checkout/inventory-svc-9d3fa-k4l7r ---
+Phase: Running | Reason: NotReady | Restarts: 1 | Age: 41m
+
+Events:
+  [Unhealthy] Startup probe failed: HTTP probe failed with statuscode: 500 (x6, 5m ago)
+
+Log signals:
+  [probe-failure] x6 — startup probe failed: HTTP probe failed with statuscode: 500
+  [latency-p99] x3 — percentile_99=2.3s for SELECT * FROM inventory WHERE sku_id = ?
+  [db-error] x4 — connection pool exhausted: timeout acquiring connection after 5000ms
+
+Logs (inventory):
+```
+2026-05-16T08:50:00Z INFO  inventory-svc v1.8.3 starting
+2026-05-16T08:50:01Z INFO  Connecting to inventory-db.checkout.svc:5432
+2026-05-16T08:50:05Z WARNING connection pool at 85% capacity (17/20)
+2026-05-16T08:50:11Z ERROR startup probe failed: HTTP probe failed with statuscode: 500
+2026-05-16T08:50:13Z ERROR connection pool exhausted: timeout acquiring connection after 5000ms
+2026-05-16T08:50:20Z WARNING percentile_99=2.3s for SELECT * FROM inventory WHERE sku_id = ?
+2026-05-16T08:50:21Z WARNING percentile_99=2.9s for SELECT * FROM inventory WHERE sku_id = ?
+2026-05-16T08:50:25Z ERROR startup probe failed: HTTP probe failed with statuscode: 500
+```

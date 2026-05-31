@@ -1,0 +1,38 @@
+Scope: production | Total pods: 12 | Unhealthy: 2
+
+## HPAs
+- production/checkout-hpa → Deployment/checkout: current=3 desired=8 min=2 max=10 issue=CannotScale: FailedGetResourceMetric
+- production/payments-hpa → Deployment/payments: current=2 desired=2 min=2 max=5 issue=ScalingLimited: TooManyReplicas
+
+--- production/checkout-api-6d4fb-p9x2r ---
+Phase: Running | Reason: NotReady | Restarts: 0 | Age: 8m
+
+Events:
+  [Unhealthy] Readiness probe failed: HTTP probe failed with statuscode: 503 (x16, 30s ago)
+
+Logs (api):
+```
+2026-05-10T10:01:14Z INFO  checkout-api starting
+2026-05-10T10:01:15Z INFO  Connected to database
+2026-05-10T10:01:15Z INFO  Listening on :8080
+2026-05-10T10:05:22Z WARNING CPU throttling detected: usage at 98% of limit
+2026-05-10T10:05:33Z WARNING CPU throttling detected: usage at 99% of limit
+2026-05-10T10:05:44Z ERROR readiness check timeout: handler took 2341ms (limit: 500ms)
+2026-05-10T10:05:55Z ERROR readiness check timeout: handler took 3102ms (limit: 500ms)
+```
+
+--- production/checkout-api-6d4fb-m7k4n ---
+Phase: Running | Reason: NotReady | Restarts: 0 | Age: 8m
+
+Events:
+  [Unhealthy] Readiness probe failed: HTTP probe failed with statuscode: 503 (x14, 45s ago)
+
+Logs (api):
+```
+2026-05-10T10:01:18Z INFO  checkout-api starting
+2026-05-10T10:01:19Z INFO  Connected to database
+2026-05-10T10:01:19Z INFO  Listening on :8080
+2026-05-10T10:05:28Z WARNING CPU throttling detected: usage at 97% of limit
+2026-05-10T10:05:39Z ERROR readiness check timeout: handler took 2876ms (limit: 500ms)
+2026-05-10T10:05:50Z ERROR readiness check timeout: handler took 3341ms (limit: 500ms)
+```

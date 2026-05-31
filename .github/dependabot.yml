@@ -1,0 +1,33 @@
+version: 2
+updates:
+  # Keep Go module dependencies up to date.
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "go"
+
+  # Keep GitHub Actions up to date (auto-pins to SHA on update).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "github-actions"
+
+  # Keep Helm chart dependencies up to date (if any are added later).
+  - package-ecosystem: "helm"
+    directory: "/deploy/helm/exalm-agent"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "helm"

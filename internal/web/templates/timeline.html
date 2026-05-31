@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Exalm — Cross-Signal Timeline</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    .tl-page { max-width: 1200px; margin: 0 auto; padding: 1.5rem 1rem; }
+    .tl-card {
+      background: var(--surface, #161b22);
+      border: 1px solid var(--border, #30363d);
+      border-radius: 8px;
+      padding: 1.25rem 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+    .tl-card h2 { margin: 0 0 1rem; font-size: 1rem; color: var(--text, #e6edf3); }
+    .tl-empty {
+      color: var(--text-dim, #8b949e);
+      font-size: 0.875rem;
+      padding: 2rem 0;
+      text-align: center;
+    }
+    .tl-empty code {
+      background: var(--code-bg, #0d1117);
+      border: 1px solid var(--border, #30363d);
+      border-radius: 4px;
+      padding: 0.1em 0.4em;
+      font-size: 0.8rem;
+    }
+    /* Swimlane SVG wrapper */
+    #tl-svg-wrap {
+      width: 100%;
+      overflow: hidden;
+      position: relative;
+    }
+    #tl-svg { width: 100%; height: 240px; display: block; }
+    /* Tooltip */
+    #tl-tooltip {
+      position: fixed;
+      background: var(--surface, #161b22);
+      border: 1px solid var(--border, #30363d);
+      border-radius: 6px;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.78rem;
+      max-width: 300px;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.1s;
+      z-index: 100;
+      color: var(--text, #e6edf3);
+      line-height: 1.4;
+    }
+    .tl-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      margin-top: 0.75rem;
+      font-size: 0.78rem;
+      color: var(--text-dim, #8b949e);
+    }
+    .tl-legend-item {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+    .tl-legend-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .nav-back {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      color: var(--blue, #58a6ff);
+      font-size: 0.875rem;
+      text-decoration: none;
+      margin-bottom: 1.25rem;
+    }
+    .nav-back:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+
+<header class="header">
+  <div class="header-brand">&#x2B21; exalm</div>
+  <span class="status-dot" title="Connected"></span>
+  <div class="header-title">Cross-Signal Correlation Timeline</div>
+  <div class="header-actions"></div>
+  <div class="header-timestamp" id="ts"></div>
+  <button class="btn-theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark mode" aria-label="Toggle theme">&#x2600;</button>
+</header>
+
+<div class="tl-page">
+  <a href="/" class="nav-back">&#x2190; Dashboard</a>
+
+  <div class="tl-card" id="tl-card">
+    <h2>Events (last 7 days)</h2>
+    <div id="tl-content">
+      <div class="tl-empty">Loading...</div>
+    </div>
+    <div class="tl-legend">
+      <span class="tl-legend-item"><span class="tl-legend-dot" style="background:#ef4444"></span>Critical finding</span>
+      <span class="tl-legend-item"><span class="tl-legend-dot" style="background:#f97316"></span>High finding</span>
+      <span class="tl-legend-item"><span class="tl-legend-dot" style="background:#eab308"></span>Medium finding</span>
+      <span class="tl-legend-item"><span class="tl-legend-dot" style="background:#22c55e"></span>Low finding</span>
+      <span class="tl-legend-item"><span class="tl-legend-dot" style="background:#3b82f6"></span>Info / incident</span>
+      <span class="tl-legend-item"><span class="tl-legend-dot" style="background:#8b5cf6"></span>IaC change</span>
+    </div>
+  </div>
+</div>
+
+<footer class="footer">
+  <span><a href="https://exalm.com" target="_blank" rel="noopener">exalm.com</a></span>
+  <span class="auto-refresh-note">auto-refreshes every 30s</span>
+</footer>
+
+<div id="tl-tooltip"></div>
+
+<script>
+'use strict';
+
+var SEV_COLOR = {
+  critical: '#ef4444',
+  high:     '#f97316',
+  medium:   '#eab308',
+  low:      '#22c55e',
+  info:     '#3b82f6',
+  iac:      '#8b5cf6'
+};
+
+var LANE_LABELS  = ['Findings', 'IaC Changes', 'Incidents'];
+var LANE_SOURCES = ['finding', 'iac', 'incident'];
+
+var LANE_LEFT  = 84;  // px reserved for lane labels
+var LANE_H     = 70;  // height per lane (px)
+var AXIS_PAD   = 20;  // padding at top
+var TOTAL_H    = 240;
+
+function isoToMs(s) { return new Date(s).getTime(); }
+
+function buildSVG(data) {
+  var container = document.getElementById('tl-content');
+  if (!data || !data.events || data.events.length === 0) {
+    container.innerHTML =
+      '<div class="tl-empty">No timeline events recorded. Run ' +
+      '<code>exalm dora log-deploy</code> or <code>exalm incident open</code> to populate.</div>';
+    return;
+  }
+
+  var startMs = isoToMs(data.start);
+  var endMs   = isoToMs(data.end);
+  var spanMs  = Math.max(endMs - startMs, 1);
+
+  // Group events by lane.
+  var lanes = [{events:[]}, {events:[]}, {events:[]}];
+  data.events.forEach(function(ev) {
+    var idx = LANE_SOURCES.indexOf(ev.source);
+    if (idx < 0) idx = 0;
+    lanes[idx].events.push(ev);
+  });
+
+  var W = document.getElementById('tl-svg-wrap') ?
+          document.getElementById('tl-svg-wrap').offsetWidth || 900 : 900;
+  var availW = W - LANE_LEFT - 16;
+
+  var svg = '<svg id="tl-svg" viewBox="0 0 ' + W + ' ' + TOTAL_H +
+            '" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">';
+
+  // Axis line.
+  svg += '<line x1="' + LANE_LEFT + '" y1="' + (TOTAL_H - 18) +
+         '" x2="' + W + '" y2="' + (TOTAL_H - 18) +
+         '" stroke="#30363d" stroke-width="1"/>';
+
+  // X-axis ticks every 24h.
+  var tickMs = 24 * 3600 * 1000;
+  var t = startMs + tickMs;
+  while (t <= endMs) {
+    var tx = LANE_LEFT + ((t - startMs) / spanMs) * availW;
+    svg += '<line x1="' + tx.toFixed(1) + '" y1="' + (TOTAL_H - 22) +
+           '" x2="' + tx.toFixed(1) + '" y2="' + (TOTAL_H - 14) +
+           '" stroke="#30363d" stroke-width="1"/>';
+    var d = new Date(t);
+    var label = (d.getUTCMonth() + 1) + '/' + d.getUTCDate();
+    svg += '<text x="' + tx.toFixed(1) + '" y="' + (TOTAL_H - 4) +
+           '" text-anchor="middle" fill="#8b949e" font-size="9" font-family="monospace">' +
+           label + '</text>';
+    t += tickMs;
+  }
+
+  // Lanes.
+  lanes.forEach(function(lane, li) {
+    var cy = AXIS_PAD + li * LANE_H + LANE_H / 2;
+
+    // Lane separator.
+    if (li > 0) {
+      svg += '<line x1="0" y1="' + (AXIS_PAD + li * LANE_H) +
+             '" x2="' + W + '" y2="' + (AXIS_PAD + li * LANE_H) +
+             '" stroke="#21262d" stroke-width="1"/>';
+    }
+
+    // Lane label.
+    svg += '<text x="' + (LANE_LEFT - 6) + '" y="' + (cy + 4) +
+           '" text-anchor="end" fill="#8b949e" font-size="10" font-family="monospace">' +
+           LANE_LABELS[li] + '</text>';
+
+    // Events.
+    lane.events.forEach(function(ev) {
+      var ts = isoToMs(ev.at);
+      var cx = LANE_LEFT + ((ts - startMs) / spanMs) * availW;
+      var color = SEV_COLOR[ev.severity] || '#8b949e';
+      var esc   = escAttr(ev.label + (ev.detail ? '\n' + ev.detail : ''));
+      svg += '<circle cx="' + cx.toFixed(1) + '" cy="' + cy + '" r="8"' +
+             ' fill="' + color + '" opacity="0.9"' +
+             ' class="tl-dot"' +
+             ' data-label="' + escAttr(ev.label) + '"' +
+             ' data-detail="' + escAttr(ev.detail) + '"' +
+             ' data-at="' + escAttr(ev.at) + '">' +
+             '<title>' + esc + '</title>' +
+             '</circle>';
+    });
+  });
+
+  svg += '</svg>';
+
+  container.innerHTML = '<div id="tl-svg-wrap">' + svg + '</div>';
+
+  // Attach tooltip listeners.
+  document.querySelectorAll('.tl-dot').forEach(function(dot) {
+    dot.addEventListener('mouseenter', function(e) { showTooltip(e, dot); });
+    dot.addEventListener('mousemove',  function(e) { moveTooltip(e); });
+    dot.addEventListener('mouseleave', hideTooltip);
+  });
+}
+
+function escAttr(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+var _tooltip = null;
+function showTooltip(e, dot) {
+  if (!_tooltip) _tooltip = document.getElementById('tl-tooltip');
+  var label  = dot.dataset.label  || '';
+  var detail = dot.dataset.detail || '';
+  var at     = dot.dataset.at     || '';
+  var ts = at ? new Date(at).toUTCString() : '';
+  _tooltip.innerHTML = '<strong>' + escAttr(label) + '</strong>' +
+    (ts     ? '<br><span style="color:#8b949e">' + escAttr(ts) + '</span>' : '') +
+    (detail ? '<br>' + escAttr(detail) : '');
+  _tooltip.style.opacity = '1';
+  moveTooltip(e);
+}
+function moveTooltip(e) {
+  if (!_tooltip) return;
+  _tooltip.style.left = (e.clientX + 14) + 'px';
+  _tooltip.style.top  = (e.clientY - 28) + 'px';
+}
+function hideTooltip() {
+  if (_tooltip) _tooltip.style.opacity = '0';
+}
+
+function loadTimeline() {
+  fetch('/api/timeline')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      buildSVG(data);
+      var ts = document.getElementById('ts');
+      if (ts) ts.textContent = new Date().toUTCString();
+    })
+    .catch(function() {
+      var c = document.getElementById('tl-content');
+      if (c) c.innerHTML = '<div class="tl-empty">Failed to load timeline data.</div>';
+    });
+}
+
+// ── Theme (mirrors app.js) ─────────────────────────────────────────────────
+var THEME_KEY = 'exalm-theme';
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  var btn = document.getElementById('theme-toggle');
+  if (btn) btn.textContent = theme === 'light' ? '\u{1F319}' : '☀';
+}
+function toggleTheme() {
+  var cur  = document.documentElement.getAttribute('data-theme') || 'dark';
+  var next = cur === 'dark' ? 'light' : 'dark';
+  applyTheme(next);
+  try { localStorage.setItem(THEME_KEY, next); } catch (e) { /**/ }
+}
+(function() {
+  try {
+    var t = localStorage.getItem(THEME_KEY);
+    applyTheme((t === 'light' || t === 'dark') ? t : 'dark');
+  } catch (e) { applyTheme('dark'); }
+  loadTimeline();
+  setInterval(loadTimeline, 30000);
+})();
+</script>
+</body>
+</html>

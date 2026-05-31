@@ -1,0 +1,34 @@
+# Example: install exalm-agent using OpenRouter as the LLM provider.
+#
+# OpenRouter exposes 100+ models (Anthropic, OpenAI, Mistral, Qwen, …) behind
+# a single API key. This example uses Qwen 2.5 0.5B Instruct — a very small,
+# very cheap model that's perfect for testing without burning credits.
+#
+# Browse models at: https://openrouter.ai/models
+#
+# Usage:
+#
+#   helm install exalm ./deploy/helm/exalm-agent \
+#       --values ./deploy/helm/values-examples/openrouter.yaml \
+#       --set llm.apiKey=$OPENROUTER_API_KEY
+
+llm:
+  provider: openrouter
+  # OpenRouter slug — different format from Ollama's "qwen2.5:0.5b".
+  # See https://openrouter.ai/models?q=qwen for current options.
+  model: "qwen/qwen-2.5-0.5b-instruct"
+
+watch:
+  namespace: ""
+  interval: "60s"
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+rbac:
+  allowApply: false
