@@ -21,9 +21,11 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/exalm-ai/exalm/internal/cliui"
 	"github.com/exalm-ai/exalm/internal/config"
 	"github.com/exalm-ai/exalm/internal/gitprovider"
 	"github.com/exalm-ai/exalm/internal/llm"
+	"github.com/exalm-ai/exalm/internal/preflight"
 	"github.com/exalm-ai/exalm/internal/redact"
 	"github.com/exalm-ai/exalm/internal/web"
 	"github.com/exalm-ai/exalm/pkg/plugin"
@@ -127,6 +129,16 @@ func runServe(ctx context.Context, root *rootFlags, f *serveCLIFlags) error {
 	cfg.Apply = root.apply
 	cfg.ShowRedactions = root.showRedactions
 
+	// --- Fast-fail readiness check ----------------------------------------
+	// Validate provider, API key, and the data directory before the slow
+	// Kubernetes watch so misconfiguration surfaces immediately instead of
+	// after a connection timeout. Non-critical checks (kubeconfig, dashboard
+	// token) only inform; they never block startup. main() routes the returned
+	// error through cliui.FriendlyError for consistent formatting.
+	if err := checkServeReadiness(cfg); err != nil {
+		return err
+	}
+
 	llmClient, err := llm.NewFromConfig(cfg)
 	if err != nil {
 		if errors.Is(err, llm.ErrNoProvider) {
@@ -215,6 +227,31 @@ func runServe(ctx context.Context, root *rootFlags, f *serveCLIFlags) error {
 
 	fmt.Fprintf(os.Stderr, "exalm serve: dashboard starting on http://localhost:%d\n", f.port) //nolint:errcheck // startup info to stderr
 	return web.Serve(ctx, initialReport, serveOpts)
+}
+
+// checkServeReadiness runs the shared preflight checks and prints a one-line
+// readiness summary to stderr. It returns an actionable error (message + hint)
+// for the first failed critical check so serve fails fast before the slow
+// Kubernetes watch; non-critical failures only inform and never block startup.
+func checkServeReadiness(cfg config.Config) error {
+	results := preflight.RunAll(cfg)
+	summary := fmt.Sprintf("exalm serve: readiness %d/%d checks passed", preflight.CountOK(results), len(results))
+
+	if preflight.AllCriticalOK(results) {
+		fmt.Fprintln(os.Stderr, cliui.Dim(summary)) //nolint:errcheck // startup info to stderr
+		return nil
+	}
+
+	fmt.Fprintln(os.Stderr, cliui.Warn(summary)) //nolint:errcheck // startup info to stderr
+	for _, r := range results {
+		if r.Critical && !r.OK {
+			if r.Hint != "" {
+				return fmt.Errorf("%s — %s\n  → %s", r.Name, r.Message, r.Hint)
+			}
+			return fmt.Errorf("%s — %s", r.Name, r.Message)
+		}
+	}
+	return nil
 }
 
 // runSLOCheck executes `slo check` once and returns the resulting findings.
