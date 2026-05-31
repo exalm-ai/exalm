@@ -220,7 +220,10 @@ func TestModel_ResultMsg_ShowsError(t *testing.T) {
 	}
 	m := tui.NewModel(context.Background(), plugins, errRunner())
 	next, _ := m.Update(tui.NewResultMsg("", &pluginError{"simulated run error"}))
-	nm := next.(tui.Model)
+	nm, ok := next.(tui.Model)
+	if !ok {
+		t.Fatal("Update did not return a tui.Model")
+	}
 	view := nm.View()
 	if !strings.Contains(view, "simulated run error") {
 		t.Errorf("expected error in view, got:\n%s", view)
@@ -245,7 +248,10 @@ func TestModel_ResultViewport_ScrollKeysDoNotPanic(t *testing.T) {
 		longOutput.WriteString("Line of output content that would normally be truncated.\n")
 	}
 	next, _ := m.Update(tui.NewResultMsg(longOutput.String(), nil))
-	nm := next.(tui.Model)
+	nm, ok := next.(tui.Model)
+	if !ok {
+		t.Fatal("Update did not return a tui.Model")
+	}
 
 	// Scroll keys must not panic.
 	for _, key := range []tea.KeyType{tea.KeyUp, tea.KeyDown, tea.KeyPgUp, tea.KeyPgDown} {

@@ -302,8 +302,14 @@ func TestCollectArgoCDApps_ParsesApps(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	status := raw["status"].(map[string]interface{})
-	opState := status["operationState"].(map[string]interface{})
+	status, ok := raw["status"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("status field is not a map")
+	}
+	opState, ok := status["operationState"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("operationState field is not a map")
+	}
 	finishedAtStr, _ := opState["finishedAt"].(string)
 
 	parsed, err := time.Parse(time.RFC3339, finishedAtStr)
