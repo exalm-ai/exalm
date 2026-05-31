@@ -158,11 +158,17 @@ func TestModel_FlagForm_EscGoesBack(t *testing.T) {
 	}
 	m := tui.NewModel(context.Background(), plugins, okRunner("ok"))
 	next0, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = next0.(tui.Model)
+	m, ok := next0.(tui.Model)
+	if !ok {
+		t.Fatal("Update did not return a tui.Model")
+	}
 
 	// Esc from the flag form should go back.
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	nm := next.(tui.Model)
+	nm, ok2 := next.(tui.Model)
+	if !ok2 {
+		t.Fatal("Update did not return a tui.Model")
+	}
 	// After Esc with a single subcommand plugin we go back to the subcommand
 	// list (which immediately skips back toward the plugin list). The key
 	// constraint: we must NOT be in the flag form any more.
@@ -195,7 +201,10 @@ func TestModel_ResultMsg_ShowsOutput(t *testing.T) {
 	// Instead, verify that the stateResult view renders correctly via the
 	// model state after a successful run message is processed.
 	next, _ := m.Update(tui.NewResultMsg("great summary", nil))
-	nm := next.(tui.Model)
+	nm, ok := next.(tui.Model)
+	if !ok {
+		t.Fatal("Update did not return a tui.Model")
+	}
 	view := nm.View()
 	if !strings.Contains(view, "great summary") {
 		t.Errorf("expected result output in view, got:\n%s", view)
