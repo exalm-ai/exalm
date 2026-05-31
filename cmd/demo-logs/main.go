@@ -25,7 +25,7 @@ func simulateApplyFix(_ context.Context, action plugin.RemediationAction) error 
 		shell = "kubectl"
 	}
 	fmt.Fprintf(os.Stderr, "[DEMO applyFix] shell=%s cmd=%q\n", shell, action.KubectlCmd) //nolint:errcheck // demo output to stderr
-	time.Sleep(600 * time.Millisecond) // simulate round-trip
+	time.Sleep(600 * time.Millisecond)                                                    // simulate round-trip
 	return nil
 }
 

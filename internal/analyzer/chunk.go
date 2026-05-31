@@ -122,7 +122,7 @@ func chunkReader(r io.Reader, source string, chunkBytes int, maxBytes int64) ([]
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
-		lineLen := len(line) + 1 // +1 for newline
+		lineLen := len(line) + 1    // +1 for newline
 		totalRead += int64(lineLen) //nolint:gosec // G115: lineLen is from len() which is always non-negative
 		if maxBytes > 0 && totalRead > maxBytes {
 			break

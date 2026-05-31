@@ -551,7 +551,7 @@ func runMCPServe(ctx context.Context, sseAddr string, allowWrite bool, token str
 		mux.Handle("/mcp", mcp.SSEHandler(srv))
 
 		if token == "" {
-			fmt.Fprintln(os.Stderr, "  ⚠️  MCP SSE endpoint is running WITHOUT authentication.") //nolint:errcheck // startup warning to stderr
+			fmt.Fprintln(os.Stderr, "  ⚠️  MCP SSE endpoint is running WITHOUT authentication.")  //nolint:errcheck // startup warning to stderr
 			fmt.Fprintln(os.Stderr, "     Set --token or EXALM_TOKEN to require a Bearer token.") //nolint:errcheck // startup warning to stderr
 		}
 		fmt.Fprintf(os.Stderr, "exalm mcp: SSE listening on %s (POST /mcp)\n", sseAddr) //nolint:errcheck // startup info to stderr
@@ -611,7 +611,7 @@ func runTerraformWebhook(cmd *cobra.Command, _ []string) error {
 	}
 
 	h := webhookpkg.NewHandler(store, secret)
-	fmt.Fprintf(os.Stderr, "  Exalm webhook: listening on %s\n", listen)                                                     //nolint:errcheck // startup info to stderr
+	fmt.Fprintf(os.Stderr, "  Exalm webhook: listening on %s\n", listen)                             //nolint:errcheck // startup info to stderr
 	fmt.Fprintf(os.Stderr, "  Configure Terraform Cloud to POST to: http://<your-host>%s\n", listen) //nolint:errcheck // startup info to stderr
 
 	srv := &http.Server{

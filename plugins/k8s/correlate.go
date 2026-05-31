@@ -71,7 +71,7 @@ func Correlate(findings []plugin.Finding, store *changestore.Store, now time.Tim
 		if err != nil || len(matches) == 0 {
 			continue
 		}
-		newest := matches[0] // RecentForResource sorts newest-first
+		newest := matches[0]                              // RecentForResource sorts newest-first
 		ago := int64(now.Sub(newest.Timestamp).Seconds()) //nolint:gosec // G115: duration in seconds; truncation is intentional
 		if ago < 0 {
 			ago = 0

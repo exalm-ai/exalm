@@ -244,7 +244,7 @@ func Serve(ctx context.Context, report plugin.Report, opts ServeOpts) error {
 	if opts.Token == "" {
 		fmt.Fprintln(os.Stderr, "  ⚠️  Dashboard is running WITHOUT authentication.")         //nolint:errcheck // startup warning to stderr
 		fmt.Fprintln(os.Stderr, "     Set --token or EXALM_TOKEN to require a Bearer token.") //nolint:errcheck // startup warning to stderr
-		fmt.Fprintln(os.Stderr, "     Do NOT expose this port outside localhost.")             //nolint:errcheck // startup warning to stderr
+		fmt.Fprintln(os.Stderr, "     Do NOT expose this port outside localhost.")            //nolint:errcheck // startup warning to stderr
 	} else if bindHost != "localhost" && bindHost != "127.0.0.1" {
 		fmt.Fprintf(os.Stderr, "  ⚠️  Dashboard is bound to %s — ensure a token is set and TLS is terminated upstream.\n", bindHost) //nolint:errcheck // startup warning to stderr
 	}
