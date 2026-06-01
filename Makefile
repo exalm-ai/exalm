@@ -5,7 +5,7 @@
 #   make build-linux     — build a Linux ELF binary regardless of host OS
 #   make test            — run all unit tests
 #   make test-redact     — run redaction tests verbosely (run before any redact change)
-#   make lint            — gofmt + go vet
+#   make lint            — gofmt + go vet + golangci-lint (if installed)
 #   make run             — build + run with --help
 #   make clean           — remove build artifacts
 #
@@ -55,6 +55,8 @@ test-redact:
 lint:
 	gofmt -s -l . | tee /dev/stderr | (! grep .)
 	go vet ./...
+	@command -v golangci-lint >/dev/null 2>&1 && golangci-lint run --timeout=5m \
+		|| echo "golangci-lint not installed; skipping (CI runs it — see .golangci.yml)"
 
 run: build
 	./bin/$(BINARY) --help
