@@ -1,0 +1,68 @@
+# GoReleaser configuration for Exalm.
+# Docs: https://goreleaser.com  ·  Schema: version 2.
+#
+# Builds static, CGO-free binaries (the SQLite store uses modernc.org/sqlite,
+# a pure-Go driver, so CGO_ENABLED=0 is correct and produces portable binaries).
+# Triggered by .github/workflows/release.yml on a `v*` tag push.
+version: 2
+
+project_name: exalm
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: exalm
+    main: ./cmd/exalm
+    binary: exalm
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    # Match the Makefile ldflags so released binaries report a real version.
+    ldflags:
+      - -s -w
+      - -X github.com/exalm-ai/exalm/internal/version.Version={{ .Version }}
+      - -X github.com/exalm-ai/exalm/internal/version.Commit={{ .ShortCommit }}
+      - -X github.com/exalm-ai/exalm/internal/version.BuildDate={{ .Date }}
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+
+release:
+  github:
+    owner: exalm-ai
+    name: exalm
+  # Publish as a draft so a maintainer reviews and clicks "Publish" — never
+  # auto-publishes. Pre-release tags (e.g. -beta, -rc) are flagged automatically.
+  draft: true
+  prerelease: auto
