@@ -240,13 +240,28 @@ func Serve(ctx context.Context, report plugin.Report, opts ServeOpts) error {
 		return fmt.Errorf("web: bind %s: %w", addr, err)
 	}
 
-	// Warn when the dashboard is exposed beyond localhost without a token.
-	if opts.Token == "" {
-		fmt.Fprintln(os.Stderr, "  ⚠️  Dashboard is running WITHOUT authentication.")         //nolint:errcheck // startup warning to stderr
-		fmt.Fprintln(os.Stderr, "     Set --token or EXALM_TOKEN to require a Bearer token.") //nolint:errcheck // startup warning to stderr
-		fmt.Fprintln(os.Stderr, "     Do NOT expose this port outside localhost.")            //nolint:errcheck // startup warning to stderr
-	} else if bindHost != "localhost" && bindHost != "127.0.0.1" {
-		fmt.Fprintf(os.Stderr, "  ⚠️  Dashboard is bound to %s — ensure a token is set and TLS is terminated upstream.\n", bindHost) //nolint:errcheck // startup warning to stderr
+	// Warn proportionally to the risk. The dangerous combination is a
+	// network-reachable bind with no token, so that case gets the loudest,
+	// boxed warning — but we still start (never block) so headless/automated
+	// setups keep working.
+	isLocal := bindHost == "localhost" || bindHost == "127.0.0.1" || bindHost == "::1"
+	switch {
+	case opts.Token == "" && !isLocal:
+		fmt.Fprintf(os.Stderr, "\n"+ //nolint:errcheck // startup warning to stderr
+			"  ════════════════════════════════════════════════════════════════════\n"+
+			"   ⚠️  DANGER  ⚠️   Dashboard exposed to the NETWORK with NO AUTH\n"+
+			"  ════════════════════════════════════════════════════════════════════\n"+
+			"   Bound to %q — anyone who can reach this host can read your findings\n"+
+			"   and trigger fixes. Set a token before exposing this port:\n"+
+			"       export EXALM_TOKEN=$(openssl rand -hex 16)   # or pass --token\n"+
+			"   and terminate TLS at a reverse proxy / ingress in front of Exalm.\n"+
+			"  ════════════════════════════════════════════════════════════════════\n\n",
+			bindHost)
+	case opts.Token == "":
+		fmt.Fprintln(os.Stderr, "  ⚠️  Dashboard is running WITHOUT authentication (localhost only).")          //nolint:errcheck // startup warning to stderr
+		fmt.Fprintln(os.Stderr, "     Fine for solo local use; set --token or EXALM_TOKEN before exposing it.") //nolint:errcheck // startup warning to stderr
+	case !isLocal:
+		fmt.Fprintf(os.Stderr, "  ⚠️  Dashboard bound to %s — token is set; ensure TLS is terminated upstream.\n", bindHost) //nolint:errcheck // startup warning to stderr
 	}
 
 	displayAddr := fmt.Sprintf("localhost:%d", opts.Port) // always show as localhost in browser link

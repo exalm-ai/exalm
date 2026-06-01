@@ -21,9 +21,11 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/exalm-ai/exalm/internal/cliui"
 	"github.com/exalm-ai/exalm/internal/config"
 	"github.com/exalm-ai/exalm/internal/gitprovider"
 	"github.com/exalm-ai/exalm/internal/llm"
+	"github.com/exalm-ai/exalm/internal/preflight"
 	"github.com/exalm-ai/exalm/internal/redact"
 	"github.com/exalm-ai/exalm/internal/web"
 	"github.com/exalm-ai/exalm/pkg/plugin"
@@ -59,6 +61,11 @@ type serveCLIFlags struct {
 	githubRepo       string
 	githubBaseBranch string
 	gitProvider      string
+
+	// noK8s starts the dashboard without connecting to a cluster. Useful for
+	// demos, offline exploration, and viewing DORA / timeline from the local
+	// SQLite store when no kubeconfig is available.
+	noK8s bool
 }
 
 // newServeCmd returns the top-level `exalm serve` cobra command.
@@ -108,6 +115,7 @@ Examples:
 	cmd.Flags().StringVar(&f.githubRepo, "github-repo", "", "git repo for fix PR: owner/repo (or GITHUB_REPO env var)")
 	cmd.Flags().StringVar(&f.githubBaseBranch, "github-base-branch", "main", "base branch for the fix PR")
 	cmd.Flags().StringVar(&f.gitProvider, "git-provider", "github", `git hosting provider: "github", "gitlab", "bitbucket", "azuredevops"`)
+	cmd.Flags().BoolVar(&f.noK8s, "no-k8s", false, "start the dashboard without a Kubernetes cluster (empty findings; DORA and timeline still load from local store)")
 
 	return cmd
 }
@@ -126,6 +134,36 @@ func runServe(ctx context.Context, root *rootFlags, f *serveCLIFlags) error {
 	}
 	cfg.Apply = root.apply
 	cfg.ShowRedactions = root.showRedactions
+
+	// --- No-k8s demo / offline mode ---------------------------------------
+	// Skip the LLM client, cluster watch, and SLO check entirely. The web
+	// server starts immediately with an empty findings report so the user can
+	// explore the dashboard UI and DORA / timeline data from the local store.
+	if f.noK8s {
+		dashToken := f.token
+		if dashToken == "" {
+			dashToken = os.Getenv("EXALM_TOKEN")
+		}
+		noK8sOpts := web.ServeOpts{
+			Port:        f.port,
+			BindAddr:    f.bind,
+			OpenBrowser: f.openBrowser,
+			Token:       dashToken,
+			CreatePR:    buildCreatePRFn(f),
+		}
+		fmt.Fprintf(os.Stderr, "exalm serve: --no-k8s mode — dashboard starting on http://localhost:%d\n", f.port) //nolint:errcheck // startup info to stderr
+		return web.Serve(ctx, plugin.Report{}, noK8sOpts)
+	}
+
+	// --- Fast-fail readiness check ----------------------------------------
+	// Validate provider, API key, and the data directory before the slow
+	// Kubernetes watch so misconfiguration surfaces immediately instead of
+	// after a connection timeout. Non-critical checks (kubeconfig, dashboard
+	// token) only inform; they never block startup. main() routes the returned
+	// error through cliui.FriendlyError for consistent formatting.
+	if err := checkServeReadiness(cfg); err != nil {
+		return err
+	}
 
 	llmClient, err := llm.NewFromConfig(cfg)
 	if err != nil {
@@ -215,6 +253,31 @@ func runServe(ctx context.Context, root *rootFlags, f *serveCLIFlags) error {
 
 	fmt.Fprintf(os.Stderr, "exalm serve: dashboard starting on http://localhost:%d\n", f.port) //nolint:errcheck // startup info to stderr
 	return web.Serve(ctx, initialReport, serveOpts)
+}
+
+// checkServeReadiness runs the shared preflight checks and prints a one-line
+// readiness summary to stderr. It returns an actionable error (message + hint)
+// for the first failed critical check so serve fails fast before the slow
+// Kubernetes watch; non-critical failures only inform and never block startup.
+func checkServeReadiness(cfg config.Config) error {
+	results := preflight.RunAll(cfg)
+	summary := fmt.Sprintf("exalm serve: readiness %d/%d checks passed", preflight.CountOK(results), len(results))
+
+	if preflight.AllCriticalOK(results) {
+		fmt.Fprintln(os.Stderr, cliui.Dim(summary)) //nolint:errcheck // startup info to stderr
+		return nil
+	}
+
+	fmt.Fprintln(os.Stderr, cliui.Warn(summary)) //nolint:errcheck // startup info to stderr
+	for _, r := range results {
+		if r.Critical && !r.OK {
+			if r.Hint != "" {
+				return fmt.Errorf("%s — %s\n  → %s", r.Name, r.Message, r.Hint)
+			}
+			return fmt.Errorf("%s — %s", r.Name, r.Message)
+		}
+	}
+	return nil
 }
 
 // runSLOCheck executes `slo check` once and returns the resulting findings.

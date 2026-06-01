@@ -19,11 +19,13 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/exalm-ai/exalm/internal/cliui"
 	"github.com/exalm-ai/exalm/internal/config"
 	"github.com/exalm-ai/exalm/internal/gitprovider"
 	"github.com/exalm-ai/exalm/internal/llm"
 	"github.com/exalm-ai/exalm/internal/mcp"
 	"github.com/exalm-ai/exalm/internal/output"
+	"github.com/exalm-ai/exalm/internal/preflight"
 	"github.com/exalm-ai/exalm/internal/redact"
 	"github.com/exalm-ai/exalm/internal/registry"
 	exalmstore "github.com/exalm-ai/exalm/internal/store"
@@ -66,7 +68,7 @@ func main() {
 	defer cancel()
 
 	if err := rootCmd.ExecuteContext(ctx); err != nil {
-		fmt.Fprintln(os.Stderr, "Error:", err) //nolint:errcheck // fatal error to stderr before exit
+		fmt.Fprintln(os.Stderr, cliui.FriendlyError(err)) //nolint:errcheck // fatal error to stderr before exit
 		os.Exit(1)
 	}
 }
@@ -137,6 +139,7 @@ type rootFlags struct {
 	provider       string
 	model          string
 	notifyURL      string // POST the report to this webhook after every analysis
+	dryRun         bool   // validate + preview without calling the LLM or mutating
 }
 
 func newRootCmd() *cobra.Command {
@@ -166,6 +169,7 @@ Run "exalm <plugin> --help" for plugin-specific commands.`,
 	root.PersistentFlags().StringVar(&flags.provider, "provider", "", `LLM provider: "claude", "openai", "ollama" (overrides env)`)
 	root.PersistentFlags().StringVar(&flags.model, "model", "", "model name (overrides provider default)")
 	root.PersistentFlags().StringVar(&flags.notifyURL, "notify-url", "", "POST every analysis report to this webhook URL after completion (Slack auto-detected)")
+	root.PersistentFlags().BoolVar(&flags.dryRun, "dry-run", false, "validate config and preview the run without calling the LLM or mutating anything (k8s fix: compute fixes without applying)")
 
 	for _, p := range registry.All() {
 		root.AddCommand(buildPluginCmd(p, flags))
@@ -300,9 +304,6 @@ func buildPluginCmd(p plugin.Plugin, flags *rootFlags) *cobra.Command {
 			sub.Flags().String("github-repo", "", "git repo for fix PR: owner/repo (or set GITHUB_REPO)")
 			sub.Flags().String("github-base-branch", "main", "base branch for the fix PR")
 			sub.Flags().String("git-provider", "github", `git hosting provider: "github", "gitlab", "bitbucket", "azuredevops"`)
-			if sc.Name == "fix" {
-				sub.Flags().Bool("dry-run", false, "print what would be fixed without applying")
-			}
 			if sc.Name == "watch" {
 				sub.Flags().String("interval", "60s", "how often to refresh cluster state")
 			}
@@ -395,11 +396,6 @@ func extractFlags(cmd *cobra.Command, pluginName, subName string) (map[string]st
 				out[name] = v
 			}
 		}
-		if subName == "fix" {
-			if v, _ := cmd.Flags().GetBool("dry-run"); v {
-				out["dry-run"] = "true"
-			}
-		}
 		if subName == "watch" {
 			if v, err := cmd.Flags().GetString("interval"); err == nil && v != "" {
 				out["interval"] = v
@@ -424,6 +420,21 @@ func runSubcommand(ctx context.Context, p plugin.Plugin, sc plugin.Subcommand, f
 	cfg.OutputFormat = flags.output
 	cfg.Apply = flags.apply
 	cfg.ShowRedactions = flags.showRedactions
+
+	// ── Unified --dry-run ─────────────────────────────────────────────────────
+	// k8s fix has a native dry-run (compute concrete fixes, show them, don't
+	// apply): pass it through and fall through to normal execution. For every
+	// other subcommand, --dry-run is a safe preview — validate the environment,
+	// print what WOULD run, and return before any LLM call, store write, or
+	// mutation, so even mutating subcommands like `incident open` preview safely.
+	isK8sFix := p.Name() == "k8s" && sc.Name == "fix"
+	if flags.dryRun {
+		if isK8sFix {
+			pluginFlags["dry-run"] = "true"
+		} else {
+			return dryRunPreview(cfg, p, sc)
+		}
+	}
 
 	// Safety gate: mutating subcommands require --apply.
 	// We check sc.Mutates (subcommand-level) so that read-only subcommands on
@@ -450,6 +461,16 @@ func runSubcommand(ctx context.Context, p plugin.Plugin, sc plugin.Subcommand, f
 
 	redactor := redact.New(cfg.OptionalRedactions...)
 
+	// Progress spinner on stderr for slow, single-shot markdown runs. Skipped for
+	// JSON/web output, the concurrent log plugins (which print their own
+	// progress), and the interactive `k8s fix` flow. NewSpinner self-disables when
+	// stderr is not a TTY or NO_COLOR is set, so piped/CI output stays clean.
+	showSpinner := cfg.OutputFormat == "markdown" && !concurrentPlugins[p.Name()] && !isK8sFix
+	spinner := cliui.NewSpinner(os.Stderr)
+	if showSpinner {
+		spinner.Start(fmt.Sprintf("Analyzing with %s…", cfg.LLMProvider))
+	}
+
 	report, err := sc.Run(ctx, plugin.RunArgs{
 		Stdin:      os.Stdin,
 		Stdout:     os.Stdout,
@@ -459,6 +480,7 @@ func runSubcommand(ctx context.Context, p plugin.Plugin, sc plugin.Subcommand, f
 		LLM:        trackedLLM,
 		Redactor:   redactor,
 	})
+	spinner.Stop()
 	if err != nil {
 		return err
 	}
@@ -538,6 +560,42 @@ func runSubcommand(ctx context.Context, p plugin.Plugin, sc plugin.Subcommand, f
 	default:
 		return output.Markdown(os.Stdout, report)
 	}
+}
+
+// dryRunPreview validates the environment and prints what the command WOULD do
+// without calling the LLM, writing to any store, or mutating anything. It backs
+// the global --dry-run flag for every subcommand except `k8s fix`, which has its
+// own native dry-run that computes and displays concrete fixes.
+func dryRunPreview(cfg config.Config, p plugin.Plugin, sc plugin.Subcommand) error {
+	results := preflight.RunAll(cfg)
+
+	var b strings.Builder
+	b.WriteString("\n  " + cliui.Bold("Dry run — no LLM call, nothing mutated") + "\n")
+	b.WriteString("  ─────────────────────────────────────\n")
+	for _, r := range results {
+		fmt.Fprintf(&b, "  %s  %-16s %s\n", statusIcon(r), r.Name, r.Message)
+	}
+
+	model := cfg.LLMModel
+	if model == "" {
+		model = "provider default"
+	}
+	b.WriteString("\n  Would run: " + cliui.Bold(p.Name()+" "+sc.Name) + "\n")
+	b.WriteString("  " + cliui.Dim(fmt.Sprintf("provider=%s · model=%s · output=%s", cfg.LLMProvider, model, cfg.OutputFormat)) + "\n")
+
+	passed, total := preflight.CountOK(results), len(results)
+	summary := fmt.Sprintf("%d/%d checks passed", passed, total)
+	if preflight.AllCriticalOK(results) {
+		b.WriteString("  " + cliui.Success(summary) + "\n")
+		b.WriteString("  " + cliui.Dim("Re-run without --dry-run to execute.") + "\n")
+	} else {
+		b.WriteString("  " + cliui.Warn(summary) + "\n")
+		b.WriteString("  " + cliui.Warn("A real run would fail until the critical checks above pass.") + "\n")
+	}
+	b.WriteString("\n")
+
+	fmt.Fprint(os.Stderr, b.String()) //nolint:errcheck // diagnostic to stderr
+	return nil
 }
 
 func buildVersionString() string {

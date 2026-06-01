@@ -65,4 +65,16 @@ var (
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(colorMuted).
 				Padding(0, 1)
+
+	// helpKeyStyle renders the key column of the "?" help overlay.
+	helpKeyStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(colorAccent)
+
+	// helpPanelStyle renders the bordered "?" help overlay panel.
+	helpPanelStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorCyan).
+			Padding(1, 3).
+			MarginLeft(2)
 )

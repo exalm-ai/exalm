@@ -207,7 +207,15 @@
       {{end}}
     </div>
     {{else}}
-    <p class="empty-state">No structured findings.</p>
+    <div class="empty-state">
+      <p class="empty-state-title">&#x2713; No structured findings &mdash; nothing needs attention.</p>
+      <p class="empty-state-hint">Next steps:</p>
+      <ul class="empty-state-cmds">
+        <li><code>exalm k8s analyze -n &lt;namespace&gt;</code> &mdash; scope the scan to one namespace</li>
+        <li><code>exalm k8s analyze</code> &mdash; re-run a full cluster analysis</li>
+        <li><a href="/timeline">View the cross-signal timeline &rarr;</a></li>
+      </ul>
+    </div>
     {{end}}
   </section>
 
