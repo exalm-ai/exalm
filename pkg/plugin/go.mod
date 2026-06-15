@@ -8,4 +8,4 @@
 // This makes it safe to embed in any project without dependency conflicts.
 module github.com/exalm-ai/exalm/pkg/plugin
 
-go 1.25.0
+go 1.26.0
