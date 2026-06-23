@@ -738,8 +738,16 @@ function confirmFix() {
           result.textContent = '✗ Error: ' + (res.data.error || 'unknown');
         }
       }
-      if (res.ok) setTimeout(closeFixModal, 2400);
-      else if (applyBtn) applyBtn.disabled = false;
+      if (res.ok) {
+        // The server re-collects after applying; reload so the resolved finding
+        // drops out of the list (and stale remediations can't be re-fired).
+        setTimeout(function() {
+          closeFixModal();
+          if (_autoRefreshEnabled && !document.hidden) window.location.reload();
+        }, 1800);
+      } else if (applyBtn) {
+        applyBtn.disabled = false;
+      }
     })
     .catch(function(err) {
       if (result) { result.className = 'modal-result error'; result.textContent = '✗ ' + err.message; }
@@ -824,6 +832,13 @@ function confirmFixAll() {
         result.textContent = allOk
           ? '✓ All fixes applied successfully.'
           : '⚠ Some fixes failed — check individual results above.';
+      }
+      // The server re-collects after the batch; reload so resolved findings
+      // drop out and the remaining list reflects the new cluster state.
+      if (_autoRefreshEnabled) {
+        setTimeout(function() {
+          if (!document.hidden) window.location.reload();
+        }, 2200);
       }
     })
     .catch(function(err) {
@@ -1362,6 +1377,33 @@ let _lastRaw = (function() {
   return el ? (el.dataset.raw || '') : '';
 }());
 
+// Whether the server has a live refresh source wired (analyze/watch). When
+// false (static snapshot — e.g. --from-file or serve --no-k8s) there is nothing
+// new to fetch, so we never reload. Mirrors templateData.AutoRefresh.
+const _autoRefreshEnabled = (document.body.dataset.autoRefresh === 'true');
+
+// Signature of the current findings set (identity, not full content). When this
+// changes between polls the server has re-collected and the server-rendered
+// cards are stale, so we reload to let the Go template re-render them. Seeded
+// to null and captured on the first poll so we never reload on the first tick.
+let _lastFindingsSig = null;
+
+function findingsSignature(findings) {
+  return (findings || [])
+    .map(function(f) { return (f.severity || '') + '|' + (f.category || '') + '|' + (f.title || ''); })
+    .sort()
+    .join('\n');
+}
+
+// A reload would interrupt the user mid-action, so suppress it while a modal is
+// open or the tab is backgrounded.
+function reloadSafe() {
+  var modalOpen = document.querySelector('.modal:not(.hidden)') !== null;
+  if (modalOpen || document.hidden) return false;
+  window.location.reload();
+  return true;
+}
+
 setInterval(function() {
   fetch('/api/report')
     .then(function(r) { return r.json(); })
@@ -1391,6 +1433,85 @@ setInterval(function() {
       if (barEl) buildSeverityBar(barEl, counts);
       var healthEl = document.getElementById('health-ring');
       if (healthEl) buildHealthRing(healthEl, buildHealthScore(counts));
+
+      // The finding cards are server-rendered once; when the underlying set
+      // changes (pods recreated, issues resolved) reload so the template
+      // re-renders them. Filters/theme/search persist via localStorage.
+      var sig = findingsSignature(findings);
+      if (_autoRefreshEnabled) {
+        if (_lastFindingsSig === null) {
+          _lastFindingsSig = sig; // first tick: establish baseline, don't reload
+        } else if (sig !== _lastFindingsSig) {
+          _lastFindingsSig = sig;
+          reloadSafe();
+        }
+      }
     })
     .catch(function() { /* server gone */ });
 }, 30000);
+
+// ── Resizable findings/analysis split ───────────────────────────────────────
+// The two panels are a 3-track CSS grid (left | gutter | right); dragging the
+// gutter rewrites the --split custom property and persists the width.
+(function initSplitter() {
+  var gutter = document.getElementById('split-gutter');
+  var layout = document.querySelector('.main-layout');
+  if (!gutter || !layout) return;
+
+  var SPLIT_KEY = 'exalm.splitLeftPx';
+  try {
+    var saved = localStorage.getItem(SPLIT_KEY);
+    if (saved) layout.style.setProperty('--split', parseInt(saved, 10) + 'px');
+  } catch (e) { /* ignore */ }
+
+  var dragging = false;
+
+  function clampX(x, width) {
+    var min = 300, max = width * 0.7;
+    if (x < min) x = min;
+    if (x > max) x = max;
+    return Math.round(x);
+  }
+
+  function onMove(e) {
+    if (!dragging) return;
+    var rect = layout.getBoundingClientRect();
+    var x = clampX(e.clientX - rect.left, rect.width);
+    layout.style.setProperty('--split', x + 'px');
+    e.preventDefault();
+  }
+
+  function onUp() {
+    if (!dragging) return;
+    dragging = false;
+    gutter.classList.remove('dragging');
+    document.body.style.userSelect = '';
+    var v = layout.style.getPropertyValue('--split');
+    if (v.indexOf('px') !== -1) {
+      try { localStorage.setItem(SPLIT_KEY, parseInt(v, 10)); } catch (e) { /* ignore */ }
+    }
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+  }
+
+  gutter.addEventListener('pointerdown', function(e) {
+    dragging = true;
+    gutter.classList.add('dragging');
+    document.body.style.userSelect = 'none';
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    e.preventDefault();
+  });
+
+  // Keyboard accessibility: arrow keys nudge the split by 24px.
+  gutter.addEventListener('keydown', function(e) {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    var rect = layout.getBoundingClientRect();
+    var cur = parseInt(layout.style.getPropertyValue('--split'), 10);
+    if (isNaN(cur)) cur = rect.width * 0.58; // ~1.4fr default
+    var next = clampX(cur + (e.key === 'ArrowRight' ? 24 : -24), rect.width);
+    layout.style.setProperty('--split', next + 'px');
+    try { localStorage.setItem(SPLIT_KEY, next); } catch (err) { /* ignore */ }
+    e.preventDefault();
+  });
+})();

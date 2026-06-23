@@ -58,6 +58,19 @@ type ServeOpts struct {
 	// Nil means the report is static (analyze mode).
 	ReportUpdates <-chan plugin.Report
 
+	// RefreshFindings, when non-nil, re-collects live findings without calling
+	// the LLM. The server invokes it on a ticker (RefreshInterval) so the
+	// dashboard stays current in analyze mode — where ReportUpdates is nil —
+	// and immediately after a fix is applied so the view reflects the new
+	// state. It returns only findings; the LLM narrative (report.Raw) is
+	// preserved across refreshes.
+	RefreshFindings func(ctx context.Context) ([]plugin.Finding, error)
+
+	// RefreshInterval is the cadence for RefreshFindings. Defaults to 30s
+	// (matching the dashboard footer) when zero. Ignored when RefreshFindings
+	// is nil.
+	RefreshInterval time.Duration
+
 	// CollectedAt is the timestamp of the initial report collection.
 	// Used as the anchor point for the cross-signal correlation timeline.
 	CollectedAt time.Time
@@ -167,6 +180,8 @@ type liveServer struct {
 	snapshotHistory []SnapshotEntry
 	applyFix        func(ctx context.Context, action plugin.RemediationAction) error
 	createPR        func(ctx context.Context, report plugin.Report) (string, error)
+	refreshFindings func(ctx context.Context) ([]plugin.Finding, error)
+	autoRefresh     bool // true when a live refresh source (ReportUpdates or RefreshFindings) is wired
 	tmpl            *template.Template
 	startTime       time.Time
 	reportCount     int64         // accessed atomically
@@ -184,6 +199,30 @@ func (s *liveServer) setReport(r plugin.Report) {
 	defer s.mu.Unlock()
 	s.report = r
 	atomic.AddInt64(&s.reportCount, 1)
+}
+
+// setFindings replaces only the findings of the stored report, preserving the
+// existing Title/Summary/Raw (the LLM narrative). Used by refreshOnce so a
+// findings-only re-collection does not wipe the one-shot narrative.
+func (s *liveServer) setFindings(findings []plugin.Finding) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.report.Findings = findings
+	atomic.AddInt64(&s.reportCount, 1)
+}
+
+// refreshOnce re-collects live findings via refreshFindings and stores them.
+// Best-effort: a collection error leaves the last good findings in place
+// rather than blanking the dashboard. No-op when refreshFindings is nil.
+func (s *liveServer) refreshOnce(ctx context.Context) {
+	if s.refreshFindings == nil {
+		return
+	}
+	findings, err := s.refreshFindings(ctx)
+	if err != nil {
+		return // keep last good snapshot
+	}
+	s.setFindings(findings)
 }
 
 // Serve starts an HTTP server on localhost and blocks until ctx is cancelled.
@@ -205,6 +244,8 @@ func Serve(ctx context.Context, report plugin.Report, opts ServeOpts) error {
 		snapshotHistory: opts.SnapshotHistory,
 		applyFix:        opts.ApplyFix,
 		createPR:        opts.CreatePR,
+		refreshFindings: opts.RefreshFindings,
+		autoRefresh:     opts.ReportUpdates != nil || opts.RefreshFindings != nil,
 		tmpl:            tmpl,
 		startTime:       time.Now(),
 		fixSem:          make(chan struct{}, maxConcurrentFixes),
@@ -275,7 +316,9 @@ func Serve(ctx context.Context, report plugin.Report, opts ServeOpts) error {
 		openBrowser(url)
 	}
 
-	// Watch mode: consume report updates in background.
+	// Watch mode: consume report updates in background. The plugin's watch
+	// loop pushes findings-only reports (empty Raw); preserve the one-shot LLM
+	// narrative in that case by updating only the findings.
 	if opts.ReportUpdates != nil {
 		go func() {
 			for {
@@ -286,7 +329,34 @@ func Serve(ctx context.Context, report plugin.Report, opts ServeOpts) error {
 					if !ok {
 						return
 					}
-					srv.setReport(r)
+					if r.Raw == "" {
+						srv.setFindings(r.Findings)
+					} else {
+						srv.setReport(r)
+					}
+				}
+			}
+		}()
+	}
+
+	// Analyze mode: no push channel, but a RefreshFindings callback lets us
+	// re-collect on a ticker so the dashboard does not freeze at the initial
+	// snapshot. (In watch mode ReportUpdates already drives refresh, so the
+	// ticker is skipped to avoid double-collecting.)
+	if opts.RefreshFindings != nil && opts.ReportUpdates == nil {
+		interval := opts.RefreshInterval
+		if interval <= 0 {
+			interval = 30 * time.Second
+		}
+		go func() {
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					srv.refreshOnce(ctx)
 				}
 			}
 		}()
@@ -325,6 +395,7 @@ type templateData struct {
 	HasApplyFix     bool
 	HasCreatePR     bool
 	FixableCount    int
+	AutoRefresh     bool // when true, the dashboard polls and reloads on change; drives the footer text
 }
 
 func buildTemplateData(r plugin.Report, hasApplyFix, hasCreatePR bool) templateData {
@@ -375,6 +446,7 @@ func buildTemplateData(r plugin.Report, hasApplyFix, hasCreatePR bool) templateD
 func (s *liveServer) handleDashboard(w http.ResponseWriter, _ *http.Request) {
 	report := s.getReport()
 	data := buildTemplateData(report, s.applyFix != nil, s.createPR != nil)
+	data.AutoRefresh = s.autoRefresh
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.tmpl.Execute(w, data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -628,6 +700,10 @@ func (s *liveServer) handleFix(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Re-collect so the dashboard reflects the post-fix state immediately
+	// rather than waiting for the next refresh tick. Best-effort.
+	s.refreshOnce(r.Context())
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"ok": true}) //nolint:errcheck
 }
@@ -808,6 +884,10 @@ func (s *liveServer) handleFixAll(w http.ResponseWriter, r *http.Request) {
 		}
 		results = append(results, res)
 	}
+
+	// Re-collect once after applying the batch so the dashboard reflects the
+	// new cluster state on the next poll. Best-effort.
+	s.refreshOnce(r.Context())
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(results) //nolint:errcheck
