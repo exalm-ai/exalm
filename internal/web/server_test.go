@@ -1,6 +1,9 @@
 package web
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"html/template"
 	"net/http"
 	"net/http/httptest"
@@ -380,5 +383,126 @@ func TestHandleMetrics_PrometheusFormat(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("expected metric %q in response", want)
 		}
+	}
+}
+
+// ── Auto-refresh (analyze-mode) tests ─────────────────────────────────────────
+
+func TestRefreshOnce_UpdatesFindingsPreservesNarrative(t *testing.T) {
+	srv := newTestServer(plugin.Report{
+		Title:   "K8s analysis",
+		Summary: "initial",
+		Raw:     "## VERDICT\nthe one-shot narrative",
+		Findings: []plugin.Finding{
+			{Severity: plugin.SeverityCritical, Title: "old/pod-aaa"},
+		},
+	})
+	srv.refreshFindings = func(_ context.Context) ([]plugin.Finding, error) {
+		return []plugin.Finding{
+			{Severity: plugin.SeverityHigh, Title: "new/pod-bbb"},
+			{Severity: plugin.SeverityLow, Title: "new/pod-ccc"},
+		}, nil
+	}
+
+	srv.refreshOnce(context.Background())
+
+	got := srv.getReport()
+	if len(got.Findings) != 2 {
+		t.Fatalf("expected 2 refreshed findings, got %d", len(got.Findings))
+	}
+	if got.Findings[0].Title != "new/pod-bbb" {
+		t.Errorf("findings not refreshed: got %q", got.Findings[0].Title)
+	}
+	if got.Raw != "## VERDICT\nthe one-shot narrative" {
+		t.Errorf("LLM narrative (Raw) must be preserved across a findings refresh, got %q", got.Raw)
+	}
+	if got.Title != "K8s analysis" {
+		t.Errorf("Title must be preserved, got %q", got.Title)
+	}
+}
+
+func TestRefreshOnce_ErrorKeepsLastGood(t *testing.T) {
+	original := []plugin.Finding{{Severity: plugin.SeverityCritical, Title: "keep/me"}}
+	srv := newTestServer(plugin.Report{Findings: original})
+	srv.refreshFindings = func(_ context.Context) ([]plugin.Finding, error) {
+		return nil, errors.New("cluster unreachable")
+	}
+
+	srv.refreshOnce(context.Background())
+
+	got := srv.getReport()
+	if len(got.Findings) != 1 || got.Findings[0].Title != "keep/me" {
+		t.Errorf("a refresh error must keep the last good findings, got %+v", got.Findings)
+	}
+}
+
+func TestRefreshOnce_NilCallbackNoOp(t *testing.T) {
+	srv := newTestServer(plugin.Report{Findings: []plugin.Finding{{Title: "x"}}})
+	// refreshFindings left nil — must not panic and must leave findings intact.
+	srv.refreshOnce(context.Background())
+	if len(srv.getReport().Findings) != 1 {
+		t.Error("nil refreshFindings should be a no-op")
+	}
+}
+
+func TestHandleFix_AppliesThenReCollects(t *testing.T) {
+	var appliedKind string
+	srv := newTestServer(plugin.Report{
+		Findings: []plugin.Finding{{Severity: plugin.SeverityCritical, Title: "stale/pod"}},
+	})
+	srv.fixSem = make(chan struct{}, maxConcurrentFixes)
+	srv.applyFix = func(_ context.Context, a plugin.RemediationAction) error {
+		appliedKind = a.Kind
+		return nil
+	}
+	srv.refreshFindings = func(_ context.Context) ([]plugin.Finding, error) {
+		// After the fix the stale pod is gone.
+		return []plugin.Finding{}, nil
+	}
+
+	body, _ := json.Marshal(plugin.RemediationAction{Kind: "delete-pod"})
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/fix", strings.NewReader(string(body)))
+	srv.handleFix(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body=%s)", rr.Code, rr.Body.String())
+	}
+	if appliedKind != "delete-pod" {
+		t.Errorf("applyFix should have received the posted action, got kind %q", appliedKind)
+	}
+	if n := len(srv.getReport().Findings); n != 0 {
+		t.Errorf("handleFix must re-collect after applying; expected 0 findings, got %d", n)
+	}
+}
+
+func TestHandleDashboard_AutoRefreshFooter(t *testing.T) {
+	cases := []struct {
+		name        string
+		autoRefresh bool
+		want        string
+		notWant     string
+	}{
+		{"live", true, "auto-refreshes every 30s", "static snapshot"},
+		{"static", false, "static snapshot", "auto-refreshes every 30s"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newTestServer(plugin.Report{Title: "t", Findings: []plugin.Finding{{Title: "f"}}})
+			srv.autoRefresh = tc.autoRefresh
+			rr := httptest.NewRecorder()
+			srv.handleDashboard(rr, httptest.NewRequest("GET", "/", nil))
+			body := rr.Body.String()
+			if !strings.Contains(body, tc.want) {
+				t.Errorf("expected footer to contain %q", tc.want)
+			}
+			if strings.Contains(body, tc.notWant) {
+				t.Errorf("footer should not contain %q when autoRefresh=%v", tc.notWant, tc.autoRefresh)
+			}
+			wantAttr := `data-auto-refresh="` + map[bool]string{true: "true", false: "false"}[tc.autoRefresh] + `"`
+			if !strings.Contains(body, wantAttr) {
+				t.Errorf("expected body attribute %q", wantAttr)
+			}
+		})
 	}
 }

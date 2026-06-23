@@ -31,9 +31,12 @@ type Plugin struct {
 
 	// lastCS is set after every successful cluster connection so that cmd/exalm/main.go
 	// can retrieve it (via LastClient) to build the ApplyFix closure for the web server.
-	mu      sync.Mutex
-	lastCS  kubernetes.Interface
-	watchCh chan plugin.Report // non-nil during watch subcommand
+	mu sync.Mutex
+	// lastCS / lastOpts capture the most recent analyze/watch run so RefreshFunc
+	// can re-collect findings (no LLM) for the dashboard's auto-refresh.
+	lastCS   kubernetes.Interface
+	lastOpts CollectOpts
+	watchCh  chan plugin.Report // non-nil during watch subcommand
 }
 
 // New returns a production-configured k8s plugin.
@@ -99,6 +102,7 @@ func (p *Plugin) analyze(ctx context.Context, args plugin.RunArgs) (plugin.Repor
 
 	// Best-effort: dynamic client for IaC change detection; nil is safe.
 	opts.DynamicClient, _ = p.buildDynamicClient(args.Flags["kubeconfig"], args.Flags["context"])
+	p.setLastOpts(opts) // capture for dashboard auto-refresh (RefreshFunc)
 
 	lf := p.newLogFetcher(cs)
 
@@ -233,6 +237,7 @@ func (p *Plugin) watch(ctx context.Context, args plugin.RunArgs) (plugin.Report,
 	p.setLastClient(cs)
 
 	opts.DynamicClient, _ = p.buildDynamicClient(args.Flags["kubeconfig"], args.Flags["context"])
+	p.setLastOpts(opts) // capture for dashboard auto-refresh (RefreshFunc)
 
 	lf := p.newLogFetcher(cs)
 	snapshot, err := Collect(ctx, cs, lf, opts)
@@ -282,6 +287,40 @@ func (p *Plugin) setLastClient(cs kubernetes.Interface) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.lastCS = cs
+}
+
+// setLastOpts stores the collect options from the most recent run so
+// RefreshFunc can replay them.
+func (p *Plugin) setLastOpts(opts CollectOpts) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.lastOpts = opts
+}
+
+// RefreshFunc returns a closure that re-collects cluster state and returns
+// freshly enriched findings, reusing the client and options from the most
+// recent analyze/watch run. It deliberately does NOT call the LLM — only the
+// structured findings are refreshed — so it is cheap enough to run on the
+// dashboard's auto-refresh ticker and immediately after a fix is applied.
+//
+// Returns nil if no run has connected to a cluster yet (web.Serve treats a nil
+// RefreshFindings as "no refresh source", so the dashboard footer stays honest).
+func (p *Plugin) RefreshFunc() func(ctx context.Context) ([]plugin.Finding, error) {
+	p.mu.Lock()
+	cs := p.lastCS
+	opts := p.lastOpts
+	newLF := p.newLogFetcher
+	p.mu.Unlock()
+	if cs == nil || newLF == nil {
+		return nil
+	}
+	return func(ctx context.Context) ([]plugin.Finding, error) {
+		snapshot, err := Collect(ctx, cs, newLF(cs), opts)
+		if err != nil {
+			return nil, fmt.Errorf("refresh: %w", err)
+		}
+		return BuildAndEnrichFindings(snapshot), nil
+	}
 }
 
 // buildDynamicClient calls dynamicClientFactory when set. Returns nil without

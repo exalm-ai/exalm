@@ -272,20 +272,42 @@ body {
 /* ── Main layout ── */
 .main-layout {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* Left (findings) | draggable gutter | right (analysis). --split is set by
+     the gutter drag handler in app.js and persisted to localStorage. Default
+     1.4fr gives the findings panel a bit more room for long resource names. */
+  grid-template-columns: var(--split, 1.4fr) 6px 1fr;
   flex: 1;
   overflow: hidden;
   min-height: 0;
+}
+
+/* Draggable splitter between the findings and analysis panels. */
+.split-gutter {
+  cursor: col-resize;
+  background: var(--border2);
+  transition: background 0.15s;
+  position: relative; /* anchor the widened hit area below */
+}
+.split-gutter::before {
+  content: "";
+  position: absolute;
+  inset: 0 -3px; /* 3px extra grab area each side without widening the track */
+}
+.split-gutter:hover,
+.split-gutter:focus,
+.split-gutter.dragging {
+  background: var(--accent);
+  outline: none;
 }
 
 /* ── Findings panel ── */
 .findings-panel {
   overflow-y: auto;
   padding: 0.75rem 1rem;
-  border-right: 1px solid var(--border2);
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+  min-width: 0; /* allow the column to shrink so titles ellipsize, not overflow */
 }
 .panel-heading-row {
   display: flex;
@@ -963,13 +985,15 @@ body {
 }
 
 /* ── Title truncate in collapsed cards ── */
+/* Ellipsize at the available column width (not a fixed cap) so widening the
+   findings panel reveals more of long resource names. The flex parent
+   .finding-header-text has min-width:0, which lets this shrink-to-fit. */
 .finding-card:not(.expanded) .finding-title {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 260px;
-  display: inline-block;
-  vertical-align: bottom;
+  max-width: 100%;
+  display: block;
 }
 
 /* ── Donut tooltip on hover ── */
@@ -1404,8 +1428,9 @@ body {
     grid-template-columns: 1fr;
     overflow: visible;
   }
+  /* No side-by-side panels on mobile, so the drag splitter is meaningless. */
+  .split-gutter { display: none; }
   .findings-panel {
-    border-right: none;
     border-bottom: 1px solid var(--border2);
     max-height: 60vh;
   }

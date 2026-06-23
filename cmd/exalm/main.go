@@ -522,6 +522,11 @@ func runSubcommand(ctx context.Context, p plugin.Plugin, sc plugin.Subcommand, f
 			if sc.Name == "watch" {
 				serveOpts.ReportUpdates = k8sPlug.WatchReportCh()
 			}
+			// Inject the findings re-collector so the dashboard auto-refreshes
+			// (analyze mode) and reflects post-fix state immediately. Nil when
+			// no cluster connection was made (e.g. --from-file), which keeps the
+			// dashboard footer honest ("static snapshot").
+			serveOpts.RefreshFindings = k8sPlug.RefreshFunc()
 		}
 
 		// Inject CreatePR closure if a git provider token and repo are configured.

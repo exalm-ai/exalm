@@ -6,7 +6,7 @@
   <title>Exalm — {{.Title}}</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
+<body data-auto-refresh="{{if .AutoRefresh}}true{{else}}false{{end}}">
 
 <header class="header">
   <div class="header-brand">⬡ exalm</div>
@@ -219,6 +219,9 @@
     {{end}}
   </section>
 
+  <div class="split-gutter" id="split-gutter" role="separator" aria-orientation="vertical"
+       tabindex="0" title="Drag to resize panels" aria-label="Resize findings and analysis panels"></div>
+
   <section class="narrative-panel">
     <div class="panel-heading-row">
       <h2 class="panel-heading">LLM Analysis</h2>
@@ -240,7 +243,11 @@
 
 <footer class="footer">
   <span><a href="https://exalm.com" target="_blank" rel="noopener">exalm.com</a></span>
+  {{if .AutoRefresh}}
   <span class="auto-refresh-note">auto-refreshes every 30s</span>
+  {{else}}
+  <span class="auto-refresh-note">static snapshot — re-run analyze to update</span>
+  {{end}}
 </footer>
 
 <!-- Per-finding confirmation modal -->
