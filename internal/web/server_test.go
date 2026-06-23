@@ -476,33 +476,27 @@ func TestHandleFix_AppliesThenReCollects(t *testing.T) {
 	}
 }
 
-func TestHandleDashboard_AutoRefreshFooter(t *testing.T) {
+func TestHandleDashboard_AutoRefreshFlag(t *testing.T) {
+	// The redesigned dashboard is client-rendered; the autoRefresh flag rides in
+	// the embedded JSON blob (window.__DASH__), not in server-rendered markup.
 	cases := []struct {
-		name        string
 		autoRefresh bool
 		want        string
-		notWant     string
 	}{
-		{"live", true, "auto-refreshes every 30s", "static snapshot"},
-		{"static", false, "static snapshot", "auto-refreshes every 30s"},
+		{true, `"autoRefresh":true`},
+		{false, `"autoRefresh":false`},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			srv := newTestServer(plugin.Report{Title: "t", Findings: []plugin.Finding{{Title: "f"}}})
-			srv.autoRefresh = tc.autoRefresh
-			rr := httptest.NewRecorder()
-			srv.handleDashboard(rr, httptest.NewRequest("GET", "/", nil))
-			body := rr.Body.String()
-			if !strings.Contains(body, tc.want) {
-				t.Errorf("expected footer to contain %q", tc.want)
-			}
-			if strings.Contains(body, tc.notWant) {
-				t.Errorf("footer should not contain %q when autoRefresh=%v", tc.notWant, tc.autoRefresh)
-			}
-			wantAttr := `data-auto-refresh="` + map[bool]string{true: "true", false: "false"}[tc.autoRefresh] + `"`
-			if !strings.Contains(body, wantAttr) {
-				t.Errorf("expected body attribute %q", wantAttr)
-			}
-		})
+		srv := newTestServer(plugin.Report{Title: "t", Findings: []plugin.Finding{{Title: "f"}}})
+		srv.autoRefresh = tc.autoRefresh
+		rr := httptest.NewRecorder()
+		srv.handleDashboard(rr, httptest.NewRequest("GET", "/", nil))
+		body := rr.Body.String()
+		if !strings.Contains(body, tc.want) {
+			t.Errorf("autoRefresh=%v: expected embedded JSON to contain %q", tc.autoRefresh, tc.want)
+		}
+		if !strings.Contains(body, "/static/dashboard.js") {
+			t.Error("expected the dashboard to load /static/dashboard.js")
+		}
 	}
 }

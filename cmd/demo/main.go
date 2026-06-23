@@ -18,7 +18,7 @@ import (
 func main() {
 	report := plugin.Report{
 		Title:   "Exalm live dashboard — demo cluster",
-		Summary: "Analysed 3 namespaces · 12 nodes · 4 critical · 3 high · 2 medium · 1 info",
+		Summary: "Analysed 165 pods (14 unhealthy) across 6 namespaces using ollama.",
 		Raw: `## VERDICT
 **4 critical issues** require immediate attention, including a CrashLoopBackOff in production
 and a PVC approaching capacity.
@@ -181,10 +181,26 @@ and a PVC approaching capacity.
 	fmt.Fprintf(os.Stderr, "Demo dashboard: http://localhost:7433\n") //nolint:errcheck // startup info to stderr
 	fmt.Fprintf(os.Stderr, "Press Ctrl-C to stop.\n")                 //nolint:errcheck // startup info to stderr
 
+	// Synthetic pod inventory + a stubbed fix so the demo exercises the full
+	// dashboard (namespace selector, pod-derived metrics, Fix flow).
+	podInfo := web.PodInfo{
+		Total:     165,
+		Unhealthy: 14,
+		ByNamespace: map[string]int{
+			"prod": 92, "staging": 34, "monitoring": 18, "analytics": 12, "data": 6, "cluster": 3,
+		},
+	}
+
 	if err := web.Serve(ctx, report, web.ServeOpts{
 		Port:          7433,
 		OpenBrowser:   false,
 		ReportUpdates: updates,
+		Provider:      "ollama",
+		PodInfo:       func() web.PodInfo { return podInfo },
+		ApplyFix: func(context.Context, plugin.RemediationAction) error {
+			time.Sleep(400 * time.Millisecond) // simulate the apply latency
+			return nil
+		},
 	}); err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintln(os.Stderr, "serve error:", err) //nolint:errcheck // fatal error to stderr before exit
 		os.Exit(1)

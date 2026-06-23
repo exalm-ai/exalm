@@ -509,7 +509,7 @@ func runSubcommand(ctx context.Context, p plugin.Plugin, sc plugin.Subcommand, f
 	case cfg.OutputFormat == "json":
 		return output.JSON(os.Stdout, report)
 	case cfg.OutputFormat == "web" || openWeb:
-		serveOpts := web.ServeOpts{Port: 7433, OpenBrowser: true}
+		serveOpts := web.ServeOpts{Port: 7433, OpenBrowser: true, Provider: cfg.LLMProvider}
 
 		// Inject ApplyFix closure using the k8s client stored on the plugin.
 		if k8sPlug, ok := p.(*k8splugin.Plugin); ok {
@@ -527,6 +527,13 @@ func runSubcommand(ctx context.Context, p plugin.Plugin, sc plugin.Subcommand, f
 			// no cluster connection was made (e.g. --from-file), which keeps the
 			// dashboard footer honest ("static snapshot").
 			serveOpts.RefreshFindings = k8sPlug.RefreshFunc()
+
+			// Supply real per-namespace pod inventory for the dashboard's
+			// namespace selector and pod-derived metrics.
+			serveOpts.PodInfo = func() web.PodInfo {
+				total, unhealthy, byNs := k8sPlug.LastPodInfo()
+				return web.PodInfo{Total: total, Unhealthy: unhealthy, ByNamespace: byNs}
+			}
 		}
 
 		// Inject CreatePR closure if a git provider token and repo are configured.

@@ -11,16 +11,22 @@ import "time"
 // Plain Go types only — no k8s API imports, keeping the formatter
 // and most tests free of client-go.
 type Snapshot struct {
-	Namespace     string // empty = cluster-wide
-	TotalPods     int
-	UnhealthyPods []PodSummary
-	Events        []EventSummary
-	NodeIssues    []NodeIssue
-	Deployments   []DeploymentSummary
-	HPAs          []HPASummary
-	Quotas        []QuotaSummary
-	PVCIssues     []PVCIssue
-	ServiceIssues []ServiceIssue
+	Namespace string // empty = cluster-wide
+	TotalPods int
+	// PodsByNamespace counts every pod (healthy or not) per namespace. Used by
+	// the dashboard's namespace selector and pod-derived metrics.
+	PodsByNamespace map[string]int
+	// UnhealthyTotal is the count of all unhealthy pods before UnhealthyPods is
+	// capped to MaxPods, so the dashboard can show a true cluster figure.
+	UnhealthyTotal int
+	UnhealthyPods  []PodSummary
+	Events         []EventSummary
+	NodeIssues     []NodeIssue
+	Deployments    []DeploymentSummary
+	HPAs           []HPASummary
+	Quotas         []QuotaSummary
+	PVCIssues      []PVCIssue
+	ServiceIssues  []ServiceIssue
 
 	// Phase 1 extended analyzers
 	IngressIssues       []IngressHealth

@@ -71,6 +71,15 @@ type ServeOpts struct {
 	// is nil.
 	RefreshInterval time.Duration
 
+	// PodInfo, when non-nil, supplies real per-namespace pod inventory for the
+	// dashboard's namespace selector and pod-derived metrics. Nil => the
+	// dashboard still renders with those metrics at zero.
+	PodInfo func() PodInfo
+
+	// Provider names the LLM in use (e.g. "ollama", "claude") for the dashboard
+	// scope line. When empty it is inferred from the report summary.
+	Provider string
+
 	// CollectedAt is the timestamp of the initial report collection.
 	// Used as the anchor point for the cross-signal correlation timeline.
 	CollectedAt time.Time
@@ -181,6 +190,8 @@ type liveServer struct {
 	applyFix        func(ctx context.Context, action plugin.RemediationAction) error
 	createPR        func(ctx context.Context, report plugin.Report) (string, error)
 	refreshFindings func(ctx context.Context) ([]plugin.Finding, error)
+	podInfoFn       func() PodInfo
+	provider        string
 	autoRefresh     bool // true when a live refresh source (ReportUpdates or RefreshFindings) is wired
 	tmpl            *template.Template
 	startTime       time.Time
@@ -245,6 +256,8 @@ func Serve(ctx context.Context, report plugin.Report, opts ServeOpts) error {
 		applyFix:        opts.ApplyFix,
 		createPR:        opts.CreatePR,
 		refreshFindings: opts.RefreshFindings,
+		podInfoFn:       opts.PodInfo,
+		provider:        opts.Provider,
 		autoRefresh:     opts.ReportUpdates != nil || opts.RefreshFindings != nil,
 		tmpl:            tmpl,
 		startTime:       time.Now(),
@@ -256,6 +269,8 @@ func Serve(ctx context.Context, report plugin.Report, opts ServeOpts) error {
 	mux.HandleFunc("/timeline", srv.handleTimeline)
 	mux.HandleFunc("/dora", srv.handleDORAPage)
 	mux.HandleFunc("/api/report", srv.handleReportJSON)
+	mux.HandleFunc("/api/dashboard", srv.handleDashboardJSON)
+	mux.HandleFunc("/api/findings/", srv.handleFindingFix)
 	mux.HandleFunc("/api/fix", srv.handleFix)
 	mux.HandleFunc("/api/fix-all", srv.handleFixAll)
 	mux.HandleFunc("/api/create-pr", srv.handleCreatePR)
@@ -443,14 +458,112 @@ func buildTemplateData(r plugin.Report, hasApplyFix, hasCreatePR bool) templateD
 	}
 }
 
+// indexData is injected into the redesigned single-page dashboard template.
+// The findings/namespaces/etc. are delivered as an embedded JSON blob so the
+// page paints instantly without a fetch round-trip; the client then polls
+// /api/dashboard for live updates.
+type indexData struct {
+	Title         string
+	AutoRefresh   bool
+	HasApplyFix   bool
+	HasCreatePR   bool
+	DashboardJSON template.JS
+}
+
+// podInfo invokes the optional pod-inventory provider, returning nil when none
+// is wired (e.g. --from-file, non-k8s sources).
+func (s *liveServer) podInfo() *PodInfo {
+	if s.podInfoFn == nil {
+		return nil
+	}
+	pi := s.podInfoFn()
+	return &pi
+}
+
 func (s *liveServer) handleDashboard(w http.ResponseWriter, _ *http.Request) {
 	report := s.getReport()
-	data := buildTemplateData(report, s.applyFix != nil, s.createPR != nil)
-	data.AutoRefresh = s.autoRefresh
+	payload := buildDashboard(report, s.podInfo(), s.provider, s.autoRefresh)
+	blob, err := json.Marshal(payload)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	data := indexData{
+		Title:         report.Title,
+		AutoRefresh:   s.autoRefresh,
+		HasApplyFix:   s.applyFix != nil,
+		HasCreatePR:   s.createPR != nil,
+		DashboardJSON: template.JS(blob), //nolint:gosec // G203: payload is our own marshaled struct, not user HTML
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.tmpl.Execute(w, data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+// handleDashboardJSON serves the dashboard data contract consumed by the
+// front-end on its refresh poll.
+func (s *liveServer) handleDashboardJSON(w http.ResponseWriter, _ *http.Request) {
+	report := s.getReport()
+	payload := buildDashboard(report, s.podInfo(), s.provider, s.autoRefresh)
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// handleFindingFix applies the remediation for a single finding referenced by
+// its stable id: POST /api/findings/{id}/fix. Shares the fix concurrency gate.
+func (s *liveServer) handleFindingFix(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.applyFix == nil {
+		http.Error(w, "fix not available", http.StatusServiceUnavailable)
+		return
+	}
+	// Path: /api/findings/{id}/fix
+	rest := strings.TrimPrefix(r.URL.Path, "/api/findings/")
+	id := strings.TrimSuffix(rest, "/fix")
+	if id == "" || id == rest { // no id, or missing the /fix suffix
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	select {
+	case s.fixSem <- struct{}{}:
+		defer func() { <-s.fixSem }()
+	default:
+		http.Error(w, "too many concurrent fix requests", http.StatusTooManyRequests)
+		return
+	}
+
+	report := s.getReport()
+	var action *plugin.RemediationAction
+	for i := range report.Findings {
+		if findingID(report.Findings[i]) == id && report.Findings[i].Remediation != nil {
+			action = report.Findings[i].Remediation
+			break
+		}
+	}
+	if action == nil {
+		http.Error(w, "finding not found or has no remediation", http.StatusNotFound)
+		return
+	}
+
+	if err := s.applyFix(r.Context(), *action); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()}) //nolint:errcheck
+		return
+	}
+
+	// Re-collect so the next dashboard poll reflects the post-fix state.
+	s.refreshOnce(r.Context())
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "fixed"}) //nolint:errcheck
 }
 
 func (s *liveServer) handleReportJSON(w http.ResponseWriter, _ *http.Request) {
