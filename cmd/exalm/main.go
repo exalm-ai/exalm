@@ -24,6 +24,7 @@ import (
 	"github.com/exalm-ai/exalm/internal/gitprovider"
 	"github.com/exalm-ai/exalm/internal/llm"
 	"github.com/exalm-ai/exalm/internal/mcp"
+	"github.com/exalm-ai/exalm/internal/metrics"
 	"github.com/exalm-ai/exalm/internal/output"
 	"github.com/exalm-ai/exalm/internal/preflight"
 	"github.com/exalm-ai/exalm/internal/redact"
@@ -534,7 +535,20 @@ func runSubcommand(ctx context.Context, p plugin.Plugin, sc plugin.Subcommand, f
 				total, unhealthy, byNs := k8sPlug.LastPodInfo()
 				return web.PodInfo{Total: total, Unhealthy: unhealthy, ByNamespace: byNs}
 			}
+
+			// Deep root-cause investigation: deterministic evidence gather +
+			// one redacted LLM synthesis. Reuses the analysis LLM + redactor.
+			serveOpts.Investigate = func(ctx context.Context, findingID string) (*plugin.Investigation, error) {
+				return k8sPlug.Investigate(ctx, findingID, trackedLLM, redactor)
+			}
+
+			// Log viewer access over the already-connected client (read-only).
+			serveOpts.LogFetch = k8sPlug.LogFetch
 		}
+
+		// Derived metric series (modeled values + real change annotations) for
+		// chart tooltips and drill-down; a Prometheus backend can replace this.
+		serveOpts.Metrics = metrics.NewDerived()
 
 		// Inject CreatePR closure if a git provider token and repo are configured.
 		gpToken := pluginFlags["github-token"]

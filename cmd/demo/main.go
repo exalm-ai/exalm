@@ -11,8 +11,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/exalm-ai/exalm/internal/metrics"
 	"github.com/exalm-ai/exalm/internal/web"
 	"github.com/exalm-ai/exalm/pkg/plugin"
+	"github.com/exalm-ai/exalm/plugins/k8s"
 )
 
 func main() {
@@ -153,6 +155,13 @@ and a PVC approaching capacity.
 		},
 	}
 
+	// Classify the hand-built findings so the demo exercises the explainability
+	// UI (confidence, temporary vs root-cause fixes, evidence) exactly as the
+	// real k8s pipeline would via BuildAndEnrichFindings.
+	for i := range report.Findings {
+		k8s.Classify(&report.Findings[i])
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -166,14 +175,16 @@ and a PVC approaching capacity.
 		case <-time.After(8 * time.Second):
 			updated := report
 			updated.Summary = "Live update: 5 critical · 3 high · 2 medium · 1 info"
-			updated.Findings = append(updated.Findings, plugin.Finding{
+			nf := plugin.Finding{
 				Severity:   plugin.SeverityCritical,
 				Category:   "Pods",
 				Title:      "NEW: OOMKilled: prod/analytics-worker-2",
 				Detail:     "analytics-worker-2 was OOMKilled 3 minutes ago. RSS peaked at 1.8 Gi against a 1 Gi limit.",
 				Suggestion: "Increase memory limit to 2 Gi or optimise the batch processing job.",
 				Source:     "k8s/prod-cluster",
-			})
+			}
+			k8s.Classify(&nf)
+			updated.Findings = append(append([]plugin.Finding{}, report.Findings...), nf)
 			updates <- updated
 		}
 	}()
@@ -191,6 +202,45 @@ and a PVC approaching capacity.
 		},
 	}
 
+	// Stub investigation so the demo exercises the explainability UI. Mirrors
+	// what the k8s plugin's deterministic engine would return.
+	investigate := func(_ context.Context, id string) (*plugin.Investigation, error) {
+		var f *plugin.Finding
+		for i := range report.Findings {
+			if report.Findings[i].ID() == id {
+				f = &report.Findings[i]
+				break
+			}
+		}
+		if f == nil {
+			return nil, fmt.Errorf("finding %q not found", id)
+		}
+		var temp, root []plugin.RemediationAction
+		for _, fx := range f.Fixes {
+			if fx.FixType == "root-cause" {
+				root = append(root, fx)
+			} else {
+				temp = append(temp, fx)
+			}
+		}
+		return &plugin.Investigation{
+			Summary:    "Synthesized for the demo: " + f.Detail + " The evidence and recent change correlation point to a configuration cause, so a restart only mitigates the symptom.",
+			RootCause:  f.RootCause,
+			Confidence: f.Confidence,
+			Steps: []plugin.InvestigationStep{
+				{Label: "Pod status & container state inspected", Status: "done", Detail: f.Title},
+				{Label: "Container logs inspected (current + previous)", Status: "done"},
+				{Label: "Warning events inspected", Status: "done"},
+				{Label: "Owning workload inspected", Status: "done"},
+				{Label: "Recent changes correlated", Status: "done", Detail: "linked to a recent deploy"},
+				{Label: "Prometheus metrics inspected", Status: "unavailable", Detail: "no metrics backend wired"},
+			},
+			Evidence:       f.Evidence,
+			TemporaryFixes: temp,
+			RootCauseFixes: root,
+		}, nil
+	}
+
 	if err := web.Serve(ctx, report, web.ServeOpts{
 		Port:          7433,
 		OpenBrowser:   false,
@@ -201,6 +251,18 @@ and a PVC approaching capacity.
 			time.Sleep(400 * time.Millisecond) // simulate the apply latency
 			return nil
 		},
+		Investigate: investigate,
+		LogFetch: func(_ context.Context, ns, pod, container string, previous bool, tail int) (string, error) {
+			head := "2026-06-23T12:20:46Z INFO  starting " + pod + " (container=" + container + ")\n"
+			if previous {
+				head = "2026-06-23T11:58:02Z INFO  previous run of " + pod + "\n"
+			}
+			return head +
+				"2026-06-23T12:20:47Z WARN  memory usage 298Mi approaching limit 256Mi\n" +
+				"2026-06-23T12:20:48Z ERROR OOMKilled: container exceeded memory limit\n" +
+				"2026-06-23T12:20:49Z INFO  restarting...\n", nil
+		},
+		Metrics: metrics.NewDerived(),
 	}); err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintln(os.Stderr, "serve error:", err) //nolint:errcheck // fatal error to stderr before exit
 		os.Exit(1)

@@ -14,12 +14,14 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/exalm-ai/exalm/internal/changestore"
+	"github.com/exalm-ai/exalm/internal/metrics"
 	"github.com/exalm-ai/exalm/pkg/plugin"
 	dorapkg "github.com/exalm-ai/exalm/plugins/dora"
 	incidentpkg "github.com/exalm-ai/exalm/plugins/incident"
@@ -79,6 +81,19 @@ type ServeOpts struct {
 	// Provider names the LLM in use (e.g. "ollama", "claude") for the dashboard
 	// scope line. When empty it is inferred from the report summary.
 	Provider string
+
+	// Investigate, when non-nil, runs a deep root-cause investigation for a
+	// finding id and returns the result. Nil => /api/findings/{id}/investigate
+	// returns 503 and the UI hides the Investigate button.
+	Investigate func(ctx context.Context, findingID string) (*plugin.Investigation, error)
+
+	// LogFetch, when non-nil, returns a container's log tail for the log viewer.
+	// previous selects the last-terminated container's logs. Nil => /api/logs 503.
+	LogFetch func(ctx context.Context, namespace, pod, container string, previous bool, tail int) (string, error)
+
+	// Metrics, when non-nil, supplies metric series for chart tooltips and
+	// drill-down. Nil => /api/metrics returns an empty series set.
+	Metrics metrics.Provider
 
 	// CollectedAt is the timestamp of the initial report collection.
 	// Used as the anchor point for the cross-signal correlation timeline.
@@ -191,12 +206,16 @@ type liveServer struct {
 	createPR        func(ctx context.Context, report plugin.Report) (string, error)
 	refreshFindings func(ctx context.Context) ([]plugin.Finding, error)
 	podInfoFn       func() PodInfo
+	investigateFn   func(ctx context.Context, findingID string) (*plugin.Investigation, error)
+	logFetchFn      func(ctx context.Context, namespace, pod, container string, previous bool, tail int) (string, error)
+	metrics         metrics.Provider
 	provider        string
 	autoRefresh     bool // true when a live refresh source (ReportUpdates or RefreshFindings) is wired
 	tmpl            *template.Template
 	startTime       time.Time
 	reportCount     int64         // accessed atomically
 	fixSem          chan struct{} // concurrency gate for /api/fix and /api/fix-all
+	investigateSem  chan struct{} // concurrency gate for /api/findings/{id}/investigate (LLM-backed)
 }
 
 func (s *liveServer) getReport() plugin.Report {
@@ -257,11 +276,15 @@ func Serve(ctx context.Context, report plugin.Report, opts ServeOpts) error {
 		createPR:        opts.CreatePR,
 		refreshFindings: opts.RefreshFindings,
 		podInfoFn:       opts.PodInfo,
+		investigateFn:   opts.Investigate,
+		logFetchFn:      opts.LogFetch,
+		metrics:         opts.Metrics,
 		provider:        opts.Provider,
 		autoRefresh:     opts.ReportUpdates != nil || opts.RefreshFindings != nil,
 		tmpl:            tmpl,
 		startTime:       time.Now(),
 		fixSem:          make(chan struct{}, maxConcurrentFixes),
+		investigateSem:  make(chan struct{}, maxConcurrentFixes),
 	}
 
 	mux := http.NewServeMux()
@@ -270,7 +293,9 @@ func Serve(ctx context.Context, report plugin.Report, opts ServeOpts) error {
 	mux.HandleFunc("/dora", srv.handleDORAPage)
 	mux.HandleFunc("/api/report", srv.handleReportJSON)
 	mux.HandleFunc("/api/dashboard", srv.handleDashboardJSON)
-	mux.HandleFunc("/api/findings/", srv.handleFindingFix)
+	mux.HandleFunc("/api/findings/", srv.handleFinding)
+	mux.HandleFunc("/api/logs", srv.handleLogs)
+	mux.HandleFunc("/api/metrics", srv.handleMetricsJSON)
 	mux.HandleFunc("/api/fix", srv.handleFix)
 	mux.HandleFunc("/api/fix-all", srv.handleFixAll)
 	mux.HandleFunc("/api/create-pr", srv.handleCreatePR)
@@ -514,7 +539,53 @@ func (s *liveServer) handleDashboardJSON(w http.ResponseWriter, _ *http.Request)
 
 // handleFindingFix applies the remediation for a single finding referenced by
 // its stable id: POST /api/findings/{id}/fix. Shares the fix concurrency gate.
-func (s *liveServer) handleFindingFix(w http.ResponseWriter, r *http.Request) {
+// handleFinding dispatches the /api/findings/{id}[/fix|/investigate] routes by
+// suffix and method:
+//
+//	GET  /api/findings/{id}             → full finding detail (classification + evidence)
+//	POST /api/findings/{id}/fix         → apply the primary remediation
+//	POST /api/findings/{id}/investigate → run a deep root-cause investigation
+func (s *liveServer) handleFinding(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/findings/")
+	switch {
+	case strings.HasSuffix(rest, "/fix"):
+		s.doFix(w, r, strings.TrimSuffix(rest, "/fix"))
+	case strings.HasSuffix(rest, "/investigate"):
+		s.doInvestigate(w, r, strings.TrimSuffix(rest, "/investigate"))
+	default:
+		s.doFindingDetail(w, r, rest)
+	}
+}
+
+// findByID returns a pointer to the finding with the given id in the current
+// report, or nil.
+func (s *liveServer) findByID(id string) *plugin.Finding {
+	report := s.getReport()
+	for i := range report.Findings {
+		if report.Findings[i].ID() == id {
+			return &report.Findings[i]
+		}
+	}
+	return nil
+}
+
+// doFindingDetail serves the full finding (incl. evidence + classification).
+func (s *liveServer) doFindingDetail(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	f := s.findByID(id)
+	if f == nil {
+		http.Error(w, "finding not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(f) //nolint:errcheck
+}
+
+// doFix applies a single finding's primary remediation.
+func (s *liveServer) doFix(w http.ResponseWriter, r *http.Request, id string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -523,10 +594,7 @@ func (s *liveServer) handleFindingFix(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "fix not available", http.StatusServiceUnavailable)
 		return
 	}
-	// Path: /api/findings/{id}/fix
-	rest := strings.TrimPrefix(r.URL.Path, "/api/findings/")
-	id := strings.TrimSuffix(rest, "/fix")
-	if id == "" || id == rest { // no id, or missing the /fix suffix
+	if id == "" {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
@@ -539,20 +607,13 @@ func (s *liveServer) handleFindingFix(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	report := s.getReport()
-	var action *plugin.RemediationAction
-	for i := range report.Findings {
-		if findingID(report.Findings[i]) == id && report.Findings[i].Remediation != nil {
-			action = report.Findings[i].Remediation
-			break
-		}
-	}
-	if action == nil {
+	f := s.findByID(id)
+	if f == nil || f.Remediation == nil {
 		http.Error(w, "finding not found or has no remediation", http.StatusNotFound)
 		return
 	}
 
-	if err := s.applyFix(r.Context(), *action); err != nil {
+	if err := s.applyFix(r.Context(), *f.Remediation); err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()}) //nolint:errcheck
@@ -566,11 +627,144 @@ func (s *liveServer) handleFindingFix(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "fixed"}) //nolint:errcheck
 }
 
+// doInvestigate runs a deep root-cause investigation for a finding. Gated by a
+// dedicated concurrency semaphore because it makes an LLM call.
+func (s *liveServer) doInvestigate(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.investigateFn == nil {
+		http.Error(w, "investigation not available", http.StatusServiceUnavailable)
+		return
+	}
+	if id == "" {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	select {
+	case s.investigateSem <- struct{}{}:
+		defer func() { <-s.investigateSem }()
+	default:
+		http.Error(w, "too many concurrent investigations", http.StatusTooManyRequests)
+		return
+	}
+
+	inv, err := s.investigateFn(r.Context(), id)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()}) //nolint:errcheck
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	// Normalize to the same camelCase shape the dashboard uses, so the front-end
+	// handles one fix/evidence shape everywhere.
+	json.NewEncoder(w).Encode(toInvestigationResp(inv)) //nolint:errcheck
+}
+
+// investigationResp is the front-end shape of an Investigation (camelCase,
+// dashFix/dashEvidence) matching the dashboard's contract.
+type investigationResp struct {
+	Summary        string                     `json:"summary"`
+	RootCause      string                     `json:"rootCause"`
+	Confidence     string                     `json:"confidence"`
+	Steps          []plugin.InvestigationStep `json:"steps"`
+	Evidence       []dashEvidence             `json:"evidence"`
+	TemporaryFixes []dashFix                  `json:"temporaryFixes"`
+	RootCauseFixes []dashFix                  `json:"rootCauseFixes"`
+}
+
+func toInvestigationResp(inv *plugin.Investigation) investigationResp {
+	if inv == nil {
+		return investigationResp{}
+	}
+	return investigationResp{
+		Summary:        inv.Summary,
+		RootCause:      inv.RootCause,
+		Confidence:     inv.Confidence,
+		Steps:          inv.Steps,
+		Evidence:       mapEvidence(inv.Evidence),
+		TemporaryFixes: mapFixes(inv.TemporaryFixes),
+		RootCauseFixes: mapFixes(inv.RootCauseFixes),
+	}
+}
+
 func (s *liveServer) handleReportJSON(w http.ResponseWriter, _ *http.Request) {
 	report := s.getReport()
 	payload, _ := json.Marshal(report)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(payload) //nolint:errcheck
+}
+
+// handleLogs serves a container's log tail for the log viewer:
+//
+//	GET /api/logs?ns=<ns>&pod=<pod>&container=<c>&previous=<bool>&tail=<n>
+//
+// Read-only; uses the injected LogFetch closure (the already-connected client).
+func (s *liveServer) handleLogs(w http.ResponseWriter, r *http.Request) {
+	if s.logFetchFn == nil {
+		http.Error(w, "log access not available", http.StatusServiceUnavailable)
+		return
+	}
+	q := r.URL.Query()
+	ns, pod, container := q.Get("ns"), q.Get("pod"), q.Get("container")
+	if pod == "" {
+		http.Error(w, "pod is required", http.StatusBadRequest)
+		return
+	}
+	previous := q.Get("previous") == "true"
+	tail := 500
+	if v := q.Get("tail"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 5000 {
+			tail = n
+		}
+	}
+	out, err := s.logFetchFn(r.Context(), ns, pod, container, previous, tail)
+	w.Header().Set("Content-Type", "application/json")
+	resp := map[string]any{"namespace": ns, "pod": pod, "container": container, "previous": previous, "lines": out}
+	if err != nil {
+		resp["error"] = err.Error()
+	}
+	json.NewEncoder(w).Encode(resp) //nolint:errcheck
+}
+
+// handleMetricsJSON serves metric series for chart tooltips/drill-down:
+//
+//	GET /api/metrics?ns=<ns|all>&name=<resource>&window=<1h|24h|7d>
+//
+// Distinct from /metrics (Prometheus text). Returns [] when no provider wired.
+func (s *liveServer) handleMetricsJSON(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if s.metrics == nil {
+		w.Write([]byte("[]")) //nolint:errcheck
+		return
+	}
+	q := r.URL.Query()
+	ns := q.Get("ns")
+	window := parseSinceDuration(q.Get("window"), 24*time.Hour)
+	// Magnitude hint: number of findings in scope, so the derived series scales
+	// with the current problem load.
+	report := s.getReport()
+	mag := 0
+	for _, f := range report.Findings {
+		if ns == "" || ns == "all" || strings.Contains(f.Title, ns) {
+			mag++
+		}
+	}
+	series, err := s.metrics.Series(r.Context(), metrics.Query{
+		Namespace: ns, Name: q.Get("name"), Window: window, Now: time.Now(), Magnitude: mag,
+	})
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()}) //nolint:errcheck
+		return
+	}
+	if series == nil {
+		series = []metrics.Series{}
+	}
+	json.NewEncoder(w).Encode(series) //nolint:errcheck
 }
 
 // handleChangesJSON returns recent cluster change events for the

@@ -42,6 +42,10 @@ func enrichFindings(findings []plugin.Finding, snap Snapshot, store *changestore
 		if len(items) > 0 {
 			findings[i].Evidence = items
 		}
+		// Classify the remediation (temporary vs root-cause), derive confidence
+		// + a root-cause sentence, and assemble the explainable Fixes set. Runs
+		// after evidence/correlation so it can use both as signals.
+		Classify(&findings[i])
 	}
 	return findings
 }

@@ -7,7 +7,6 @@ package web
 
 import (
 	"fmt"
-	"hash/fnv"
 	"regexp"
 	"sort"
 	"strings"
@@ -57,6 +56,77 @@ type dashFinding struct {
 	Log        string `json:"log"`
 	Suggestion string `json:"suggestion"`
 	Fix        bool   `json:"fix"`
+	// Explainability fields (from classify.go via the Finding).
+	Confidence string         `json:"confidence,omitempty"` // "low" | "medium" | "high"
+	Fixes      []dashFix      `json:"fixes,omitempty"`      // classified temporary + root-cause fixes
+	Evidence   []dashEvidence `json:"evidence,omitempty"`   // verifiable supporting items
+}
+
+// dashFix is the front-end shape of a classified remediation.
+type dashFix struct {
+	FixType         string `json:"fixType"` // "temporary" | "root-cause"
+	Kind            string `json:"kind"`
+	Description     string `json:"description"`
+	KubectlCmd      string `json:"kubectlCmd,omitempty"`
+	Risk            string `json:"risk,omitempty"`
+	Rollback        string `json:"rollback,omitempty"`
+	ExpectedOutcome string `json:"expectedOutcome,omitempty"`
+	Downtime        string `json:"downtime,omitempty"`
+	Resource        string `json:"resource,omitempty"`
+	Namespace       string `json:"namespace,omitempty"`
+	Name            string `json:"name,omitempty"`
+	Applicable      bool   `json:"applicable"` // true if the server can auto-apply it (Kind != "advice")
+}
+
+// dashEvidence is the front-end shape of an evidence item.
+type dashEvidence struct {
+	Kind    string `json:"kind"`
+	Source  string `json:"source"`
+	Excerpt string `json:"excerpt,omitempty"`
+	Anchor  string `json:"anchor,omitempty"`
+}
+
+// applicableKinds are the remediation kinds the server can auto-apply via
+// ApplyRemediation. Anything else (e.g. "advice") is copy-only guidance.
+var applicableKinds = map[string]bool{
+	"rollout-restart": true, "resume-cronjob": true, "delete-pod": true,
+	"patch-resource": true, "scale-deployment": true, "add-limits": true,
+	"label-resource": true, "cordon-node": true,
+}
+
+func mapFixes(fixes []plugin.RemediationAction) []dashFix {
+	if len(fixes) == 0 {
+		return nil
+	}
+	out := make([]dashFix, 0, len(fixes))
+	for _, a := range fixes {
+		out = append(out, dashFix{
+			FixType:         a.FixType,
+			Kind:            a.Kind,
+			Description:     a.Description,
+			KubectlCmd:      a.KubectlCmd,
+			Risk:            a.Risk,
+			Rollback:        a.Rollback,
+			ExpectedOutcome: a.ExpectedOutcome,
+			Downtime:        a.Downtime,
+			Resource:        a.Resource,
+			Namespace:       a.Namespace,
+			Name:            a.Name,
+			Applicable:      applicableKinds[a.Kind],
+		})
+	}
+	return out
+}
+
+func mapEvidence(items []plugin.EvidenceItem) []dashEvidence {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]dashEvidence, 0, len(items))
+	for _, e := range items {
+		out = append(out, dashEvidence{Kind: e.Kind, Source: e.Source, Excerpt: e.Excerpt, Anchor: e.Anchor})
+	}
+	return out
 }
 
 // dashboardPayload is the full JSON document served at /api/dashboard and
@@ -112,11 +182,11 @@ func sevKey(sev plugin.Severity) string {
 }
 
 // findingID derives a stable id from a finding's identity so the front-end can
-// reference it and the fix endpoint can look it back up across re-collections.
+// reference it and the fix/investigate endpoints can look it back up across
+// re-collections. Delegates to plugin.Finding.ID so the web layer, the k8s
+// investigation engine, and the MCP server all agree on the same id.
 func findingID(f plugin.Finding) string {
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(f.Category + "\x1f" + f.Title + "\x1f" + f.Source))
-	return fmt.Sprintf("f%08x", h.Sum32())
+	return f.ID()
 }
 
 // Exalm titles format the resource as "<Reason>: <namespace>/<name>", so the
@@ -301,6 +371,9 @@ func buildDashboard(r plugin.Report, podInfo *PodInfo, provider string, autoRefr
 			Log:        logOf(f),
 			Suggestion: f.Suggestion,
 			Fix:        f.Remediation != nil,
+			Confidence: f.Confidence,
+			Fixes:      mapFixes(f.Fixes),
+			Evidence:   mapEvidence(f.Evidence),
 		})
 	}
 

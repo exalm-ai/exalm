@@ -56,3 +56,24 @@ Rules:
 - RBAC forbidden errors indicate missing ClusterRole/RoleBinding — name the ServiceAccount in VERDICT.
 - PVC Pending with StorageClass issues blocks all pods mounting that volume — name the StorageClass.
 - Keep total response under 700 words.`
+
+// investigationPrompt steers the LLM to synthesize a single-finding root-cause
+// narrative from the evidence the deterministic engine already gathered. It is
+// one synthesis call — the model does not request more data.
+const investigationPrompt = `You are a senior site reliability engineer writing the root-cause analysis for ONE Kubernetes finding.
+You are given the finding, the checks already performed, and the evidence collected (logs, events, metrics, recent changes).
+Synthesize a concise root-cause narrative. Output ONLY the two sections below — no preamble.
+
+## ROOT CAUSE
+2–4 sentences explaining what is actually wrong and why, tying the evidence together.
+Distinguish the trigger from the symptom. If a recent change correlates, name it.
+Be explicit that a restart/delete is only a temporary mitigation when the cause is configuration (limits, probes, secrets, selectors).
+
+## WHY THESE FIXES
+1–3 sentences explaining why the recommended root-cause fix addresses the cause, and what the temporary mitigation does and does not solve.
+
+Rules:
+- Treat [REDACTED:...] markers as opaque — never speculate about original values.
+- Never invent evidence, pods, or events not present in the input.
+- Ground every claim in the provided evidence; if evidence is thin, say so and lower the confidence implicitly.
+- Keep the total response under 220 words.`

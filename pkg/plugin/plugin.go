@@ -20,6 +20,8 @@ package plugin
 
 import (
 	"context"
+	"fmt"
+	"hash/fnv"
 	"io"
 	"time"
 )
@@ -109,6 +111,57 @@ type Finding struct {
 	// Examples: "k8s/prod-cluster", "logs/app.log", "aws_cost/us-east-1".
 	// Set by the plugin; used by the dashboard to group multi-source findings.
 	Source string `json:"source,omitempty"`
+	// Confidence is how sure we are about this finding's root cause: "low",
+	// "medium", or "high". Empty means unscored. Set by classification from
+	// cascade size + change-correlation recency.
+	Confidence string `json:"confidence,omitempty"`
+	// RootCause is a short narrative of the underlying cause, distinct from
+	// Detail (what was observed). Empty until classification/investigation runs.
+	RootCause string `json:"root_cause,omitempty"`
+	// Fixes is the classified set of remediations, separating temporary
+	// mitigations from root-cause fixes (see RemediationAction.FixType).
+	// Remediation above stays the single primary action for back-compat; Fixes
+	// is the richer, explainable set the dashboard renders.
+	Fixes []RemediationAction `json:"fixes,omitempty"`
+	// Investigation holds the deep root-cause investigation result. nil until a
+	// user (or an agent) triggers an investigation for this finding.
+	Investigation *Investigation `json:"investigation,omitempty"`
+}
+
+// ID returns a stable identifier for a finding, derived from its category,
+// title, and source. The same finding produces the same ID across re-collections
+// so the dashboard, the fix endpoint, and the investigation engine can all refer
+// to it consistently.
+func (f Finding) ID() string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(f.Category + "\x1f" + f.Title + "\x1f" + f.Source))
+	return fmt.Sprintf("f%08x", h.Sum32())
+}
+
+// Investigation is the result of a deterministic, multi-step root-cause
+// investigation: evidence gathered by following resource relationships, the
+// steps that ran, and the ranked fixes. The narrative (Summary/RootCause) is
+// produced by a single LLM synthesis call over redacted evidence; everything
+// else is rule-based and verifiable.
+type Investigation struct {
+	Summary    string              `json:"summary"`            // one-paragraph root-cause analysis
+	RootCause  string              `json:"root_cause"`         // the underlying cause in one sentence
+	Confidence string              `json:"confidence"`         // "low" | "medium" | "high"
+	Steps      []InvestigationStep `json:"steps"`              // what was checked, in order
+	Evidence   []EvidenceItem      `json:"evidence,omitempty"` // supporting log/event/metric/change items
+	// TemporaryFixes buy time (restart, delete, scale); RootCauseFixes address
+	// the underlying cause (raise limits, fix probe, update secret, …).
+	TemporaryFixes []RemediationAction `json:"temporary_fixes,omitempty"`
+	RootCauseFixes []RemediationAction `json:"root_cause_fixes,omitempty"`
+}
+
+// InvestigationStep is one check the investigation performed, shown in the UI
+// as "✓ Pod logs inspected".
+type InvestigationStep struct {
+	Label  string `json:"label"`            // e.g. "Pod logs inspected"
+	Status string `json:"status"`           // "done" | "skipped" | "unavailable"
+	Detail string `json:"detail,omitempty"` // short note on what was found
+	Anchor string `json:"anchor,omitempty"` // kubectl command to reproduce the check
 }
 
 // ChangeRef is a lightweight pointer into the changestore. Stays decoupled
@@ -161,6 +214,18 @@ type RemediationAction struct {
 	Description string `json:"description"`       // human-readable summary shown in the modal
 	Shell       string `json:"shell,omitempty"`   // "powershell" | "bash" | "" (kubectl)
 	Warning     string `json:"warning,omitempty"` // safety note shown before applying
+	// FixType classifies the action: "temporary" (restart/delete/scale — buys
+	// time but the issue recurs) or "root-cause" (addresses the underlying
+	// cause). Empty when unclassified. Set by plugins/k8s/classify.go.
+	FixType string `json:"fix_type,omitempty"`
+	// Risk is the blast radius of applying this action: "low", "medium", "high".
+	Risk string `json:"risk,omitempty"`
+	// Rollback describes how to undo the action, or why none is needed.
+	Rollback string `json:"rollback,omitempty"`
+	// ExpectedOutcome is what the user should observe after applying.
+	ExpectedOutcome string `json:"expected_outcome,omitempty"`
+	// Downtime is the expected service disruption (e.g. "none", "brief restart").
+	Downtime string `json:"downtime,omitempty"`
 }
 
 // Severity ranks findings from informational to critical.

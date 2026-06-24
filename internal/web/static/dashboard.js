@@ -313,6 +313,7 @@
     html += '</div>';
     html += '<div style="flex:1;"></div>';
     html += '<span style="font-family:\'IBM Plex Mono\',monospace;font-size:12px;color:var(--muted);" id="ex-clock">' + esc(clockText()) + '</span>';
+    html += '<button data-act="logs" title="Open the log viewer" style="display:flex;align-items:center;gap:7px;height:32px;padding:0 12px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--fg);font-size:12.5px;font-weight:500;cursor:pointer;"><span style="font-size:13px;">▤</span><span>Logs</span></button>';
     html += '<button data-act="theme" style="display:flex;align-items:center;gap:7px;height:32px;padding:0 12px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--fg);font-size:12.5px;font-weight:500;cursor:pointer;"><span style="font-size:13px;">' + (s.theme === 'dark' ? '☀' : '☾') + '</span><span>' + (s.theme === 'dark' ? 'Light' : 'Dark') + '</span></button>';
     if (data.canFix) {
       html += '<button data-act="fixall" style="display:flex;align-items:center;gap:8px;height:32px;padding:0 14px;border-radius:8px;border:none;background:linear-gradient(135deg,var(--accent),#6a7bff);color:#fff;font-size:12.5px;font-weight:600;cursor:pointer;box-shadow:0 2px 10px var(--accentGlow);"><span style="width:7px;height:7px;border-radius:2px;background:#fff;"></span>Fix all (' + v.fixableCount + ')</button>';
@@ -345,7 +346,7 @@
       '<div style="display:flex;gap:13px;">' + [['crit', 'critical'], ['high', 'high'], ['med', 'medium'], ['low', 'low']].map(function (x) { return '<span style="display:flex;align-items:center;gap:5px;font-size:10.5px;color:var(--muted);"><span style="width:8px;height:8px;border-radius:2px;background:var(--' + x[0] + ');"></span>' + x[1] + '</span>'; }).join('') + '</div></div>' +
       '<div style="display:flex;align-items:flex-end;gap:3px;height:118px;">' +
       v.tsBars.map(function (b) {
-        return '<div title="' + esc(b.title) + '" style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;min-width:0;">' +
+        return '<div class="ex-chart-bar" data-act="drilldown" data-kind="time" data-label="' + esc(b.title) + '" title="' + esc(b.title) + '" style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;min-width:0;cursor:pointer;">' +
           b.segs.map(function (sg) { return '<div style="width:100%;height:' + sg.h + 'px;background:' + sg.bg + ';border-radius:' + (sg.first ? '3px 3px 0 0' : '0') + ';"></div>'; }).join('') + '</div>';
       }).join('') + '</div>' +
       '<div style="display:flex;justify-content:space-between;margin-top:7px;font-family:\'IBM Plex Mono\',monospace;font-size:10px;color:var(--faint);"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>now</span></div></div>';
@@ -437,7 +438,12 @@
             if (f.log) {
               html += '<div style="' + lbl + 'margin-bottom:5px;">Log</div><pre style="margin:0 0 11px;padding:10px 12px;border-radius:8px;background:var(--code);border:1px solid var(--border);font-family:\'IBM Plex Mono\',monospace;font-size:11px;color:var(--codeFg);white-space:pre-wrap;line-height:1.5;overflow:auto;">' + esc(f.log) + '</pre>';
             }
-            html += '<div style="display:flex;gap:8px;align-items:center;">' + (f.fix ? fixBtn(f, isFixed, isFixing, true) : '') + '<span style="font-size:11.5px;color:var(--muted);">' + esc(f.suggestion) + '</span></div></div>';
+            var confBadge = f.confidence ? '<span title="root-cause confidence" style="font-size:9px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;padding:2px 7px;border-radius:5px;color:' + confColor(f.confidence) + ';background:var(--track);">' + esc(f.confidence) + ' confidence</span>' : '';
+            html += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
+              (f.fix ? fixBtn(f, isFixed, isFixing, true) : '') +
+              '<button data-act="investigate" data-id="' + esc(f.id) + '" style="font-family:inherit;font-size:12px;font-weight:600;border-radius:7px;cursor:pointer;padding:6px 14px;border:1px solid var(--accent);background:transparent;color:var(--accent);">✦ Investigate</button>' +
+              confBadge +
+              '<span style="font-size:11.5px;color:var(--muted);flex:1;min-width:120px;">' + esc(f.suggestion) + '</span></div></div>';
           }
           html += '</div>';
         });
@@ -476,6 +482,8 @@
       var inp = document.getElementById('finding-search');
       if (inp) { inp.focus(); try { inp.setSelectionRange(caret, caret); } catch (e) {} }
     }
+    // Let the charts module wire hover tooltips + drill-down on the fresh DOM.
+    if (window.ExalmCharts && window.ExalmCharts.attach) window.ExalmCharts.attach();
   }
 
   function fixBtn(f, isFixed, isFixing, large) {
@@ -486,7 +494,14 @@
     else { extra = 'background:var(--accent);color:#fff;border:none;'; label = large ? 'Apply fix' : 'Fix'; }
     var pad = large ? (isFixed || isFixing ? 'padding:6px 14px;' : 'padding:6px 16px;') : (isFixed || isFixing ? 'padding:4px 10px;' : 'padding:4px 12px;');
     var size = large ? 'font-size:12px;' : 'font-size:11px;';
-    return '<button data-act="fix" data-id="' + esc(f.id) + '" style="' + base + extra + pad + size + '">' + label + '</button>';
+    // "remediate" opens the explainable remediation panel (does NOT execute);
+    // the panel confirms before applying. Falls back to direct apply if the
+    // panels module isn't loaded.
+    return '<button data-act="remediate" data-id="' + esc(f.id) + '" style="' + base + extra + pad + size + '">' + label + '</button>';
+  }
+
+  function confColor(c) {
+    return c === 'high' ? 'var(--good)' : c === 'medium' ? 'var(--high)' : 'var(--muted)';
   }
 
   function clockText() {
@@ -515,6 +530,21 @@
       case 'group-toggle': { var g = el.getAttribute('data-group'); state.openGroups[g] = !state.openGroups[g]; render(); break; }
       case 'finding-toggle': { var id = el.getAttribute('data-id'); state.openFinding = state.openFinding === id ? null : id; render(); break; }
       case 'fix': e.stopPropagation(); fix(el.getAttribute('data-id')); break;
+      case 'remediate':
+        e.stopPropagation();
+        if (window.ExalmPanels) window.ExalmPanels.openRemediation(el.getAttribute('data-id'));
+        else fix(el.getAttribute('data-id')); // fallback: direct apply
+        break;
+      case 'investigate':
+        e.stopPropagation();
+        if (window.ExalmPanels) window.ExalmPanels.openInvestigation(el.getAttribute('data-id'));
+        break;
+      case 'logs':
+        if (window.ExalmLogs) window.ExalmLogs.open();
+        break;
+      case 'drilldown':
+        if (window.ExalmPanels) window.ExalmPanels.openDrilldown({ kind: el.getAttribute('data-kind'), label: el.getAttribute('data-label') });
+        break;
       case 'filter': state.filter = el.getAttribute('data-f'); render(); break;
       case 'range': state.range = el.getAttribute('data-r'); render(); break;
       case 'llm': state.llmTab = el.getAttribute('data-tab'); render(); break;
@@ -523,6 +553,23 @@
   function onInput(e) {
     if (e.target && e.target.id === 'finding-search') { state.query = e.target.value; render(); }
   }
+
+  // ── Shared API for the panel/chart/log modules ──
+  // Exposed so remediation.js / investigate.js (panels.js), charts.js, and
+  // logviewer.js can reuse helpers, read current data, and drive fix/refresh
+  // without duplicating logic.
+  window.Exalm = {
+    esc: esc, fmt: fmt, css: css, sevMeta: sevMeta, mdToHtml: mdToHtml, confColor: confColor,
+    data: function () { return data; },
+    state: state,
+    namespaces: function () { return data.namespaces || []; },
+    findings: function () { return data.findings || []; },
+    finding: function (id) { return (data.findings || []).filter(function (f) { return f.id === id; })[0]; },
+    refresh: refresh,
+    // applyPrimaryFix runs the existing fix flow (Fixing… → Fixed ✓ → refresh);
+    // the remediation panel calls this on confirm.
+    applyPrimaryFix: fix
+  };
 
   // ── Boot ──
   applyTheme();
