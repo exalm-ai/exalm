@@ -17,9 +17,22 @@
     @keyframes ex-pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
     @keyframes ex-spin { to { transform: rotate(360deg); } }
     button { font-family: inherit; }
-    /* Responsive: stack the grid rows on narrow viewports. */
+    /* Row hover (Log Explorer table rows + Alert cards). */
+    .ex-row { transition: background .12s ease; }
+    .ex-row:hover { background: var(--panel2) !important; }
+    /* Sidebar nav hover. */
+    .ex-sidebar nav button:hover { color: var(--fg) !important; }
+    /* Responsive: collapse the multi-column page grids. */
     @media (max-width: 1080px) {
-      .ex-activity, .ex-stats, .ex-main { grid-template-columns: 1fr !important; }
+      .ex-statcards { grid-template-columns: repeat(2, 1fr) !important; }
+      .ex-2col { grid-template-columns: 1fr !important; }
+    }
+    /* Narrow: collapse the sidebar to an icon rail. */
+    @media (max-width: 760px) {
+      .ex-sidebar { width: 60px !important; }
+      .ex-sidebar nav button span:last-child,
+      .ex-sidebar .ex-brand-text { display: none !important; }
+      .ex-statcards { grid-template-columns: 1fr 1fr !important; }
     }
   </style>
 </head>

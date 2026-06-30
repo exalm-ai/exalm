@@ -1,20 +1,23 @@
 'use strict';
-// Exalm dashboard — vanilla-JS port of the redesign prototype, wired to the
-// real backend (/api/dashboard). All derived values mirror the reference's
-// renderVals(); the namespace selector and filters operate client-side for
-// instant response. Live updates re-fetch /api/dashboard and re-render in
-// place, preserving client-side state (theme, selection, fix progress).
+// Exalm dashboard — base44-style multi-page shell over the real backend
+// (/api/dashboard). A left sidebar routes between client-rendered pages
+// (Dashboard / Log Explorer / AI Analysis / Alerts / Settings); all pages reuse
+// the same computeVals() + the shared window.Exalm API. No backend change — the
+// namespace selector, fix/investigate panels, log viewer, charts, and
+// auto-refresh all behave exactly as before, just reorganized.
 
 (function () {
   var THEME_KEY = 'exalm.theme';
+  var PAGE_KEY = 'exalm.page';
   var GROUP_ORDER = ['Other', 'Pods', 'Resources', 'Security', 'Services', 'Workloads'];
+  var PAGES = ['dashboard', 'explorer', 'ai', 'alerts', 'settings'];
 
   var THEMES = {
     dark: {
-      '--bg': '#0b0e14', '--panel': '#11161f', '--panel2': '#161c27', '--border': '#222b3a',
-      '--track': '#1e2737', '--code': '#0a0d13', '--codeFg': '#9fb0c3', '--scroll': '#2a3343',
-      '--fg': '#e6edf3', '--body': '#c4cfdc', '--muted': '#8b97a7', '--faint': '#5b6675',
-      '--accent': '#4c8dff', '--accentGlow': 'rgba(76,141,255,.45)',
+      '--bg': '#070b14', '--panel': '#0e1626', '--panel2': '#131f33', '--border': '#1f2c44',
+      '--sidebar': '#0a1120', '--track': '#17243a', '--code': '#070c15', '--codeFg': '#9fb6cf', '--scroll': '#243348',
+      '--fg': '#e8eef6', '--body': '#c2cfde', '--muted': '#8294aa', '--faint': '#5b6c83',
+      '--accent': '#22b8e6', '--accentGlow': 'rgba(34,184,230,.45)', '--accentSoft': 'rgba(34,184,230,.14)',
       '--crit': '#ff5d5d', '--high': '#ff9f45', '--med': '#f5c542', '--low': '#5b9bff', '--good': '#3ddc97',
       '--critSoft': 'rgba(255,93,93,.14)', '--critLine': 'rgba(255,93,93,.3)',
       '--highSoft': 'rgba(255,159,69,.14)', '--highLine': 'rgba(255,159,69,.28)',
@@ -22,10 +25,10 @@
       '--lowSoft': 'rgba(91,155,255,.14)', '--lowLine': 'rgba(91,155,255,.28)'
     },
     light: {
-      '--bg': '#f1f4f9', '--panel': '#ffffff', '--panel2': '#f6f8fc', '--border': '#e2e8f0',
-      '--track': '#eef2f7', '--code': '#0e1320', '--codeFg': '#aebccf', '--scroll': '#cbd5e1',
-      '--fg': '#13203a', '--body': '#3c4a63', '--muted': '#64748b', '--faint': '#94a3b8',
-      '--accent': '#2563eb', '--accentGlow': 'rgba(37,99,235,.28)',
+      '--bg': '#eef2f8', '--panel': '#ffffff', '--panel2': '#f4f8fc', '--border': '#dfe6ef',
+      '--sidebar': '#0e1626', '--track': '#eaf0f7', '--code': '#0b1220', '--codeFg': '#aebccf', '--scroll': '#cbd5e1',
+      '--fg': '#0f1d33', '--body': '#39475e', '--muted': '#5a6b82', '--faint': '#90a0b5',
+      '--accent': '#0e9bc4', '--accentGlow': 'rgba(14,155,196,.26)', '--accentSoft': 'rgba(14,155,196,.1)',
       '--crit': '#dc2626', '--high': '#ea7317', '--med': '#c2870a', '--low': '#2563eb', '--good': '#0f9d6b',
       '--critSoft': 'rgba(220,38,38,.09)', '--critLine': 'rgba(220,38,38,.2)',
       '--highSoft': 'rgba(234,115,23,.1)', '--highLine': 'rgba(234,115,23,.22)',
@@ -33,14 +36,18 @@
       '--lowSoft': 'rgba(37,99,235,.09)', '--lowLine': 'rgba(37,99,235,.2)'
     }
   };
+  // The light theme keeps a dark sidebar (base44 style); use a fixed light text
+  // colour for sidebar contents regardless of theme.
+  var SIDEBAR_FG = '#e8eef6', SIDEBAR_MUTED = '#8294aa';
 
   var data = window.__DASH__ || { namespaces: [], findings: [], raw: '', provider: 'llm', autoRefresh: false };
-  var savedTheme = 'dark';
+  var savedTheme = 'dark', savedPage = 'dashboard';
   try { var t0 = localStorage.getItem(THEME_KEY); if (t0 === 'light' || t0 === 'dark') savedTheme = t0; } catch (e) {}
+  try { var p0 = localStorage.getItem(PAGE_KEY); if (PAGES.indexOf(p0) !== -1) savedPage = p0; } catch (e) {}
 
   var state = {
-    theme: savedTheme, query: '', filter: 'all', range: '24h', llmTab: 'all',
-    selectedNs: 'all', nsMenuOpen: false,
+    theme: savedTheme, page: savedPage, query: '', filter: 'all', range: '24h', llmTab: 'all',
+    freqScope: 'cluster', selectedNs: 'all', nsMenuOpen: false,
     openGroups: { Pods: true, Resources: true }, openFinding: null,
     fixed: {}, fixing: {}
   };
@@ -175,7 +182,8 @@
     var healthScore = Math.max(12, Math.round(100 - (agg.crit * 6 + agg.high * 0.4 + agg.med * 0.1)));
     var healthColor = healthScore < 40 ? 'var(--crit)' : healthScore < 70 ? 'var(--high)' : 'var(--good)';
 
-    var scale = allMode ? 1 : Math.max(0.35, podCount / 92);
+    var nsScopeFreq = (s.freqScope === 'namespace' && !allMode);
+    var scale = (allMode || !nsScopeFreq) ? 1 : Math.max(0.35, podCount / 92);
     var series = buildSeries(scale);
     var maxTot = Math.max.apply(null, series.map(function (b) { return b.crit + b.high + b.med + b.low; }).concat([1]));
     var H = 116, segColor = { crit: 'var(--crit)', high: 'var(--high)', med: 'var(--med)', low: 'var(--low)' };
@@ -185,18 +193,6 @@
         .map(function (x, i) { return { h: Math.max(1, (x[1] / maxTot) * H), bg: segColor[x[0]], first: i === 0 }; });
       return { title: b.hour + ':00 · ' + total + ' findings', segs: segs };
     });
-
-    var scopeFindings = (data.findings || []).filter(function (f) { return allMode || f.nsKey === s.selectedNs; });
-    var catCounts = {}; GROUP_ORDER.forEach(function (g) { catCounts[g] = 0; });
-    scopeFindings.forEach(function (f) { if (catCounts[f.group] != null) catCounts[f.group]++; });
-    var catMax = Math.max.apply(null, GROUP_ORDER.map(function (g) { return catCounts[g]; }).concat([1]));
-    var catColor = function (g) { return ({ Other: 'var(--low)', Pods: 'var(--high)', Resources: 'var(--med)', Security: 'var(--high)', Services: 'var(--low)', Workloads: 'var(--med)' }[g]) || 'var(--low)'; };
-    var catShort = { Other: 'Other', Pods: 'Pods', Resources: 'Resrc', Security: 'Secur', Services: 'Svcs', Workloads: 'Wkld' };
-    var catBars = GROUP_ORDER.map(function (g) { return { label: catShort[g] + ' ' + catCounts[g], h: Math.max(4, (catCounts[g] / catMax) * 54), bg: catColor(g) }; });
-
-    var distTotal = Math.max(1, agg.crit + agg.high + agg.med + agg.low);
-    var distSegs = [['crit', agg.crit, 'var(--crit)'], ['high', agg.high, 'var(--high)'], ['med', agg.med, 'var(--med)'], ['low', agg.low, 'var(--low)']]
-      .filter(function (x) { return x[1] > 0; }).map(function (x) { var pct = (x[1] / distTotal) * 100; return { pct: pct, bg: x[2], label: pct > 11 ? (x[0] + ' ' + x[1]) : '' }; });
 
     var q = s.query.trim().toLowerCase();
     var matchSev = function (sev) { return s.filter === 'all' ? true : (s.filter === 'med' ? sev === 'medium' : (s.filter === 'low' ? (sev === 'low' || sev === 'other') : sev === s.filter)); };
@@ -210,6 +206,10 @@
       return { name: name, shown: items.length, items: items, open: !!s.openGroups[name] };
     }).filter(function (g) { return g.items.length > 0; });
 
+    // Flattened, filtered rows in group order — for the Log Explorer table.
+    var rows = [];
+    groups.forEach(function (g) { g.items.forEach(function (f) { rows.push(f); }); });
+
     var fixableCount = base.filter(function (f) { return f.fix && !s.fixed[f.id]; }).length;
     var tabCounts = {
       all: base.length,
@@ -221,13 +221,13 @@
 
     return {
       allMode: allMode, nsObj: nsObj, NS: NS, agg: agg, sevCounts: sevCounts,
+      nsLabel: allMode ? 'all namespaces' : nsObj.key, nsDot: allMode ? 'var(--accent)' : nsObj.color,
       totalFindings: agg.findings, podCount: podCount, unhealthy: unhealthy, errorRate: errorRate, bigNumber: bigNumber,
       donutSegs: donutSegs, donutCenter: allMode ? donutTotal : nsObj.findings,
-      ringSegs: ringSegs, healthScore: healthScore, healthColor: healthColor,
+      ringSegs: ringSegs, ringTotal: ringTotal, healthScore: healthScore, healthColor: healthColor,
       healthDash: ((healthScore / 100) * C).toFixed(1) + ' ' + C,
       sloColor: agg.crit > 0 ? 'var(--high)' : 'var(--good)', sloLabel: agg.crit > 0 ? 'SLO at risk' : 'SLO all green',
-      tsBars: tsBars, catBars: catBars, distSegs: distSegs,
-      groups: groups, shownTotal: shownTotal, fixableCount: fixableCount, tabCounts: tabCounts
+      tsBars: tsBars, groups: groups, rows: rows, shownTotal: shownTotal, fixableCount: fixableCount, tabCounts: tabCounts
     };
   }
 
@@ -262,7 +262,6 @@
         return '<div style="display:flex;gap:10px;' + box + '"><span style="color:var(--high)">⚿</span><div><strong style="color:var(--fg)">' + esc(f.title) + '</strong><div style="color:var(--muted)">' + esc(f.root) + '</div></div></div>';
       }).join('') + '</div>';
     }
-    // prevention
     var seen = {}, tips = [];
     (data.findings || []).forEach(function (f) { if (f.suggestion && !seen[f.suggestion]) { seen[f.suggestion] = true; tips.push(f.suggestion); } });
     tips = tips.slice(0, 8);
@@ -272,37 +271,54 @@
     }).join('') + '</div>';
   }
 
-  // ── Render ──
-  function render() {
-    var v = computeVals(), s = state;
-    var capWidth = window.innerWidth || 1400;
+  // ── Reusable card chrome ──
+  function card(inner, pad) { return '<div style="background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:' + (pad || '16px') + ';">' + inner + '</div>'; }
+  function cardLabel(t) { return '<div style="font-size:10.5px;letter-spacing:.7px;text-transform:uppercase;color:var(--faint);font-weight:600;">' + esc(t) + '</div>'; }
 
-    var nsMenuRows = [{ key: 'all', color: '#8b97a7', label: 'all namespaces', count: v.NS.reduce(function (a, n) { return a + n.findings; }, 0) }]
-      .concat(v.NS.map(function (n) { return { key: n.key, color: n.color, label: n.key, count: n.findings }; }));
-
-    function pill(color, soft, line, label, val) {
-      return '<div style="display:flex;align-items:center;gap:6px;padding:3px 11px 3px 9px;border-radius:30px;background:' + soft + ';border:1px solid ' + line + ';">' +
-        '<span style="width:7px;height:7px;border-radius:50%;background:' + color + ';"></span>' +
-        '<span style="font-size:12px;color:var(--muted);">' + label + '</span>' +
-        '<span style="font-size:12px;font-weight:700;color:' + color + ';">' + val + '</span></div>';
+  // ── Sidebar icons (monochrome, currentColor) ──
+  function icon(name) {
+    var a = 'width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"';
+    switch (name) {
+      case 'dashboard': return '<svg ' + a + '><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>';
+      case 'explorer': return '<svg ' + a + '><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>';
+      case 'ai': return '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.9 5.5L19.5 9l-5.6 1.5L12 16l-1.9-5.5L4.5 9l5.6-1.5z"/></svg>';
+      case 'alerts': return '<svg ' + a + '><path d="M6 8a6 6 0 0112 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21a2 2 0 004 0"/></svg>';
+      case 'settings': return '<svg ' + a + '><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.6 1.6 0 00-2.7 1.1V21a2 2 0 11-4 0v-.2a1.6 1.6 0 00-2.7-1.1l-.1.1a2 2 0 11-2.8-2.8l.1-.1A1.6 1.6 0 004 15a1.6 1.6 0 00-1.5-1H2a2 2 0 110-4h.2A1.6 1.6 0 004 9a1.6 1.6 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1A1.6 1.6 0 009 5h.1A1.6 1.6 0 0010 3.5V3a2 2 0 114 0v.2A1.6 1.6 0 0015 5a1.6 1.6 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1A1.6 1.6 0 0020 9v.1a1.6 1.6 0 001.5 1H22a2 2 0 110 4h-.2a1.6 1.6 0 00-1.4 1z"/></svg>';
     }
+    return '';
+  }
 
-    var html = '<div style="' + css({ minHeight: '100vh', background: 'var(--bg)', color: 'var(--fg)', fontFamily: "'IBM Plex Sans',system-ui,sans-serif", fontSize: '14px', transition: 'background .25s,color .25s' }) + '">';
+  // ── Sidebar ──
+  function sidebar() {
+    var items = [['dashboard', 'Dashboard'], ['explorer', 'Log Explorer'], ['ai', 'AI Analysis'], ['alerts', 'Alerts'], ['settings', 'Settings']];
+    var nav = items.map(function (it) {
+      var active = state.page === it[0];
+      return '<button data-act="nav" data-page="' + it[0] + '" style="display:flex;align-items:center;gap:12px;width:100%;padding:10px 14px;border:none;border-left:3px solid ' + (active ? 'var(--accent)' : 'transparent') + ';cursor:pointer;font-family:inherit;font-size:13.5px;font-weight:' + (active ? '600' : '500') + ';text-align:left;background:' + (active ? 'var(--accentSoft)' : 'transparent') + ';color:' + (active ? 'var(--accent)' : SIDEBAR_MUTED) + ';">' +
+        '<span style="display:flex;width:18px;height:18px;flex:none;">' + icon(it[0]) + '</span><span>' + it[1] + '</span></button>';
+    }).join('');
+    return '<aside class="ex-sidebar" style="width:230px;flex:none;background:var(--sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;position:sticky;top:0;height:100vh;">' +
+      '<div style="display:flex;align-items:center;gap:10px;padding:18px 16px 16px;">' +
+      '<div style="width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,var(--accent),#7b5bff);display:flex;align-items:center;justify-content:center;box-shadow:0 0 16px var(--accentGlow);"><div style="width:11px;height:11px;border-radius:3px;background:#fff;"></div></div>' +
+      '<div class="ex-brand-text"><div style="font-weight:700;font-size:15px;letter-spacing:-.2px;color:' + SIDEBAR_FG + ';">Exalm</div><div style="font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:' + SIDEBAR_MUTED + ';">K8s Analyzer</div></div></div>' +
+      '<nav style="display:flex;flex-direction:column;gap:2px;margin-top:6px;">' + nav + '</nav>' +
+      '<div style="flex:1;"></div>' +
+      '<div style="padding:14px 16px;border-top:1px solid var(--border);font-size:11px;color:' + SIDEBAR_MUTED + ';">' +
+      '<span style="width:6px;height:6px;border-radius:50%;background:var(--good);display:inline-block;margin-right:6px;animation:ex-pulse 2s ease infinite;"></span>live · ' + esc(data.provider || 'llm') + '</div></aside>';
+  }
 
-    // HEADER
-    html += '<header style="display:flex;align-items:center;gap:16px;padding:0 20px;height:54px;border-bottom:1px solid var(--border);background:var(--panel);position:sticky;top:0;z-index:30;">' +
-      '<div style="display:flex;align-items:center;gap:9px;"><div style="width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,var(--accent),#7b5bff);display:flex;align-items:center;justify-content:center;box-shadow:0 0 14px var(--accentGlow);"><div style="width:8px;height:8px;border-radius:2px;background:#fff;"></div></div><span style="font-weight:700;font-size:16px;letter-spacing:-.3px;">exalm</span></div>' +
-      '<div style="display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px;"><span style="width:6px;height:6px;border-radius:50%;background:var(--good);animation:ex-pulse 2s ease infinite;"></span><span style="font-weight:500;color:var(--fg);">Kubernetes analysis</span></div>';
-    // ns selector
-    html += '<div style="position:relative;"><button data-act="ns-toggle" style="display:flex;align-items:center;gap:9px;height:32px;padding:0 11px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--fg);font-size:12.5px;font-weight:500;cursor:pointer;">' +
+  // ── Namespace selector (shared in the top bar) ──
+  function nsSelector(v) {
+    var nsMenuRows = [{ key: 'all', color: '#8294aa', label: 'all namespaces', count: v.NS.reduce(function (a, n) { return a + n.findings; }, 0) }]
+      .concat(v.NS.map(function (n) { return { key: n.key, color: n.color, label: n.key, count: n.findings }; }));
+    var html = '<div style="position:relative;"><button data-act="ns-toggle" style="display:flex;align-items:center;gap:9px;height:34px;padding:0 11px;border-radius:9px;border:1px solid var(--border);background:var(--panel2);color:var(--fg);font-size:12.5px;font-weight:500;cursor:pointer;">' +
       '<span style="width:8px;height:8px;border-radius:2px;background:' + v.nsDot + ';"></span>' +
       '<span style="font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:.5px;">namespace</span>' +
-      '<span style="font-family:\'IBM Plex Mono\',monospace;">' + esc(v.allMode ? 'all namespaces' : v.nsObj.key) + '</span>' +
-      '<span style="font-size:9px;color:var(--faint);transform:' + (s.nsMenuOpen ? 'rotate(180deg)' : 'none') + ';transition:transform .2s;">▾</span></button>';
-    if (s.nsMenuOpen) {
-      html += '<div style="position:absolute;top:38px;left:0;min-width:230px;background:var(--panel);border:1px solid var(--border);border-radius:10px;box-shadow:0 12px 34px rgba(0,0,0,.45);padding:5px;z-index:50;">';
+      '<span style="font-family:\'IBM Plex Mono\',monospace;">' + esc(v.nsLabel) + '</span>' +
+      '<span style="font-size:9px;color:var(--faint);transform:' + (state.nsMenuOpen ? 'rotate(180deg)' : 'none') + ';transition:transform .2s;">▾</span></button>';
+    if (state.nsMenuOpen) {
+      html += '<div style="position:absolute;top:40px;right:0;min-width:230px;background:var(--panel);border:1px solid var(--border);border-radius:10px;box-shadow:0 12px 34px rgba(0,0,0,.45);padding:5px;z-index:50;">';
       nsMenuRows.forEach(function (n) {
-        var active = s.selectedNs === n.key;
+        var active = state.selectedNs === n.key;
         html += '<button data-act="ns-select" data-ns="' + esc(n.key) + '" style="display:flex;align-items:center;gap:9px;width:100%;padding:7px 9px;border-radius:7px;border:none;cursor:pointer;background:' + (active ? 'var(--panel2)' : 'transparent') + ';color:var(--fg);">' +
           '<span style="width:8px;height:8px;border-radius:2px;background:' + n.color + ';flex:none;"></span>' +
           '<span style="flex:1;text-align:left;font-family:\'IBM Plex Mono\',monospace;font-size:12.5px;">' + esc(n.label) + '</span>' +
@@ -310,179 +326,214 @@
       });
       html += '</div>';
     }
-    html += '</div>';
-    html += '<div style="flex:1;"></div>';
-    html += '<span style="font-family:\'IBM Plex Mono\',monospace;font-size:12px;color:var(--muted);" id="ex-clock">' + esc(clockText()) + '</span>';
-    html += '<button data-act="logs" title="Open the log viewer" style="display:flex;align-items:center;gap:7px;height:32px;padding:0 12px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--fg);font-size:12.5px;font-weight:500;cursor:pointer;"><span style="font-size:13px;">▤</span><span>Logs</span></button>';
-    html += '<button data-act="theme" style="display:flex;align-items:center;gap:7px;height:32px;padding:0 12px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--fg);font-size:12.5px;font-weight:500;cursor:pointer;"><span style="font-size:13px;">' + (s.theme === 'dark' ? '☀' : '☾') + '</span><span>' + (s.theme === 'dark' ? 'Light' : 'Dark') + '</span></button>';
-    if (data.canFix) {
-      html += '<button data-act="fixall" style="display:flex;align-items:center;gap:8px;height:32px;padding:0 14px;border-radius:8px;border:none;background:linear-gradient(135deg,var(--accent),#6a7bff);color:#fff;font-size:12.5px;font-weight:600;cursor:pointer;box-shadow:0 2px 10px var(--accentGlow);"><span style="width:7px;height:7px;border-radius:2px;background:#fff;"></span>Fix all (' + v.fixableCount + ')</button>';
+    return html + '</div>';
+  }
+
+  // ── Top bar (page title + shared controls) ──
+  function topbar(v) {
+    var meta = {
+      dashboard: ['Dashboard', 'Cluster health and findings overview'],
+      explorer: ['Log Explorer', 'Search and filter all findings'],
+      ai: ['AI Analysis', 'LLM-powered root-cause analysis'],
+      alerts: ['Alerts', 'Critical and high-severity findings'],
+      settings: ['Settings', 'Theme and environment']
+    }[state.page] || ['Dashboard', ''];
+    var actions = '';
+    if (data.canFix && (state.page === 'dashboard' || state.page === 'explorer')) {
+      actions += '<button data-act="fixall" style="display:flex;align-items:center;gap:8px;height:34px;padding:0 15px;border-radius:9px;border:none;background:var(--accent);color:#04222b;font-size:12.5px;font-weight:700;cursor:pointer;box-shadow:0 2px 12px var(--accentGlow);"><span style="width:7px;height:7px;border-radius:2px;background:#04222b;"></span>Fix all (' + v.fixableCount + ')</button>';
     }
-    html += '</header>';
+    return '<header style="display:flex;align-items:center;gap:14px;padding:16px 22px;border-bottom:1px solid var(--border);background:var(--bg);position:sticky;top:0;z-index:30;">' +
+      '<div style="flex:1;min-width:0;"><div style="font-size:21px;font-weight:700;letter-spacing:-.3px;">' + esc(meta[0]) + '</div><div style="font-size:12.5px;color:var(--muted);margin-top:1px;">' + esc(meta[1]) + '</div></div>' +
+      nsSelector(v) +
+      '<button data-act="logs" title="Open the log viewer" style="display:flex;align-items:center;gap:7px;height:34px;padding:0 12px;border-radius:9px;border:1px solid var(--border);background:var(--panel2);color:var(--fg);font-size:12.5px;font-weight:500;cursor:pointer;"><span style="font-size:13px;">▤</span><span>Logs</span></button>' +
+      '<button data-act="theme" title="Toggle theme" style="display:flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:9px;border:1px solid var(--border);background:var(--panel2);color:var(--fg);font-size:14px;cursor:pointer;">' + (state.theme === 'dark' ? '☀' : '☾') + '</button>' +
+      actions + '</header>';
+  }
 
-    // SUMMARY STRIP
-    html += '<div style="display:flex;align-items:center;gap:8px;padding:11px 20px;border-bottom:1px solid var(--border);background:var(--bg);flex-wrap:wrap;">' +
-      pill('var(--crit)', 'var(--critSoft)', 'var(--critLine)', 'critical', v.sevCounts.crit) +
-      pill('var(--high)', 'var(--highSoft)', 'var(--highLine)', 'high', v.sevCounts.high) +
-      pill('var(--med)', 'var(--medSoft)', 'var(--medLine)', 'medium', v.sevCounts.med) +
-      pill('var(--low)', 'var(--lowSoft)', 'var(--lowLine)', 'low', v.sevCounts.low) +
-      '<span style="width:1px;height:18px;background:var(--border);margin:0 4px;"></span>' +
-      '<span style="font-size:12.5px;color:var(--muted);">Scope <strong style="color:var(--fg)">' + esc(v.allMode ? 'all namespaces' : v.nsObj.key) + '</strong> · <strong style="color:var(--fg)">' + fmt(v.podCount) + ' pods</strong> · <span style="color:var(--high)">' + v.unhealthy + ' unhealthy</span> · via ' + esc(data.provider || 'llm') + '</span></div>';
+  // ── Stat cards ──
+  function statCards(v) {
+    var cards = [
+      ['Total findings', v.totalFindings, 'var(--accent)'],
+      ['Errors / high', v.sevCounts.high, 'var(--high)'],
+      ['Critical', v.sevCounts.crit, 'var(--crit)'],
+      ['Warnings / med', v.sevCounts.med, 'var(--med)'],
+      ['Namespaces', v.NS.length, 'var(--low)']
+    ];
+    return '<div class="ex-statcards" style="display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:16px;">' +
+      cards.map(function (c) {
+        return '<div style="background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:15px 16px;">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;">' + cardLabel(c[0]) + '<span style="width:8px;height:8px;border-radius:2px;background:' + c[2] + ';"></span></div>' +
+          '<div style="font-size:30px;font-weight:700;line-height:1;margin-top:12px;font-variant-numeric:tabular-nums;">' + fmt(c[1]) + '</div></div>';
+      }).join('') + '</div>';
+  }
 
-    // ACTIVITY ROW
-    html += '<div class="ex-activity" style="padding:16px 20px 0;display:grid;grid-template-columns:232px 1fr 312px;gap:14px;">';
-    // big metric
-    html += '<div style="background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:16px;display:flex;flex-direction:column;justify-content:space-between;">' +
-      '<div style="font-size:10.5px;letter-spacing:.7px;text-transform:uppercase;color:var(--faint);font-weight:600;">Log lines analysed · 24h</div>' +
-      '<div><div style="font-size:38px;font-weight:700;letter-spacing:-1px;line-height:1;font-variant-numeric:tabular-nums;">' + v.bigNumber + '</div>' +
-      '<div style="display:flex;align-items:center;gap:7px;margin-top:9px;"><span style="font-size:11px;font-weight:600;color:var(--good);background:var(--lowSoft);padding:2px 8px;border-radius:20px;">▲ 4.2%</span><span style="font-size:11px;color:var(--muted);">vs prior 24h</span></div></div>' +
-      '<div style="display:flex;gap:14px;margin-top:14px;padding-top:13px;border-top:1px solid var(--border);">' +
-      '<div><div style="font-size:16px;font-weight:700;">' + v.errorRate + '</div><div style="font-size:10px;color:var(--muted);">error rate</div></div>' +
-      '<div><div style="font-size:16px;font-weight:700;">' + fmt(v.podCount) + '</div><div style="font-size:10px;color:var(--muted);">pods</div></div>' +
-      '<div><div style="font-size:16px;font-weight:700;color:var(--high);">' + v.unhealthy + '</div><div style="font-size:10px;color:var(--muted);">unhealthy</div></div></div></div>';
-    // time series
-    html += '<div style="background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:14px 16px;">' +
-      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><div style="font-size:10.5px;letter-spacing:.7px;text-transform:uppercase;color:var(--faint);font-weight:600;">Findings over time</div>' +
-      '<div style="display:flex;gap:13px;">' + [['crit', 'critical'], ['high', 'high'], ['med', 'medium'], ['low', 'low']].map(function (x) { return '<span style="display:flex;align-items:center;gap:5px;font-size:10.5px;color:var(--muted);"><span style="width:8px;height:8px;border-radius:2px;background:var(--' + x[0] + ');"></span>' + x[1] + '</span>'; }).join('') + '</div></div>' +
-      '<div style="display:flex;align-items:flex-end;gap:3px;height:118px;">' +
-      v.tsBars.map(function (b) {
-        return '<div class="ex-chart-bar" data-act="drilldown" data-kind="time" data-label="' + esc(b.title) + '" title="' + esc(b.title) + '" style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;min-width:0;cursor:pointer;">' +
-          b.segs.map(function (sg) { return '<div style="width:100%;height:' + sg.h + 'px;background:' + sg.bg + ';border-radius:' + (sg.first ? '3px 3px 0 0' : '0') + ';"></div>'; }).join('') + '</div>';
-      }).join('') + '</div>' +
-      '<div style="display:flex;justify-content:space-between;margin-top:7px;font-family:\'IBM Plex Mono\',monospace;font-size:10px;color:var(--faint);"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>now</span></div></div>';
-    // ns donut
-    html += '<div style="background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:14px 16px;">' +
-      '<div style="font-size:10.5px;letter-spacing:.7px;text-transform:uppercase;color:var(--faint);font-weight:600;margin-bottom:4px;">Findings by namespace</div>' +
-      '<div style="display:flex;align-items:center;gap:14px;"><svg width="92" height="92" viewBox="0 0 80 80" style="flex:none;"><g transform="rotate(-90 40 40)"><circle cx="40" cy="40" r="34" fill="none" stroke="var(--track)" stroke-width="10"></circle>' +
-      v.donutSegs.map(function (d) { return '<circle data-act="ns-select" data-ns="' + esc(d.key) + '" cx="40" cy="40" r="34" fill="none" stroke="' + d.color + '" stroke-width="10" stroke-dasharray="' + d.dash + '" stroke-dashoffset="' + d.offset + '" opacity="' + d.opacity + '" style="cursor:pointer;transition:opacity .2s;"></circle>'; }).join('') +
-      '</g><text x="40" y="38" text-anchor="middle" font-size="17" font-weight="700" fill="var(--fg)">' + v.donutCenter + '</text><text x="40" y="50" text-anchor="middle" font-size="7" fill="var(--faint)" letter-spacing="1">FINDINGS</text></svg>' +
-      '<div style="flex:1;display:flex;flex-direction:column;gap:3px;min-width:0;">' +
-      v.NS.map(function (n) {
-        var active = s.selectedNs === n.key;
-        return '<button data-act="ns-select" data-ns="' + esc(n.key) + '" style="display:flex;align-items:center;gap:7px;width:100%;padding:3px 6px;border-radius:6px;border:1px solid ' + (active ? 'var(--accent)' : 'transparent') + ';background:' + (active ? 'var(--lowSoft)' : 'transparent') + ';cursor:pointer;color:var(--fg);">' +
-          '<span style="width:8px;height:8px;border-radius:2px;background:' + n.color + ';flex:none;"></span>' +
-          '<span style="flex:1;text-align:left;font-family:\'IBM Plex Mono\',monospace;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(n.key) + '</span>' +
-          '<span style="font-size:11px;font-weight:600;">' + n.findings + '</span></button>';
-      }).join('') + '</div></div></div>';
-    html += '</div>';
-
-    // STATS ROW
-    html += '<div class="ex-stats" style="padding:14px 20px 0;display:grid;grid-template-columns:200px 200px 1fr;gap:14px;">';
-    // cluster health
-    html += '<div style="background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:15px;"><div style="font-size:10.5px;letter-spacing:.7px;text-transform:uppercase;color:var(--faint);font-weight:600;">Cluster health</div>' +
-      '<div style="display:flex;align-items:center;gap:13px;margin-top:10px;"><svg width="76" height="76" viewBox="0 0 80 80"><g transform="rotate(-90 40 40)"><circle cx="40" cy="40" r="34" fill="none" stroke="var(--track)" stroke-width="9"></circle><circle cx="40" cy="40" r="34" fill="none" stroke="' + v.healthColor + '" stroke-width="9" stroke-linecap="round" stroke-dasharray="' + v.healthDash + '"></circle></g><text x="40" y="38" text-anchor="middle" font-size="20" font-weight="700" fill="var(--fg)">' + v.healthScore + '</text><text x="40" y="51" text-anchor="middle" font-size="8" fill="var(--faint)" letter-spacing="1">HEALTH</text></svg>' +
-      '<div style="display:flex;flex-direction:column;gap:8px;"><div><div style="font-size:18px;font-weight:700;line-height:1;">' + v.totalFindings + '</div><div style="font-size:10.5px;color:var(--muted);">findings</div></div>' +
-      '<div style="display:flex;align-items:center;gap:5px;"><span style="width:6px;height:6px;border-radius:50%;background:' + v.sloColor + ';"></span><span style="font-size:11px;color:var(--muted);">' + esc(v.sloLabel) + '</span></div></div></div></div>';
-    // severity ring
-    html += '<div style="background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:15px;"><div style="font-size:10.5px;letter-spacing:.7px;text-transform:uppercase;color:var(--faint);font-weight:600;">Severity</div>' +
-      '<div style="display:flex;align-items:center;gap:13px;margin-top:10px;"><svg width="76" height="76" viewBox="0 0 80 80"><g transform="rotate(-90 40 40)"><circle cx="40" cy="40" r="34" fill="none" stroke="var(--track)" stroke-width="9"></circle>' +
+  // ── Severity donut + legend ──
+  function severityDonut(v) {
+    var legend = [['Critical', 'crit', v.sevCounts.crit], ['High', 'high', v.sevCounts.high], ['Medium', 'med', v.sevCounts.med], ['Low', 'low', v.sevCounts.low]];
+    return card(cardLabel('Severity distribution') +
+      '<div style="display:flex;align-items:center;gap:18px;margin-top:14px;flex-wrap:wrap;justify-content:center;">' +
+      '<svg width="150" height="150" viewBox="0 0 80 80" style="flex:none;"><g transform="rotate(-90 40 40)"><circle cx="40" cy="40" r="34" fill="none" stroke="var(--track)" stroke-width="9"></circle>' +
       v.ringSegs.map(function (r) { return '<circle cx="40" cy="40" r="34" fill="none" stroke="' + r.color + '" stroke-width="9" stroke-dasharray="' + r.dash + '" stroke-dashoffset="' + r.offset + '"></circle>'; }).join('') +
-      '</g><text x="40" y="38" text-anchor="middle" font-size="20" font-weight="700" fill="var(--fg)">' + v.totalFindings + '</text><text x="40" y="51" text-anchor="middle" font-size="8" fill="var(--faint)" letter-spacing="1">FINDINGS</text></svg>' +
-      '<div style="display:flex;flex-direction:column;gap:5px;font-size:11px;">' +
-      [['Critical', 'crit', v.sevCounts.crit], ['High', 'high', v.sevCounts.high], ['Med', 'med', v.sevCounts.med], ['Low', 'low', v.sevCounts.low]].map(function (x) {
-        return '<div style="display:flex;align-items:center;gap:6px;"><span style="width:7px;height:7px;border-radius:2px;background:var(--' + x[1] + ');"></span><span style="color:var(--muted);">' + x[0] + '</span><b style="margin-left:auto;">' + x[2] + '</b></div>';
-      }).join('') + '</div></div></div>';
-    // by category + dist
-    html += '<div style="background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:15px;display:flex;flex-direction:column;">' +
-      '<div style="display:flex;justify-content:space-between;align-items:center;"><div style="font-size:10.5px;letter-spacing:.7px;text-transform:uppercase;color:var(--faint);font-weight:600;">By category</div><div style="font-size:11px;color:var(--muted);">across ' + esc(v.allMode ? 'all namespaces' : v.nsObj.key) + '</div></div>' +
-      '<div style="flex:1;display:flex;align-items:flex-end;gap:14px;height:64px;margin-top:10px;padding:0 4px;">' +
-      v.catBars.map(function (c) { return '<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:5px;"><div style="width:100%;max-width:44px;height:' + c.h + 'px;background:' + c.bg + ';border-radius:4px 4px 0 0;transition:height .3s;"></div><span style="font-size:9.5px;color:var(--faint);">' + esc(c.label) + '</span></div>'; }).join('') + '</div>' +
-      '<div style="margin-top:12px;"><div style="font-size:10px;letter-spacing:.7px;text-transform:uppercase;color:var(--faint);font-weight:600;margin-bottom:6px;">Severity distribution</div>' +
-      '<div style="display:flex;height:14px;border-radius:7px;overflow:hidden;background:var(--track);">' +
-      v.distSegs.map(function (d) { return '<div style="width:' + d.pct + '%;background:' + d.bg + ';display:flex;align-items:center;justify-content:center;transition:width .3s;"><span style="font-size:9px;font-weight:600;color:rgba(0,0,0,.6);">' + esc(d.label) + '</span></div>'; }).join('') + '</div></div></div>';
-    html += '</div>';
+      '</g><text x="40" y="38" text-anchor="middle" font-size="16" font-weight="700" fill="var(--fg)">' + v.totalFindings + '</text><text x="40" y="50" text-anchor="middle" font-size="6.5" fill="var(--faint)" letter-spacing="1">FINDINGS</text></svg>' +
+      '<div style="display:flex;flex-direction:column;gap:8px;font-size:12.5px;min-width:130px;">' +
+      legend.map(function (x) { return '<div style="display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:2px;background:var(--' + x[1] + ');"></span><span style="color:var(--muted);flex:1;">' + x[0] + '</span><b>' + x[2] + '</b></div>'; }).join('') +
+      '</div></div>');
+  }
 
-    // MAIN GRID
-    html += '<div class="ex-main" style="padding:14px 20px 20px;display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start;">';
-    // findings
-    html += '<section style="background:var(--panel);border:1px solid var(--border);border-radius:14px;overflow:hidden;display:flex;flex-direction:column;">' +
-      '<div style="padding:13px 15px;border-bottom:1px solid var(--border);">' +
-      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:11px;"><div style="display:flex;align-items:baseline;gap:8px;"><span style="font-size:11px;letter-spacing:.7px;text-transform:uppercase;font-weight:700;color:var(--fg);">Findings</span><span style="font-size:12px;color:var(--muted);">' + v.shownTotal + ' shown · ' + esc(v.allMode ? 'all namespaces' : v.nsObj.key) + '</span></div>' +
-      '<div style="display:flex;gap:5px;">' + ['1h', '24h', '7d', 'All'].map(function (r) { var a = s.range === r; return '<button data-act="range" data-r="' + r + '" style="padding:4px 10px;border-radius:7px;font-size:11.5px;font-weight:500;cursor:pointer;border:1px solid ' + (a ? 'var(--accent)' : 'var(--border)') + ';background:' + (a ? 'var(--lowSoft)' : 'transparent') + ';color:' + (a ? 'var(--accent)' : 'var(--muted)') + ';">' + r + '</button>'; }).join('') + '</div></div>' +
-      '<div style="position:relative;margin-bottom:10px;"><span style="position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--faint);font-size:13px;">⌕</span>' +
-      '<input id="finding-search" value="' + esc(s.query) + '" placeholder="Search findings, namespaces, reasons…" autocomplete="off" style="width:100%;height:34px;padding:0 12px 0 30px;border-radius:9px;border:1px solid var(--border);background:var(--panel2);color:var(--fg);font-family:inherit;font-size:13px;outline:none;"></div>' +
-      '<div style="display:flex;gap:6px;flex-wrap:wrap;">' + [['all', 'All'], ['critical', 'Critical'], ['high', 'High'], ['med', 'Med'], ['low', 'Low']].map(function (x) {
-        var a = s.filter === x[0];
-        return '<button data-act="filter" data-f="' + x[0] + '" style="display:flex;align-items:center;gap:6px;padding:5px 11px;border-radius:8px;font-size:12px;font-weight:500;cursor:pointer;border:1px solid ' + (a ? 'var(--accent)' : 'var(--border)') + ';background:' + (a ? 'var(--accent)' : 'transparent') + ';color:' + (a ? '#fff' : 'var(--muted)') + ';">' + x[1] + '<span style="font-size:10px;font-weight:700;padding:0 6px;border-radius:10px;background:' + (a ? 'rgba(255,255,255,.22)' : 'var(--track)') + ';color:' + (a ? '#fff' : 'var(--muted)') + ';">' + v.tabCounts[x[0]] + '</span></button>';
-      }).join('') + '</div></div>';
-    html += '<div style="max-height:520px;overflow-y:auto;">';
-    if (!v.groups.length) {
-      html += '<div style="padding:50px 20px;text-align:center;color:var(--faint);font-size:13px;">No findings match your filters.</div>';
-    }
-    v.groups.forEach(function (g) {
-      html += '<div style="border-bottom:1px solid var(--border);"><button data-act="group-toggle" data-group="' + esc(g.name) + '" style="width:100%;display:flex;align-items:center;gap:9px;padding:10px 15px;background:var(--panel2);border:none;cursor:pointer;text-align:left;">' +
-        '<span style="font-size:11px;color:var(--muted);display:inline-block;transform:' + (g.open ? 'none' : 'rotate(-90deg)') + ';transition:transform .2s;flex:none;">▾</span>' +
-        '<span style="font-size:12.5px;font-weight:600;color:var(--fg);">' + esc(g.name) + '</span>' +
-        '<span style="font-size:11px;color:var(--muted);background:var(--track);padding:1px 8px;border-radius:20px;">' + g.shown + '</span><span style="flex:1;"></span></button>';
-      if (g.open) {
-        g.items.forEach(function (f) {
-          var m = sevMeta(f.sev), open = s.openFinding === f.id;
-          var isFixed = !!s.fixed[f.id], isFixing = !!s.fixing[f.id];
-          html += '<div style="background:' + (open ? 'var(--panel2)' : 'transparent') + ';transition:background .15s;">' +
-            '<div data-act="finding-toggle" data-id="' + esc(f.id) + '" style="display:flex;align-items:center;gap:11px;padding:11px 15px;cursor:pointer;">' +
-            '<span style="width:3px;align-self:stretch;border-radius:3px;background:' + m.c + ';flex:none;"></span>' +
-            '<span style="font-size:9px;font-weight:700;letter-spacing:.5px;padding:2px 7px;border-radius:5px;color:' + m.c + ';background:' + m.soft + ';border:1px solid ' + m.line + ';flex:none;">' + m.label + '</span>' +
-            '<div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:500;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(f.title) + '</div>' +
-            '<div style="font-family:\'IBM Plex Mono\',monospace;font-size:10.5px;color:var(--faint);margin-top:2px;">' + esc(f.ns) + '</div></div>' +
-            (f.fix ? fixBtn(f, isFixed, isFixing, false) : '') +
-            '<span style="font-size:14px;color:var(--faint);flex:none;transform:' + (open ? 'rotate(180deg)' : 'none') + ';transition:transform .2s;">⌄</span></div>';
-          if (open) {
-            var cell = 'background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:8px 10px;';
-            var lbl = 'font-size:9.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--faint);';
-            html += '<div style="padding:2px 15px 15px 30px;">' +
-              '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-bottom:11px;">' +
-              '<div style="' + cell + '"><div style="' + lbl + '">Reason</div><div style="font-size:12px;font-weight:500;margin-top:2px;">' + esc(f.reason) + '</div></div>' +
-              '<div style="' + cell + '"><div style="' + lbl + '">Age</div><div style="font-size:12px;font-weight:500;margin-top:2px;">' + esc(f.age) + '</div></div>' +
-              '<div style="' + cell + '"><div style="' + lbl + '">Restarts</div><div style="font-size:12px;font-weight:500;margin-top:2px;">' + esc(f.restarts) + '</div></div></div>' +
-              '<div style="display:flex;gap:8px;padding:9px 11px;border-radius:8px;background:' + m.soft + ';border:1px solid ' + m.line + ';margin-bottom:10px;"><span style="color:' + m.c + ';font-size:13px;">●</span><div><div style="' + lbl + '">Root cause</div><div style="font-size:12.5px;margin-top:2px;">' + esc(f.root) + '</div></div></div>';
-            if (f.log) {
-              html += '<div style="' + lbl + 'margin-bottom:5px;">Log</div><pre style="margin:0 0 11px;padding:10px 12px;border-radius:8px;background:var(--code);border:1px solid var(--border);font-family:\'IBM Plex Mono\',monospace;font-size:11px;color:var(--codeFg);white-space:pre-wrap;line-height:1.5;overflow:auto;">' + esc(f.log) + '</pre>';
-            }
-            var confBadge = f.confidence ? '<span title="root-cause confidence" style="font-size:9px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;padding:2px 7px;border-radius:5px;color:' + confColor(f.confidence) + ';background:var(--track);">' + esc(f.confidence) + ' confidence</span>' : '';
-            html += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
-              (f.fix ? fixBtn(f, isFixed, isFixing, true) : '') +
-              '<button data-act="investigate" data-id="' + esc(f.id) + '" style="font-family:inherit;font-size:12px;font-weight:600;border-radius:7px;cursor:pointer;padding:6px 14px;border:1px solid var(--accent);background:transparent;color:var(--accent);">✦ Investigate</button>' +
-              confBadge +
-              '<span style="font-size:11.5px;color:var(--muted);flex:1;min-width:120px;">' + esc(f.suggestion) + '</span></div></div>';
-          }
-          html += '</div>';
-        });
-      }
-      html += '</div>';
+  // ── Logs by namespace (horizontal bars) ──
+  function nsBars(v) {
+    var max = Math.max.apply(null, v.NS.map(function (n) { return n.findings; }).concat([1]));
+    var rows = v.NS.slice().sort(function (a, b) { return b.findings - a.findings; }).slice(0, 9).map(function (n) {
+      var active = state.selectedNs === n.key;
+      return '<button data-act="ns-select" data-ns="' + esc(n.key) + '" style="display:flex;align-items:center;gap:10px;width:100%;border:none;background:transparent;cursor:pointer;padding:3px 0;">' +
+        '<span style="width:120px;text-align:right;font-family:\'IBM Plex Mono\',monospace;font-size:11px;color:' + (active ? 'var(--accent)' : 'var(--muted)') + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(n.key) + '</span>' +
+        '<span style="flex:1;height:14px;background:var(--track);border-radius:4px;overflow:hidden;"><span style="display:block;height:100%;width:' + Math.max(4, (n.findings / max) * 100) + '%;background:' + n.color + ';border-radius:4px;transition:width .3s;"></span></span>' +
+        '<span style="width:26px;text-align:left;font-size:11px;font-weight:600;color:var(--fg);">' + n.findings + '</span></button>';
+    }).join('');
+    return card(cardLabel('Findings by namespace') + '<div style="display:flex;flex-direction:column;gap:6px;margin-top:14px;">' + (rows || '<div style="color:var(--faint);font-size:12px;">No namespaces.</div>') + '</div>');
+  }
+
+  // ── Error frequency time-series (Cluster/Namespace toggle) ──
+  function errorFreq(v) {
+    var toggle = ['cluster', 'namespace'].map(function (k) {
+      var a = state.freqScope === k;
+      return '<button data-act="freqscope" data-v="' + k + '" style="padding:4px 11px;border-radius:7px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;cursor:pointer;border:1px solid ' + (a ? 'var(--accent)' : 'var(--border)') + ';background:' + (a ? 'var(--accentSoft)' : 'transparent') + ';color:' + (a ? 'var(--accent)' : 'var(--muted)') + ';">' + k + '</button>';
+    }).join('');
+    var legend = [['crit', 'critical'], ['high', 'high'], ['med', 'medium'], ['low', 'low']].map(function (x) { return '<span style="display:flex;align-items:center;gap:5px;font-size:10.5px;color:var(--muted);"><span style="width:8px;height:8px;border-radius:2px;background:var(--' + x[0] + ');"></span>' + x[1] + '</span>'; }).join('');
+    var bars = v.tsBars.map(function (b) {
+      return '<div class="ex-chart-bar" data-act="drilldown" data-kind="time" data-label="' + esc(b.title) + '" title="' + esc(b.title) + '" style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;min-width:0;cursor:pointer;">' +
+        b.segs.map(function (sg) { return '<div style="width:100%;height:' + sg.h + 'px;background:' + sg.bg + ';border-radius:' + (sg.first ? '3px 3px 0 0' : '0') + ';"></div>'; }).join('') + '</div>';
+    }).join('');
+    return card('<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px;">' +
+      '<div>' + cardLabel('Error frequency · last 24h') + '<div style="font-size:11px;color:var(--muted);margin-top:2px;">Findings trend ' + (state.freqScope === 'namespace' && !v.allMode ? 'by namespace · ' + esc(v.nsLabel) : 'by cluster') + '</div></div>' +
+      '<div style="display:flex;gap:6px;">' + toggle + '</div></div>' +
+      '<div style="display:flex;gap:14px;margin-bottom:8px;">' + legend + '</div>' +
+      '<div style="display:flex;align-items:flex-end;gap:3px;height:150px;">' + bars + '</div>' +
+      '<div style="display:flex;justify-content:space-between;margin-top:7px;font-family:\'IBM Plex Mono\',monospace;font-size:10px;color:var(--faint);"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>now</span></div>');
+  }
+
+  // ── Page: Dashboard ──
+  function pageDashboard(v) {
+    return statCards(v) +
+      '<div class="ex-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">' + severityDonut(v) + nsBars(v) + '</div>' +
+      errorFreq(v);
+  }
+
+  // ── Page: Log Explorer (findings table) ──
+  function pageExplorer(v) {
+    var filters = '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">' +
+      '<div style="position:relative;flex:1;min-width:220px;"><span style="position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--faint);font-size:13px;">⌕</span>' +
+      '<input id="finding-search" value="' + esc(state.query) + '" placeholder="Search findings, namespaces, reasons…" autocomplete="off" style="width:100%;height:36px;padding:0 12px 0 30px;border-radius:9px;border:1px solid var(--border);background:var(--panel2);color:var(--fg);font-family:inherit;font-size:13px;outline:none;"></div>' +
+      [['all', 'All'], ['critical', 'Critical'], ['high', 'High'], ['med', 'Med'], ['low', 'Low']].map(function (x) {
+        var a = state.filter === x[0];
+        return '<button data-act="filter" data-f="' + x[0] + '" style="display:flex;align-items:center;gap:6px;padding:7px 12px;border-radius:8px;font-size:12px;font-weight:500;cursor:pointer;border:1px solid ' + (a ? 'var(--accent)' : 'var(--border)') + ';background:' + (a ? 'var(--accent)' : 'transparent') + ';color:' + (a ? '#04222b' : 'var(--muted)') + ';">' + x[1] + '<span style="font-size:10px;font-weight:700;padding:0 6px;border-radius:10px;background:' + (a ? 'rgba(0,0,0,.18)' : 'var(--track)') + ';color:' + (a ? '#04222b' : 'var(--muted)') + ';">' + v.tabCounts[x[0]] + '</span></button>';
+      }).join('') + '</div>';
+
+    var th = 'text-align:left;padding:10px 14px;font-size:10px;letter-spacing:.6px;text-transform:uppercase;color:var(--faint);font-weight:600;border-bottom:1px solid var(--border);';
+    var head = '<tr><th style="' + th + '">Severity</th><th style="' + th + '">Namespace / Pod</th><th style="' + th + 'width:42%;">Message</th><th style="' + th + '">Category</th><th style="' + th + 'text-align:right;">Action</th></tr>';
+    var rows = v.rows.map(function (f) {
+      var m = sevMeta(f.sev), isFixed = !!state.fixed[f.id], isFixing = !!state.fixing[f.id];
+      var td = 'padding:11px 14px;border-bottom:1px solid var(--border);vertical-align:top;';
+      var status = isFixed ? '<span style="font-size:9.5px;font-weight:700;color:var(--good);background:var(--track);padding:2px 8px;border-radius:20px;">FIXED ✓</span>' : '';
+      return '<tr data-act="remediate" data-id="' + esc(f.id) + '" style="cursor:pointer;" class="ex-row">' +
+        '<td style="' + td + '"><span style="font-size:9px;font-weight:700;letter-spacing:.5px;padding:2px 7px;border-radius:5px;color:' + m.c + ';background:' + m.soft + ';border:1px solid ' + m.line + ';white-space:nowrap;">' + m.label + '</span></td>' +
+        '<td style="' + td + 'font-family:\'IBM Plex Mono\',monospace;font-size:11px;color:var(--muted);white-space:nowrap;">' + esc(f.ns) + '</td>' +
+        '<td style="' + td + 'color:var(--fg);font-size:12.5px;">' + esc(f.title) + (f.reason && f.reason !== f.title ? '<div style="color:var(--faint);font-size:11px;margin-top:2px;">' + esc(f.reason) + '</div>' : '') + '</td>' +
+        '<td style="' + td + 'font-size:11.5px;color:var(--muted);">' + esc(f.group) + '</td>' +
+        '<td style="' + td + 'text-align:right;white-space:nowrap;">' + status +
+        ' <button data-act="investigate" data-id="' + esc(f.id) + '" title="Investigate" style="border:1px solid var(--accent);background:transparent;color:var(--accent);border-radius:7px;cursor:pointer;font-size:11px;font-weight:600;padding:4px 9px;">✦</button>' +
+        (f.fix ? ' ' + fixBtn(f, isFixed, isFixing, false) : '') + '</td></tr>';
+    }).join('');
+    var table = v.rows.length
+      ? '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">' + head + rows + '</table></div>'
+      : '<div style="padding:50px 20px;text-align:center;color:var(--faint);font-size:13px;">No findings match your filters.</div>';
+    return filters +
+      '<div style="background:var(--panel);border:1px solid var(--border);border-radius:14px;overflow:hidden;">' +
+      '<div style="padding:11px 15px;border-bottom:1px solid var(--border);font-size:12px;color:var(--muted);">' + v.shownTotal + ' results · ' + esc(v.nsLabel) + '</div>' +
+      table + '</div>';
+  }
+
+  // ── Page: AI Analysis ──
+  function pageAI(v) {
+    var tabs = [['all', 'All'], ['verdict', 'Verdict'], ['incidents', 'Incidents'], ['rbac', 'RBAC'], ['prevention', 'Prevention']].map(function (x) {
+      var a = state.llmTab === x[0];
+      return '<button data-act="llm" data-tab="' + x[0] + '" style="padding:5px 12px;border-radius:8px;font-size:12px;font-weight:500;cursor:pointer;border:1px solid ' + (a ? 'var(--accent)' : 'var(--border)') + ';background:' + (a ? 'var(--accentSoft)' : 'transparent') + ';color:' + (a ? 'var(--accent)' : 'var(--muted)') + ';">' + x[1] + '</button>';
+    }).join('');
+    var header = '<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">' +
+      '<span style="width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#7b5bff,var(--accent));display:flex;align-items:center;justify-content:center;color:#fff;">' + icon('ai') + '</span>' +
+      '<div style="flex:1;"><div style="font-size:14px;font-weight:700;">Cluster log analysis</div><div style="font-size:12px;color:var(--muted);">Patterns, anomalies, and health for ' + esc(v.nsLabel) + '</div></div>' +
+      '<button data-act="reanalyze" style="display:flex;align-items:center;gap:8px;height:36px;padding:0 16px;border-radius:9px;border:none;background:var(--accent);color:#04222b;font-size:12.5px;font-weight:700;cursor:pointer;">✦ Analyze ' + v.totalFindings + ' findings</button></div>';
+    return card(header +
+      '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;">' + tabs + '</div>' +
+      '<div style="font-size:13px;line-height:1.65;color:var(--body);">' + llmHTML(v) + '</div>', '18px 20px');
+  }
+
+  // ── Page: Alerts (read-only critical+high findings) ──
+  function pageAlerts(v) {
+    var alerts = (data.findings || []).filter(function (f) {
+      return (v.allMode || f.nsKey === state.selectedNs) && (f.sev === 'critical' || f.sev === 'high');
     });
-    html += '</div></section>';
+    var head = '<div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:12px 16px;margin-bottom:14px;font-size:12.5px;color:var(--muted);">' +
+      '<b style="color:var(--fg);">' + alerts.length + '</b> critical &amp; high alerts · ' + esc(v.nsLabel) + '</div>';
+    if (!alerts.length) return head + '<div style="padding:50px;text-align:center;color:var(--faint);font-size:13px;">No critical or high alerts in scope. 🎉</div>';
+    var cards = alerts.map(function (f) {
+      var m = sevMeta(f.sev);
+      return '<div data-act="remediate" data-id="' + esc(f.id) + '" class="ex-row" style="background:var(--panel);border:1px solid var(--border);border-left:3px solid ' + m.c + ';border-radius:12px;padding:13px 16px;margin-bottom:11px;cursor:pointer;">' +
+        '<div style="display:flex;align-items:center;gap:9px;"><span style="font-size:9px;font-weight:700;letter-spacing:.5px;padding:2px 7px;border-radius:5px;color:' + m.c + ';background:' + m.soft + ';border:1px solid ' + m.line + ';">' + m.label + '</span>' +
+        (f.confidence ? '<span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:' + confColor(f.confidence) + ';">' + esc(f.confidence) + ' confidence</span>' : '') + '</div>' +
+        '<div style="font-size:13.5px;font-weight:600;color:var(--fg);margin-top:7px;">' + esc(f.title) + '</div>' +
+        '<div style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;color:var(--faint);margin-top:4px;">' + esc(f.ns) + '</div></div>';
+    }).join('');
+    return head + cards;
+  }
 
-    // LLM
-    html += '<section style="background:var(--panel);border:1px solid var(--border);border-radius:14px;overflow:hidden;position:sticky;top:70px;">' +
-      '<div style="padding:13px 15px;border-bottom:1px solid var(--border);"><div style="display:flex;align-items:center;gap:8px;margin-bottom:11px;"><span style="width:18px;height:18px;border-radius:5px;background:linear-gradient(135deg,#7b5bff,var(--accent));display:flex;align-items:center;justify-content:center;font-size:10px;">✦</span><span style="font-size:11px;letter-spacing:.7px;text-transform:uppercase;font-weight:700;">LLM analysis</span><span style="font-size:11px;color:var(--good);display:flex;align-items:center;gap:5px;"><span style="width:6px;height:6px;border-radius:50%;background:var(--good);animation:ex-pulse 2s ease infinite;"></span>live</span></div>' +
-      '<div style="display:flex;gap:5px;flex-wrap:wrap;">' + [['all', 'All'], ['verdict', 'Verdict'], ['incidents', 'Incidents'], ['rbac', 'RBAC'], ['prevention', 'Prevention']].map(function (x) {
-        var a = s.llmTab === x[0];
-        return '<button data-act="llm" data-tab="' + x[0] + '" style="padding:4px 10px;border-radius:7px;font-size:11.5px;font-weight:500;cursor:pointer;border:1px solid ' + (a ? 'var(--accent)' : 'var(--border)') + ';background:' + (a ? 'var(--lowSoft)' : 'transparent') + ';color:' + (a ? 'var(--accent)' : 'var(--muted)') + ';">' + x[1] + '</button>';
-      }).join('') + '</div></div>' +
-      '<div style="max-height:620px;overflow-y:auto;padding:16px 17px;font-size:13px;line-height:1.65;color:var(--body);">' + llmHTML(v) + '</div></section>';
-    html += '</div>';
+  // ── Page: Settings (read-only) ──
+  function pageSettings(v) {
+    function row(label, val) { return '<div style="display:flex;justify-content:space-between;padding:11px 0;border-bottom:1px solid var(--border);"><span style="color:var(--muted);font-size:12.5px;">' + esc(label) + '</span><span style="font-weight:600;font-size:12.5px;">' + val + '</span></div>'; }
+    return '<div style="max-width:560px;">' +
+      card(cardLabel('Appearance') +
+        '<div style="display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid var(--border);"><span style="color:var(--muted);font-size:12.5px;">Theme</span>' +
+        '<button data-act="theme" style="display:flex;align-items:center;gap:7px;height:32px;padding:0 13px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--fg);font-size:12.5px;font-weight:500;cursor:pointer;">' + (state.theme === 'dark' ? '☀ Light' : '☾ Dark') + '</button></div>' +
+        row('Auto-refresh', data.autoRefresh ? '<span style="color:var(--good)">every 30s</span>' : 'static snapshot'), '18px 20px') +
+      '<div style="height:14px;"></div>' +
+      card(cardLabel('Environment') +
+        row('LLM provider', esc(data.provider || 'llm')) +
+        row('Namespaces', v.NS.length) +
+        row('Pods (cluster)', fmt(data.pods || 0)) +
+        row('Findings', v.totalFindings), '18px 20px') +
+      '<div style="margin-top:12px;font-size:11.5px;color:var(--faint);">Settings are read-only here — configure Exalm via CLI flags / environment variables.</div>' +
+      '</div>';
+  }
 
-    // FOOTER
-    html += '<footer style="display:flex;align-items:center;gap:8px;padding:9px 20px;border-top:1px solid var(--border);color:var(--faint);font-size:11.5px;"><span>exalm.com</span><span style="flex:1;"></span>' +
+  // ── Render shell + page dispatch ──
+  function render() {
+    var v = computeVals();
+    var shell = '<div style="display:flex;min-height:100vh;background:var(--bg);color:var(--fg);font-family:\'IBM Plex Sans\',system-ui,sans-serif;font-size:14px;">' +
+      sidebar() +
+      '<div style="flex:1;min-width:0;display:flex;flex-direction:column;">' +
+      topbar(v) +
+      '<main id="page" style="flex:1;padding:18px 22px;min-width:0;">';
+    switch (state.page) {
+      case 'explorer': shell += pageExplorer(v); break;
+      case 'ai': shell += pageAI(v); break;
+      case 'alerts': shell += pageAlerts(v); break;
+      case 'settings': shell += pageSettings(v); break;
+      default: shell += pageDashboard(v);
+    }
+    shell += '</main>' +
+      '<footer style="display:flex;align-items:center;gap:8px;padding:10px 22px;border-top:1px solid var(--border);color:var(--faint);font-size:11.5px;"><span>exalm.com</span><span style="flex:1;"></span>' +
       (data.autoRefresh ? '<span style="display:inline-block;width:11px;height:11px;border:1.6px solid var(--faint);border-top-color:transparent;border-radius:50%;animation:ex-spin 1s linear infinite;"></span><span>auto-refreshes every 30s</span>' : '<span>static snapshot — re-run analyze to update</span>') +
-      '</footer>';
-
-    html += '</div>';
-
-    // capWidth guard (avoid unused var lint in minifiers); used for future responsive tweaks
-    void capWidth;
+      '</footer></div></div>';
 
     var app = document.getElementById('app');
-    // Preserve search focus + caret across re-render.
     var active = document.activeElement;
     var refocus = active && active.id === 'finding-search';
     var caret = refocus ? active.selectionStart : 0;
-    app.innerHTML = html;
+    app.innerHTML = shell;
     if (refocus) {
       var inp = document.getElementById('finding-search');
       if (inp) { inp.focus(); try { inp.setSelectionRange(caret, caret); } catch (e) {} }
     }
-    // Let the charts module wire hover tooltips + drill-down on the fresh DOM.
     if (window.ExalmCharts && window.ExalmCharts.attach) window.ExalmCharts.attach();
   }
 
@@ -491,7 +542,7 @@
     var label, extra;
     if (isFixed) { extra = 'background:var(--good);color:#06281b;border:none;'; label = 'Fixed ✓'; }
     else if (isFixing) { extra = 'background:var(--track);color:var(--muted);'; label = large ? 'Applying fix…' : 'Fixing…'; }
-    else { extra = 'background:var(--accent);color:#fff;border:none;'; label = large ? 'Apply fix' : 'Fix'; }
+    else { extra = 'background:var(--accent);color:#04222b;border:none;'; label = large ? 'Apply fix' : 'Fix'; }
     var pad = large ? (isFixed || isFixing ? 'padding:6px 14px;' : 'padding:6px 16px;') : (isFixed || isFixing ? 'padding:4px 10px;' : 'padding:4px 12px;');
     var size = large ? 'font-size:12px;' : 'font-size:11px;';
     // "remediate" opens the explainable remediation panel (does NOT execute);
@@ -504,14 +555,11 @@
     return c === 'high' ? 'var(--good)' : c === 'medium' ? 'var(--high)' : 'var(--muted)';
   }
 
-  function clockText() {
-    // Current UTC time, formatted like the design: "Tue, 23 Jun 2026 · 15:44 GMT".
-    var d = new Date();
-    var days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    var mons = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    function p2(n) { return (n < 10 ? '0' : '') + n; }
-    return days[d.getUTCDay()] + ', ' + d.getUTCDate() + ' ' + mons[d.getUTCMonth()] + ' ' + d.getUTCFullYear() +
-      ' · ' + p2(d.getUTCHours()) + ':' + p2(d.getUTCMinutes()) + ' GMT';
+  function setPage(p) {
+    if (PAGES.indexOf(p) === -1) return;
+    state.page = p; state.nsMenuOpen = false;
+    try { localStorage.setItem(PAGE_KEY, p); } catch (e) {}
+    render();
   }
 
   // ── Event delegation ──
@@ -523,11 +571,13 @@
     }
     var act = el.getAttribute('data-act');
     switch (act) {
+      case 'nav': setPage(el.getAttribute('data-page')); break;
       case 'ns-toggle': state.nsMenuOpen = !state.nsMenuOpen; render(); break;
       case 'ns-select': state.selectedNs = el.getAttribute('data-ns'); state.nsMenuOpen = false; render(); break;
       case 'theme': state.theme = state.theme === 'dark' ? 'light' : 'dark'; try { localStorage.setItem(THEME_KEY, state.theme); } catch (x) {} applyTheme(); render(); break;
       case 'fixall': fixAll(); break;
-      case 'group-toggle': { var g = el.getAttribute('data-group'); state.openGroups[g] = !state.openGroups[g]; render(); break; }
+      case 'freqscope': state.freqScope = el.getAttribute('data-v'); render(); break;
+      case 'reanalyze': refresh(); break;
       case 'finding-toggle': { var id = el.getAttribute('data-id'); state.openFinding = state.openFinding === id ? null : id; render(); break; }
       case 'fix': e.stopPropagation(); fix(el.getAttribute('data-id')); break;
       case 'remediate':
@@ -539,14 +589,9 @@
         e.stopPropagation();
         if (window.ExalmPanels) window.ExalmPanels.openInvestigation(el.getAttribute('data-id'));
         break;
-      case 'logs':
-        if (window.ExalmLogs) window.ExalmLogs.open();
-        break;
-      case 'drilldown':
-        if (window.ExalmPanels) window.ExalmPanels.openDrilldown({ kind: el.getAttribute('data-kind'), label: el.getAttribute('data-label') });
-        break;
+      case 'logs': if (window.ExalmLogs) window.ExalmLogs.open(); break;
+      case 'drilldown': if (window.ExalmPanels) window.ExalmPanels.openDrilldown({ kind: el.getAttribute('data-kind'), label: el.getAttribute('data-label') }); break;
       case 'filter': state.filter = el.getAttribute('data-f'); render(); break;
-      case 'range': state.range = el.getAttribute('data-r'); render(); break;
       case 'llm': state.llmTab = el.getAttribute('data-tab'); render(); break;
     }
   }
@@ -554,10 +599,7 @@
     if (e.target && e.target.id === 'finding-search') { state.query = e.target.value; render(); }
   }
 
-  // ── Shared API for the panel/chart/log modules ──
-  // Exposed so remediation.js / investigate.js (panels.js), charts.js, and
-  // logviewer.js can reuse helpers, read current data, and drive fix/refresh
-  // without duplicating logic.
+  // ── Shared API for the panel/chart/log modules (unchanged contract) ──
   window.Exalm = {
     esc: esc, fmt: fmt, css: css, sevMeta: sevMeta, mdToHtml: mdToHtml, confColor: confColor,
     data: function () { return data; },
@@ -566,8 +608,6 @@
     findings: function () { return data.findings || []; },
     finding: function (id) { return (data.findings || []).filter(function (f) { return f.id === id; })[0]; },
     refresh: refresh,
-    // applyPrimaryFix runs the existing fix flow (Fixing… → Fixed ✓ → refresh);
-    // the remediation panel calls this on confirm.
     applyPrimaryFix: fix
   };
 
