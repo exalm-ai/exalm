@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -241,6 +243,8 @@ and a PVC approaching capacity.
 		}, nil
 	}
 
+	converse, getConversation := newDemoConverse(report.Findings)
+
 	if err := web.Serve(ctx, report, web.ServeOpts{
 		Port:          7433,
 		OpenBrowser:   false,
@@ -262,9 +266,133 @@ and a PVC approaching capacity.
 				"2026-06-23T12:20:48Z ERROR OOMKilled: container exceeded memory limit\n" +
 				"2026-06-23T12:20:49Z INFO  restarting...\n", nil
 		},
-		Metrics: metrics.NewDerived(),
+		Metrics:         metrics.NewDerived(),
+		Converse:        converse,
+		GetConversation: getConversation,
 	}); err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintln(os.Stderr, "serve error:", err) //nolint:errcheck // fatal error to stderr before exit
 		os.Exit(1)
 	}
+}
+
+// newDemoConverse simulates the k8s plugin's conversation engine so the demo
+// exercises the chat workspace end to end (multi-turn history, steps,
+// evidence, timeline, suggestions, persistence across reloads) without a
+// real cluster or LLM. Conversations live in memory for the process
+// lifetime, keyed by a generated id, mirroring internal/convo.Store.
+func newDemoConverse(findings []plugin.Finding) (
+	func(context.Context, web.ConverseRequest) (*plugin.Conversation, error),
+	func(context.Context, string) (*plugin.Conversation, error),
+) {
+	var mu sync.Mutex
+	convos := map[string]*plugin.Conversation{}
+	var seq int64
+
+	findingFor := func(id string) *plugin.Finding {
+		for i := range findings {
+			if findings[i].ID() == id {
+				return &findings[i]
+			}
+		}
+		for i := range findings {
+			if findings[i].Severity == plugin.SeverityCritical {
+				return &findings[i]
+			}
+		}
+		return &findings[0]
+	}
+
+	focusFor := func(f *plugin.Finding) string {
+		if f.Remediation != nil && f.Remediation.Namespace != "" && f.Remediation.Name != "" {
+			return f.Remediation.Namespace + "/" + f.Remediation.Name
+		}
+		return ""
+	}
+
+	replyFor := func(lower string, f *plugin.Finding) string {
+		switch {
+		case strings.Contains(lower, "previous log"):
+			return "Here are the previous container logs for **" + f.Title + "** — the pod was OOMKilled just before this restart; working set peaked at 310 Mi against a 256 Mi limit."
+		case strings.Contains(lower, "deploy"):
+			return "Yes — a deployment rolled out about an hour before the first crash. The new image raised steady-state memory use without a matching limit increase, which is the likely trigger."
+		case strings.Contains(lower, "rca") || strings.Contains(lower, "postmortem") || strings.Contains(lower, "incident report"):
+			return "## SUMMARY\n" + f.Detail + "\n\n## ROOT CAUSE\n" + f.RootCause + "\n\n## RESOLUTION\n" + f.Suggestion + "\n\n## PREVENTION\nAlert on memory usage above 80% of the limit before it OOMs."
+		case strings.Contains(lower, "fix") || strings.Contains(lower, "remediat"):
+			return "Recommended fix: " + f.Suggestion
+		case strings.Contains(lower, "database") || strings.Contains(lower, "db"):
+			return "No direct evidence of a database dependency in the logs or events gathered so far for **" + f.Title + "** — this looks contained to the pod's own memory usage."
+		default:
+			return "Investigating **" + f.Title + "**: " + f.Detail
+		}
+	}
+
+	steps := []plugin.InvestigationStep{
+		{Label: "Pod status & container state inspected", Status: "done"},
+		{Label: "Container logs inspected (current + previous)", Status: "done"},
+		{Label: "Warning events inspected", Status: "done"},
+		{Label: "Recent changes correlated", Status: "done", Detail: "linked to a recent deploy"},
+		{Label: "Prometheus metrics inspected", Status: "unavailable", Detail: "no metrics backend wired"},
+	}
+
+	timelineFor := func() []plugin.TimelineEvent {
+		now := time.Now()
+		return []plugin.TimelineEvent{
+			{At: now.Add(-27 * time.Minute), Label: "Deployment updated", Severity: "info", Source: "change"},
+			{At: now.Add(-26 * time.Minute), Label: "Pod created", Severity: "info", Source: "pod"},
+			{At: now.Add(-25 * time.Minute), Label: "Readiness probe failed", Severity: "medium", Source: "event"},
+			{At: now.Add(-24 * time.Minute), Label: "Restart", Severity: "high", Source: "pod"},
+			{At: now.Add(-23 * time.Minute), Label: "CrashLoopBackOff", Severity: "critical", Source: "event"},
+			{At: now.Add(-22 * time.Minute), Label: "OOMKilled", Severity: "critical", Source: "event"},
+			{At: now.Add(-21 * time.Minute), Label: "Restart", Severity: "high", Source: "pod"},
+		}
+	}
+
+	suggestions := []string{"Show me the previous logs", "Is this related to the last deployment?", "Generate an RCA", "Suggest a permanent fix"}
+
+	converse := func(_ context.Context, req web.ConverseRequest) (*plugin.Conversation, error) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		conv := convos[req.ConversationID]
+		if conv == nil {
+			seq++
+			conv = &plugin.Conversation{
+				ID: fmt.Sprintf("demo-%d", seq), FindingID: req.FindingID, Namespace: req.Namespace,
+				CreatedAt: time.Now(),
+			}
+		}
+		f := findingFor(req.FindingID)
+		if conv.Focus == "" {
+			conv.Focus = focusFor(f)
+		}
+
+		now := time.Now()
+		conv.Messages = append(conv.Messages, plugin.ConversationMessage{Role: "user", Content: req.Message, At: now})
+		conv.Messages = append(conv.Messages, plugin.ConversationMessage{
+			Role:        "assistant",
+			Content:     replyFor(strings.ToLower(req.Message), f),
+			At:          now,
+			Confidence:  f.Confidence,
+			Steps:       steps,
+			Evidence:    f.Evidence,
+			Fixes:       f.Fixes,
+			Timeline:    timelineFor(),
+			Suggestions: suggestions,
+		})
+		conv.UpdatedAt = now
+		convos[conv.ID] = conv
+		return conv, nil
+	}
+
+	get := func(_ context.Context, id string) (*plugin.Conversation, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		conv, ok := convos[id]
+		if !ok {
+			return nil, fmt.Errorf("conversation %q not found", id)
+		}
+		return conv, nil
+	}
+
+	return converse, get
 }

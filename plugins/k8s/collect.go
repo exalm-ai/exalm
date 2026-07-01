@@ -301,13 +301,14 @@ func collectEvents(ctx context.Context, cs kubernetes.Interface, ns string, sinc
 		}
 
 		summaries = append(summaries, EventSummary{
-			Namespace: e.Namespace,
-			PodName:   e.InvolvedObject.Name,
-			Reason:    e.Reason,
-			Message:   e.Message,
-			Count:     e.Count,
-			LastSeen:  humanAge(now.Sub(lastSeen)) + " ago",
-			Density:   density,
+			Namespace:  e.Namespace,
+			PodName:    e.InvolvedObject.Name,
+			Reason:     e.Reason,
+			Message:    e.Message,
+			Count:      e.Count,
+			LastSeen:   humanAge(now.Sub(lastSeen)) + " ago",
+			LastSeenAt: lastSeen,
+			Density:    density,
 		})
 	}
 	return summaries, nil

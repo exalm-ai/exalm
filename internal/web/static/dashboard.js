@@ -46,7 +46,7 @@
   try { var p0 = localStorage.getItem(PAGE_KEY); if (PAGES.indexOf(p0) !== -1) savedPage = p0; } catch (e) {}
 
   var state = {
-    theme: savedTheme, page: savedPage, query: '', filter: 'all', range: '24h', llmTab: 'all',
+    theme: savedTheme, page: savedPage, query: '', filter: 'all', range: '24h',
     freqScope: 'cluster', selectedNs: 'all', nsMenuOpen: false,
     openGroups: { Pods: true, Resources: true }, openFinding: null,
     fixed: {}, fixing: {}
@@ -231,37 +231,47 @@
     };
   }
 
-  // ── LLM panel (derived from real Report.Raw + findings) ──
-  function llmHTML(v) {
-    var box = 'padding:12px 14px;border-radius:10px;background:var(--panel2);border:1px solid var(--border);';
-    if (state.llmTab === 'all') return mdToHtml(data.raw);
-    if (state.llmTab === 'verdict') {
-      var degraded = v.sevCounts.crit > 0 || v.sevCounts.high > 0;
-      var verdict = v.sevCounts.crit > 0 ? 'Action required — degraded' : (v.sevCounts.high > 0 ? 'Attention advised' : 'Healthy');
-      return '<div style="padding:14px 16px;border-radius:12px;background:var(--critSoft);border:1px solid var(--critLine);margin-bottom:14px;">' +
-        '<div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.7px;color:var(--crit);font-weight:700;">Verdict</div>' +
-        '<div style="font-size:18px;font-weight:700;color:var(--fg);margin-top:3px;">' + esc(verdict) + '</div>' +
-        '<div style="margin-top:5px;color:var(--muted);">' + v.sevCounts.crit + ' critical and ' + v.sevCounts.high + ' high findings across ' + v.totalFindings + ' total.</div></div>' +
-        '<div style="display:flex;flex-direction:column;gap:9px;">' +
-        '<div style="display:flex;gap:10px;' + box + '"><span style="color:var(--crit);">●</span><div><strong style="color:var(--fg)">Availability</strong><div style="color:var(--muted)">' + v.unhealthy + ' of ' + v.podCount + ' pods unhealthy.</div></div></div>' +
-        '<div style="display:flex;gap:10px;' + box + '"><span style="color:var(--high);">●</span><div><strong style="color:var(--fg)">Severity mix</strong><div style="color:var(--muted)">crit ' + v.sevCounts.crit + ' · high ' + v.sevCounts.high + ' · med ' + v.sevCounts.med + ' · low ' + v.sevCounts.low + '</div></div></div>' +
-        '<div style="display:flex;gap:10px;' + box + '"><span style="color:' + (degraded ? 'var(--high)' : 'var(--good)') + ';">●</span><div><strong style="color:var(--fg)">SLO</strong><div style="color:var(--muted)">' + esc(v.sloLabel) + '</div></div></div></div>';
-    }
-    if (state.llmTab === 'incidents') {
-      var inc = (data.findings || []).filter(function (f) { return f.sev === 'critical' || f.sev === 'high'; }).slice(0, 8);
-      if (!inc.length) return '<div style="color:var(--muted)">No critical or high incidents in scope.</div>';
-      return '<div style="display:flex;flex-direction:column;gap:11px;">' + inc.map(function (f) {
-        var m = sevMeta(f.sev);
-        return '<div style="' + box + 'border-left:3px solid ' + m.c + ';"><div style="display:flex;justify-content:space-between;gap:10px;"><strong style="color:var(--fg)">' + esc(f.title) + '</strong><span style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;color:var(--faint);white-space:nowrap;">' + esc(f.restarts !== '—' ? f.restarts + ' restarts' : f.nsKey) + '</span></div><div style="color:var(--muted);margin-top:4px;">' + esc(f.reason) + '</div></div>';
-      }).join('') + '</div>';
-    }
-    if (state.llmTab === 'rbac') {
-      var sec = (data.findings || []).filter(function (f) { return f.group === 'Security' || /rbac|forbidden|privileg|secret/i.test(f.title); });
-      if (!sec.length) return '<div style="color:var(--muted)">No RBAC or security findings detected in scope.</div>';
-      return '<div style="display:flex;flex-direction:column;gap:9px;">' + sec.map(function (f) {
-        return '<div style="display:flex;gap:10px;' + box + '"><span style="color:var(--high)">⚿</span><div><strong style="color:var(--fg)">' + esc(f.title) + '</strong><div style="color:var(--muted)">' + esc(f.root) + '</div></div></div>';
-      }).join('') + '</div>';
-    }
+  // ── Legacy narrative sections (verdict/incidents/rbac/prevention) ──
+  // These used to be tab-switched on the AI Analysis page; now they're folded
+  // into the chat workspace's first assistant message as expandable
+  // sections (see legacyNarrativeHTML() below and chat.js).
+  function narrativeBox() { return 'padding:12px 14px;border-radius:10px;background:var(--panel2);border:1px solid var(--border);'; }
+
+  function verdictSectionHTML(v) {
+    var box = narrativeBox();
+    var degraded = v.sevCounts.crit > 0 || v.sevCounts.high > 0;
+    var verdict = v.sevCounts.crit > 0 ? 'Action required — degraded' : (v.sevCounts.high > 0 ? 'Attention advised' : 'Healthy');
+    return '<div style="padding:14px 16px;border-radius:12px;background:var(--critSoft);border:1px solid var(--critLine);margin-bottom:14px;">' +
+      '<div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.7px;color:var(--crit);font-weight:700;">Verdict</div>' +
+      '<div style="font-size:18px;font-weight:700;color:var(--fg);margin-top:3px;">' + esc(verdict) + '</div>' +
+      '<div style="margin-top:5px;color:var(--muted);">' + v.sevCounts.crit + ' critical and ' + v.sevCounts.high + ' high findings across ' + v.totalFindings + ' total.</div></div>' +
+      '<div style="display:flex;flex-direction:column;gap:9px;">' +
+      '<div style="display:flex;gap:10px;' + box + '"><span style="color:var(--crit);">●</span><div><strong style="color:var(--fg)">Availability</strong><div style="color:var(--muted)">' + v.unhealthy + ' of ' + v.podCount + ' pods unhealthy.</div></div></div>' +
+      '<div style="display:flex;gap:10px;' + box + '"><span style="color:var(--high);">●</span><div><strong style="color:var(--fg)">Severity mix</strong><div style="color:var(--muted)">crit ' + v.sevCounts.crit + ' · high ' + v.sevCounts.high + ' · med ' + v.sevCounts.med + ' · low ' + v.sevCounts.low + '</div></div></div>' +
+      '<div style="display:flex;gap:10px;' + box + '"><span style="color:' + (degraded ? 'var(--high)' : 'var(--good)') + ';">●</span><div><strong style="color:var(--fg)">SLO</strong><div style="color:var(--muted)">' + esc(v.sloLabel) + '</div></div></div></div>';
+  }
+
+  function incidentsSectionHTML() {
+    var box = narrativeBox();
+    var inc = (data.findings || []).filter(function (f) { return f.sev === 'critical' || f.sev === 'high'; }).slice(0, 8);
+    if (!inc.length) return '<div style="color:var(--muted)">No critical or high incidents in scope.</div>';
+    return '<div style="display:flex;flex-direction:column;gap:11px;">' + inc.map(function (f) {
+      var m = sevMeta(f.sev);
+      return '<div style="' + box + 'border-left:3px solid ' + m.c + ';"><div style="display:flex;justify-content:space-between;gap:10px;"><strong style="color:var(--fg)">' + esc(f.title) + '</strong><span style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;color:var(--faint);white-space:nowrap;">' + esc(f.restarts !== '—' ? f.restarts + ' restarts' : f.nsKey) + '</span></div><div style="color:var(--muted);margin-top:4px;">' + esc(f.reason) + '</div></div>';
+    }).join('') + '</div>';
+  }
+
+  function rbacSectionHTML() {
+    var box = narrativeBox();
+    var sec = (data.findings || []).filter(function (f) { return f.group === 'Security' || /rbac|forbidden|privileg|secret/i.test(f.title); });
+    if (!sec.length) return '<div style="color:var(--muted)">No RBAC or security findings detected in scope.</div>';
+    return '<div style="display:flex;flex-direction:column;gap:9px;">' + sec.map(function (f) {
+      return '<div style="display:flex;gap:10px;' + box + '"><span style="color:var(--high)">⚿</span><div><strong style="color:var(--fg)">' + esc(f.title) + '</strong><div style="color:var(--muted)">' + esc(f.root) + '</div></div></div>';
+    }).join('') + '</div>';
+  }
+
+  function preventionSectionHTML() {
+    var box = narrativeBox();
     var seen = {}, tips = [];
     (data.findings || []).forEach(function (f) { if (f.suggestion && !seen[f.suggestion]) { seen[f.suggestion] = true; tips.push(f.suggestion); } });
     tips = tips.slice(0, 8);
@@ -269,6 +279,22 @@
     return '<div style="display:flex;flex-direction:column;gap:9px;">' + tips.map(function (s) {
       return '<div style="display:flex;gap:10px;' + box + '"><span style="color:var(--good)">✓</span><div style="color:var(--body)">' + esc(s) + '</div></div>';
     }).join('') + '</div>';
+  }
+
+  // legacyNarrativeHTML stacks the four sections as expandable <details>,
+  // used as the body of the chat workspace's first auto-posted message.
+  function legacyNarrativeHTML() {
+    var v = computeVals();
+    function sec(title, inner) {
+      return '<details style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px;">' +
+        '<summary style="cursor:pointer;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);">' + esc(title) + '</summary>' +
+        '<div style="margin-top:8px;">' + inner + '</div></details>';
+    }
+    return '<div style="font-size:13px;line-height:1.65;color:var(--body);">' + mdToHtml(data.raw) + '</div>' +
+      sec('Verdict', verdictSectionHTML(v)) +
+      sec('Incidents', incidentsSectionHTML()) +
+      sec('RBAC & security', rbacSectionHTML()) +
+      sec('Prevention & suggestions', preventionSectionHTML());
   }
 
   // ── Reusable card chrome ──
@@ -453,19 +479,13 @@
       table + '</div>';
   }
 
-  // ── Page: AI Analysis ──
+  // ── Page: AI Analysis — conversational investigation workspace ──
   function pageAI(v) {
-    var tabs = [['all', 'All'], ['verdict', 'Verdict'], ['incidents', 'Incidents'], ['rbac', 'RBAC'], ['prevention', 'Prevention']].map(function (x) {
-      var a = state.llmTab === x[0];
-      return '<button data-act="llm" data-tab="' + x[0] + '" style="padding:5px 12px;border-radius:8px;font-size:12px;font-weight:500;cursor:pointer;border:1px solid ' + (a ? 'var(--accent)' : 'var(--border)') + ';background:' + (a ? 'var(--accentSoft)' : 'transparent') + ';color:' + (a ? 'var(--accent)' : 'var(--muted)') + ';">' + x[1] + '</button>';
-    }).join('');
     var header = '<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">' +
       '<span style="width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#7b5bff,var(--accent));display:flex;align-items:center;justify-content:center;color:#fff;">' + icon('ai') + '</span>' +
-      '<div style="flex:1;"><div style="font-size:14px;font-weight:700;">Cluster log analysis</div><div style="font-size:12px;color:var(--muted);">Patterns, anomalies, and health for ' + esc(v.nsLabel) + '</div></div>' +
-      '<button data-act="reanalyze" style="display:flex;align-items:center;gap:8px;height:36px;padding:0 16px;border-radius:9px;border:none;background:var(--accent);color:#04222b;font-size:12.5px;font-weight:700;cursor:pointer;">✦ Analyze ' + v.totalFindings + ' findings</button></div>';
-    return card(header +
-      '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;">' + tabs + '</div>' +
-      '<div style="font-size:13px;line-height:1.65;color:var(--body);">' + llmHTML(v) + '</div>', '18px 20px');
+      '<div style="flex:1;"><div style="font-size:14px;font-weight:700;">Investigation assistant</div><div style="font-size:12px;color:var(--muted);">Ask follow-ups — Exalm remembers the investigation and gathers evidence automatically, scoped to ' + esc(v.nsLabel) + '</div></div>' +
+      '<button data-act="reanalyze" style="display:flex;align-items:center;gap:8px;height:36px;padding:0 16px;border-radius:9px;border:none;background:var(--accent);color:#04222b;font-size:12.5px;font-weight:700;cursor:pointer;">✦ Re-analyze ' + v.totalFindings + ' findings</button></div>';
+    return card(header + '<div id="ai-chat-root"></div>', '18px 20px');
   }
 
   // ── Page: Alerts (read-only critical+high findings) ──
@@ -535,6 +555,7 @@
       if (inp) { inp.focus(); try { inp.setSelectionRange(caret, caret); } catch (e) {} }
     }
     if (window.ExalmCharts && window.ExalmCharts.attach) window.ExalmCharts.attach();
+    if (window.ExalmChat && window.ExalmChat.attach) window.ExalmChat.attach();
   }
 
   function fixBtn(f, isFixed, isFixing, large) {
@@ -592,14 +613,70 @@
       case 'logs': if (window.ExalmLogs) window.ExalmLogs.open(); break;
       case 'drilldown': if (window.ExalmPanels) window.ExalmPanels.openDrilldown({ kind: el.getAttribute('data-kind'), label: el.getAttribute('data-label') }); break;
       case 'filter': state.filter = el.getAttribute('data-f'); render(); break;
-      case 'llm': state.llmTab = el.getAttribute('data-tab'); render(); break;
     }
   }
   function onInput(e) {
     if (e.target && e.target.id === 'finding-search') { state.query = e.target.value; render(); }
   }
 
-  // ── Shared API for the panel/chart/log modules (unchanged contract) ──
+  // ── Shared evidence/fix-card renderers ──
+  // Used by panels.js (remediation/investigation panels) AND chat.js (the
+  // conversation workspace), so there is exactly one implementation of each.
+  var SHARED_CARD = 'background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:11px 13px;';
+  var SHARED_LBL = 'font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--faint);font-weight:600;';
+
+  function sharedSevColor(sev) { return sevMeta(sev).c; }
+  function sharedConfBadge(c) {
+    if (!c) return '';
+    return '<span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;padding:2px 8px;border-radius:20px;background:var(--track);color:' + confColor(c) + ';">' + esc(c) + ' confidence</span>';
+  }
+  function sharedEvidenceHTML(items) {
+    if (!items || !items.length) return '<div style="color:var(--muted);font-size:12.5px;">No evidence captured.</div>';
+    var icon = { log: '📝', event: '⚡', metric: '📊', change: '↺' };
+    return items.map(function (e) {
+      var anchor = e.anchor ? '<div style="margin-top:5px;display:flex;gap:6px;align-items:center;"><code style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;background:var(--track);padding:2px 7px;border-radius:5px;color:var(--accent);flex:1;overflow:auto;">' + esc(e.anchor) + '</code><button class="ex-copy" data-copy="' + esc(e.anchor) + '" style="border:1px solid var(--border);background:var(--panel);color:var(--muted);border-radius:6px;cursor:pointer;font-size:10px;padding:3px 8px;">copy</button></div>' : '';
+      return '<div style="' + SHARED_CARD + 'margin-bottom:8px;"><div style="display:flex;gap:8px;align-items:center;"><span>' + (icon[e.kind] || '•') + '</span><span style="' + SHARED_LBL + '">' + esc(e.kind) + ' · ' + esc(e.source) + '</span></div>' +
+        (e.excerpt ? '<pre style="margin:6px 0 0;white-space:pre-wrap;font-family:\'IBM Plex Mono\',monospace;font-size:11px;color:var(--codeFg);line-height:1.45;">' + esc(e.excerpt) + '</pre>' : '') +
+        anchor + '</div>';
+    }).join('');
+  }
+  function sharedFixCardHTML(fx, findingID) {
+    var preview = [['Risk', fx.risk], ['Downtime', fx.downtime], ['Rollback', fx.rollback], ['Expected', fx.expectedOutcome]]
+      .filter(function (p) { return p[1]; })
+      .map(function (p) { return '<div><div style="' + SHARED_LBL + '">' + p[0] + '</div><div style="font-size:12px;margin-top:1px;">' + esc(p[1]) + '</div></div>'; })
+      .join('');
+    var cmd = fx.kubectlCmd ? '<div style="margin-top:8px;display:flex;gap:6px;align-items:center;"><code style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;background:var(--track);padding:3px 8px;border-radius:5px;color:var(--accent);flex:1;overflow:auto;">' + esc(fx.kubectlCmd) + '</code><button class="ex-copy" data-copy="' + esc(fx.kubectlCmd) + '" style="border:1px solid var(--border);background:var(--panel);color:var(--muted);border-radius:6px;cursor:pointer;font-size:10px;padding:3px 8px;">copy</button></div>' : '';
+    var action = fx.applicable
+      ? '<button class="ex-apply" data-id="' + esc(findingID) + '" style="margin-top:10px;border:none;background:var(--accent);color:#fff;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;padding:7px 16px;">Apply this fix</button>'
+      : '<div style="margin-top:8px;font-size:11.5px;color:var(--muted);">Review and apply manually — Exalm will not auto-execute this change.</div>';
+    return '<div style="' + SHARED_CARD + 'margin-bottom:10px;border-left:3px solid ' + (fx.fixType === 'root-cause' ? 'var(--good)' : 'var(--high)') + ';">' +
+      '<div style="font-size:13px;font-weight:600;">' + esc(fx.description || fx.kind) + '</div>' +
+      (preview ? '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:9px;">' + preview + '</div>' : '') +
+      cmd + action + '</div>';
+  }
+  function sharedSplitFixes(fixes) {
+    var temp = [], root = [];
+    (fixes || []).forEach(function (fx) { (fx.fixType === 'root-cause' ? root : temp).push(fx); });
+    return { temp: temp, root: root };
+  }
+  function sharedFixSectionsHTML(fixes, findingID) {
+    var s = sharedSplitFixes(fixes);
+    var out = '';
+    out += '<h4 style="margin:16px 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--high);">Temporary mitigation</h4>';
+    out += s.temp.length ? s.temp.map(function (fx) { return sharedFixCardHTML(fx, findingID); }).join('')
+      : '<div style="color:var(--muted);font-size:12.5px;">No temporary mitigation — address the root cause directly.</div>';
+    out += '<h4 style="margin:18px 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--good);">Root cause fix <span style="font-weight:400;text-transform:none;color:var(--muted);">— the real solution</span></h4>';
+    out += s.root.length ? s.root.map(function (fx) { return sharedFixCardHTML(fx, findingID); }).join('')
+      : '<div style="color:var(--muted);font-size:12.5px;">No distinct root-cause fix identified — run an investigation for deeper analysis.</div>';
+    return out;
+  }
+  function sharedWireCopyButtons(root) {
+    root.querySelectorAll('.ex-copy').forEach(function (b) {
+      b.addEventListener('click', function () { try { navigator.clipboard.writeText(b.getAttribute('data-copy')); b.textContent = 'copied'; setTimeout(function () { b.textContent = 'copy'; }, 1200); } catch (e) {} });
+    });
+  }
+
+  // ── Shared API for the panel/chart/log/chat modules ──
   window.Exalm = {
     esc: esc, fmt: fmt, css: css, sevMeta: sevMeta, mdToHtml: mdToHtml, confColor: confColor,
     data: function () { return data; },
@@ -608,7 +685,13 @@
     findings: function () { return data.findings || []; },
     finding: function (id) { return (data.findings || []).filter(function (f) { return f.id === id; })[0]; },
     refresh: refresh,
-    applyPrimaryFix: fix
+    applyPrimaryFix: fix,
+    legacyNarrativeHTML: legacyNarrativeHTML,
+    // shared rendering — single implementation used by panels.js and chat.js
+    cardStyle: SHARED_CARD, lblStyle: SHARED_LBL,
+    sevColor: sharedSevColor, confBadge: sharedConfBadge,
+    evidenceHTML: sharedEvidenceHTML, fixCardHTML: sharedFixCardHTML,
+    fixSectionsHTML: sharedFixSectionsHTML, wireCopyButtons: sharedWireCopyButtons
   };
 
   // ── Boot ──

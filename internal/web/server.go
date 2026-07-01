@@ -91,6 +91,16 @@ type ServeOpts struct {
 	// previous selects the last-terminated container's logs. Nil => /api/logs 503.
 	LogFetch func(ctx context.Context, namespace, pod, container string, previous bool, tail int) (string, error)
 
+	// Converse, when non-nil, runs one turn of a multi-turn investigation chat
+	// (the AI Analysis page). Nil => POST /api/chat returns 503 and the UI
+	// falls back to the static, non-conversational narrative.
+	Converse func(ctx context.Context, req ConverseRequest) (*plugin.Conversation, error)
+
+	// GetConversation, when non-nil, loads a previously persisted conversation
+	// by id (used to resume a chat after a page reload). Nil => GET
+	// /api/chat/{id} returns 503.
+	GetConversation func(ctx context.Context, id string) (*plugin.Conversation, error)
+
 	// Metrics, when non-nil, supplies metric series for chart tooltips and
 	// drill-down. Nil => /api/metrics returns an empty series set.
 	Metrics metrics.Provider
@@ -197,6 +207,18 @@ func isLocalhostOrigin(origin string) bool {
 // client could pile up goroutines and exhaust the LLM API quota.
 const maxConcurrentFixes = 3
 
+// maxConcurrentChats is the analogous concurrency gate for POST /api/chat —
+// each turn also proxies an LLM request.
+const maxConcurrentChats = 3
+
+// ConverseRequest is the body of POST /api/chat.
+type ConverseRequest struct {
+	ConversationID string `json:"conversationId,omitempty"`
+	FindingID      string `json:"findingId,omitempty"`
+	Namespace      string `json:"namespace,omitempty"`
+	Message        string `json:"message"`
+}
+
 // liveServer holds runtime state for a running dashboard.
 type liveServer struct {
 	mu              sync.RWMutex
@@ -208,6 +230,8 @@ type liveServer struct {
 	podInfoFn       func() PodInfo
 	investigateFn   func(ctx context.Context, findingID string) (*plugin.Investigation, error)
 	logFetchFn      func(ctx context.Context, namespace, pod, container string, previous bool, tail int) (string, error)
+	converseFn      func(ctx context.Context, req ConverseRequest) (*plugin.Conversation, error)
+	getConvoFn      func(ctx context.Context, id string) (*plugin.Conversation, error)
 	metrics         metrics.Provider
 	provider        string
 	autoRefresh     bool // true when a live refresh source (ReportUpdates or RefreshFindings) is wired
@@ -216,6 +240,7 @@ type liveServer struct {
 	reportCount     int64         // accessed atomically
 	fixSem          chan struct{} // concurrency gate for /api/fix and /api/fix-all
 	investigateSem  chan struct{} // concurrency gate for /api/findings/{id}/investigate (LLM-backed)
+	chatSem         chan struct{} // concurrency gate for POST /api/chat (LLM-backed)
 }
 
 func (s *liveServer) getReport() plugin.Report {
@@ -278,6 +303,8 @@ func Serve(ctx context.Context, report plugin.Report, opts ServeOpts) error {
 		podInfoFn:       opts.PodInfo,
 		investigateFn:   opts.Investigate,
 		logFetchFn:      opts.LogFetch,
+		converseFn:      opts.Converse,
+		getConvoFn:      opts.GetConversation,
 		metrics:         opts.Metrics,
 		provider:        opts.Provider,
 		autoRefresh:     opts.ReportUpdates != nil || opts.RefreshFindings != nil,
@@ -285,6 +312,7 @@ func Serve(ctx context.Context, report plugin.Report, opts ServeOpts) error {
 		startTime:       time.Now(),
 		fixSem:          make(chan struct{}, maxConcurrentFixes),
 		investigateSem:  make(chan struct{}, maxConcurrentFixes),
+		chatSem:         make(chan struct{}, maxConcurrentChats),
 	}
 
 	mux := http.NewServeMux()
@@ -296,6 +324,8 @@ func Serve(ctx context.Context, report plugin.Report, opts ServeOpts) error {
 	mux.HandleFunc("/api/findings/", srv.handleFinding)
 	mux.HandleFunc("/api/logs", srv.handleLogs)
 	mux.HandleFunc("/api/metrics", srv.handleMetricsJSON)
+	mux.HandleFunc("/api/chat", srv.handleChat)
+	mux.HandleFunc("/api/chat/", srv.handleGetConversation)
 	mux.HandleFunc("/api/fix", srv.handleFix)
 	mux.HandleFunc("/api/fix-all", srv.handleFixAll)
 	mux.HandleFunc("/api/create-pr", srv.handleCreatePR)
@@ -689,6 +719,74 @@ func toInvestigationResp(inv *plugin.Investigation) investigationResp {
 		TemporaryFixes: mapFixes(inv.TemporaryFixes),
 		RootCauseFixes: mapFixes(inv.RootCauseFixes),
 	}
+}
+
+// handleChat runs one turn of a multi-turn investigation conversation (the AI
+// Analysis page). Gated by chatSem because, like investigate, it proxies an
+// LLM request.
+func (s *liveServer) handleChat(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.converseFn == nil {
+		http.Error(w, "chat not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req ConverseRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 16*1024) // a chat message is small
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Message) == "" {
+		http.Error(w, "message is required", http.StatusBadRequest)
+		return
+	}
+
+	select {
+	case s.chatSem <- struct{}{}:
+		defer func() { <-s.chatSem }()
+	default:
+		http.Error(w, "too many concurrent chat requests", http.StatusTooManyRequests)
+		return
+	}
+
+	conv, err := s.converseFn(r.Context(), req)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()}) //nolint:errcheck
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(mapConversation(conv)) //nolint:errcheck
+}
+
+// handleGetConversation loads a previously persisted conversation by id, so
+// the chat UI can resume after a page reload: GET /api/chat/{id}.
+func (s *liveServer) handleGetConversation(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.getConvoFn == nil {
+		http.Error(w, "chat not available", http.StatusServiceUnavailable)
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/chat/")
+	if id == "" {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	conv, err := s.getConvoFn(r.Context(), id)
+	if err != nil {
+		http.Error(w, "conversation not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(mapConversation(conv)) //nolint:errcheck
 }
 
 func (s *liveServer) handleReportJSON(w http.ResponseWriter, _ *http.Request) {

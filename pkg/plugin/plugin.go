@@ -164,6 +164,55 @@ type InvestigationStep struct {
 	Anchor string `json:"anchor,omitempty"` // kubectl command to reproduce the check
 }
 
+// Conversation is a multi-turn investigation session: a sequence of user
+// questions and assistant answers that share context (a "focus" resource and
+// everything discussed so far), so follow-ups like "show me the previous
+// logs" resolve against the same pod without the user repeating themselves.
+//
+// Each turn still costs exactly one redacted LLM call — Conversation
+// generalizes Investigation across multiple turns, it does not introduce an
+// agentic tool-use loop. See plugins/k8s/converse.go.
+type Conversation struct {
+	ID        string `json:"id"`
+	FindingID string `json:"finding_id,omitempty"` // set when opened via "Investigate" on a specific finding
+	Namespace string `json:"namespace,omitempty"`  // scope the conversation was opened in ("" or "all" = cluster-wide)
+	// Focus is the "namespace/name" of the resource currently under
+	// discussion. Updated as the conversation resolves new resource mentions;
+	// reused when the user refers to "it", "this pod", "the previous logs", etc.
+	Focus     string                `json:"focus,omitempty"`
+	CreatedAt time.Time             `json:"created_at"`
+	UpdatedAt time.Time             `json:"updated_at"`
+	Messages  []ConversationMessage `json:"messages"`
+}
+
+// ConversationMessage is one turn in a Conversation. User turns only set
+// Role/Content/At; assistant turns additionally carry the same explainability
+// fields as Investigation (steps/evidence/fixes), plus a Timeline and dynamic
+// follow-up Suggestions.
+type ConversationMessage struct {
+	Role    string    `json:"role"` // "user" | "assistant"
+	Content string    `json:"content"`
+	At      time.Time `json:"at"`
+
+	// Assistant-only enrichment; empty for user turns.
+	Confidence  string              `json:"confidence,omitempty"`
+	Steps       []InvestigationStep `json:"steps,omitempty"`
+	Evidence    []EvidenceItem      `json:"evidence,omitempty"`
+	Fixes       []RemediationAction `json:"fixes,omitempty"`
+	Timeline    []TimelineEvent     `json:"timeline,omitempty"`
+	Suggestions []string            `json:"suggestions,omitempty"`
+}
+
+// TimelineEvent is one entry in a Conversation's visual investigation
+// timeline (e.g. "14:21 Deployment Updated" → "14:22 Pod Created" → …).
+type TimelineEvent struct {
+	At       time.Time `json:"at"`
+	Label    string    `json:"label"`
+	Severity string    `json:"severity,omitempty"` // "critical" | "high" | "medium" | "low" | "info"
+	Source   string    `json:"source,omitempty"`   // "change" | "event" | "pod"
+	Detail   string    `json:"detail,omitempty"`
+}
+
 // ChangeRef is a lightweight pointer into the changestore. Stays decoupled
 // from the changestore package so plugin/ stays import-free of internal/.
 type ChangeRef struct {

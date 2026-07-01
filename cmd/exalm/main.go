@@ -21,6 +21,7 @@ import (
 
 	"github.com/exalm-ai/exalm/internal/cliui"
 	"github.com/exalm-ai/exalm/internal/config"
+	convopkg "github.com/exalm-ai/exalm/internal/convo"
 	"github.com/exalm-ai/exalm/internal/gitprovider"
 	"github.com/exalm-ai/exalm/internal/llm"
 	"github.com/exalm-ai/exalm/internal/mcp"
@@ -92,6 +93,7 @@ func initStore() *sql.DB {
 	}
 	doraplugin.SetDeployDB(db)
 	incidentplugin.SetIncidentDB(db)
+	convopkg.SetConvoDB(db)
 	globalDB = db
 
 	// Best-effort one-time migration from legacy file stores.
@@ -512,6 +514,13 @@ func runSubcommand(ctx context.Context, p plugin.Plugin, sc plugin.Subcommand, f
 	case cfg.OutputFormat == "web" || openWeb:
 		serveOpts := web.ServeOpts{Port: 7433, OpenBrowser: true, Provider: cfg.LLMProvider}
 
+		// Derived metric series (modeled values + real change annotations) for
+		// chart tooltips, drill-down, and the conversation engine's
+		// "is memory the real problem?"-style evidence; a Prometheus backend
+		// can replace this without any caller needing to change.
+		metricsProvider := metrics.NewDerived()
+		serveOpts.Metrics = metricsProvider
+
 		// Inject ApplyFix closure using the k8s client stored on the plugin.
 		if k8sPlug, ok := p.(*k8splugin.Plugin); ok {
 			if cs := k8sPlug.LastClient(); cs != nil {
@@ -544,11 +553,23 @@ func runSubcommand(ctx context.Context, p plugin.Plugin, sc plugin.Subcommand, f
 
 			// Log viewer access over the already-connected client (read-only).
 			serveOpts.LogFetch = k8sPlug.LogFetch
-		}
 
-		// Derived metric series (modeled values + real change annotations) for
-		// chart tooltips and drill-down; a Prometheus backend can replace this.
-		serveOpts.Metrics = metrics.NewDerived()
+			// Conversational investigation assistant (the AI Analysis page):
+			// deterministic evidence gathering across the cluster + exactly one
+			// redacted LLM call per turn, persisted across turns and reloads.
+			convoStore := convopkg.NewStore()
+			serveOpts.Converse = func(ctx context.Context, req web.ConverseRequest) (*plugin.Conversation, error) {
+				return k8sPlug.Converse(ctx, req.ConversationID, req.FindingID, req.Namespace, req.Message,
+					trackedLLM, redactor, convoStore, metricsProvider)
+			}
+			serveOpts.GetConversation = func(ctx context.Context, id string) (*plugin.Conversation, error) {
+				c, err := convoStore.Get(ctx, id)
+				if err != nil {
+					return nil, err
+				}
+				return &c, nil
+			}
+		}
 
 		// Inject CreatePR closure if a git provider token and repo are configured.
 		gpToken := pluginFlags["github-token"]

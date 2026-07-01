@@ -145,7 +145,12 @@ type EventSummary struct {
 	Message   string
 	Count     int32
 	LastSeen  string
-	Density   float64 // events per second (Count / window); >1 = spike
+	// LastSeenAt is the real timestamp LastSeen was rendered from, kept
+	// alongside the human string so callers needing exact chronology (e.g.
+	// the conversation engine's investigation timeline) don't have to parse
+	// "5m ago" back into a duration.
+	LastSeenAt time.Time
+	Density    float64 // events per second (Count / window); >1 = spike
 }
 
 // NodeIssue records a node with at least one unhealthy condition.

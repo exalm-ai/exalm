@@ -30,65 +30,18 @@
     root.querySelector('.ex-ov-close').addEventListener('click', close);
   }
 
-  // ── shared bits ──
-  var card = 'background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:11px 13px;';
-  var lbl = 'font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--faint);font-weight:600;';
-  function sevColor(sev) { return (E.sevMeta ? E.sevMeta(sev).c : 'var(--muted)'); }
-  function confBadge(c) {
-    if (!c) return '';
-    var col = E.confColor ? E.confColor(c) : 'var(--muted)';
-    return '<span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;padding:2px 8px;border-radius:20px;background:var(--track);color:' + col + ';">' + esc(c) + ' confidence</span>';
-  }
-
-  function evidenceHTML(items) {
-    if (!items || !items.length) return '<div style="color:var(--muted);font-size:12.5px;">No evidence captured for this finding.</div>';
-    var icon = { log: '📝', event: '⚡', metric: '📊', change: '↺' };
-    return items.map(function (e) {
-      var anchor = e.anchor ? '<div style="margin-top:5px;display:flex;gap:6px;align-items:center;"><code style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;background:var(--track);padding:2px 7px;border-radius:5px;color:var(--accent);flex:1;overflow:auto;">' + esc(e.anchor) + '</code><button class="ex-copy" data-copy="' + esc(e.anchor) + '" style="border:1px solid var(--border);background:var(--panel);color:var(--muted);border-radius:6px;cursor:pointer;font-size:10px;padding:3px 8px;">copy</button></div>' : '';
-      return '<div style="' + card + 'margin-bottom:8px;"><div style="display:flex;gap:8px;align-items:center;"><span>' + (icon[e.kind] || '•') + '</span><span style="' + lbl + '">' + esc(e.kind) + ' · ' + esc(e.source) + '</span></div>' +
-        (e.excerpt ? '<pre style="margin:6px 0 0;white-space:pre-wrap;font-family:\'IBM Plex Mono\',monospace;font-size:11px;color:var(--codeFg);line-height:1.45;">' + esc(e.excerpt) + '</pre>' : '') +
-        anchor + '</div>';
-    }).join('');
-  }
-
-  // fixCardHTML renders one classified fix with its preview.
-  function fixCardHTML(fx, findingID) {
-    var preview = [['Risk', fx.risk], ['Downtime', fx.downtime], ['Rollback', fx.rollback], ['Expected', fx.expectedOutcome]]
-      .filter(function (p) { return p[1]; })
-      .map(function (p) { return '<div><div style="' + lbl + '">' + p[0] + '</div><div style="font-size:12px;margin-top:1px;">' + esc(p[1]) + '</div></div>'; })
-      .join('');
-    var cmd = fx.kubectlCmd ? '<div style="margin-top:8px;display:flex;gap:6px;align-items:center;"><code style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;background:var(--track);padding:3px 8px;border-radius:5px;color:var(--accent);flex:1;overflow:auto;">' + esc(fx.kubectlCmd) + '</code><button class="ex-copy" data-copy="' + esc(fx.kubectlCmd) + '" style="border:1px solid var(--border);background:var(--panel);color:var(--muted);border-radius:6px;cursor:pointer;font-size:10px;padding:3px 8px;">copy</button></div>' : '';
-    var action = fx.applicable
-      ? '<button class="ex-apply" data-id="' + esc(findingID) + '" style="margin-top:10px;border:none;background:var(--accent);color:#fff;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;padding:7px 16px;">Apply this fix</button>'
-      : '<div style="margin-top:8px;font-size:11.5px;color:var(--muted);">Review and apply manually — Exalm will not auto-execute this change.</div>';
-    return '<div style="' + card + 'margin-bottom:10px;border-left:3px solid ' + (fx.fixType === 'root-cause' ? 'var(--good)' : 'var(--high)') + ';">' +
-      '<div style="font-size:13px;font-weight:600;">' + esc(fx.description || fx.kind) + '</div>' +
-      (preview ? '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:9px;">' + preview + '</div>' : '') +
-      cmd + action + '</div>';
-  }
-
-  function splitFixes(fixes) {
-    var temp = [], root = [];
-    (fixes || []).forEach(function (fx) { (fx.fixType === 'root-cause' ? root : temp).push(fx); });
-    return { temp: temp, root: root };
-  }
-
-  function fixSectionsHTML(fixes, findingID) {
-    var s = splitFixes(fixes);
-    var out = '';
-    out += '<h4 style="margin:16px 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--high);">Temporary mitigation</h4>';
-    out += s.temp.length ? s.temp.map(function (fx) { return fixCardHTML(fx, findingID); }).join('')
-      : '<div style="color:var(--muted);font-size:12.5px;">No temporary mitigation — address the root cause directly.</div>';
-    out += '<h4 style="margin:18px 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--good);">Root cause fix <span style="font-weight:400;text-transform:none;color:var(--muted);">— the real solution</span></h4>';
-    out += s.root.length ? s.root.map(function (fx) { return fixCardHTML(fx, findingID); }).join('')
-      : '<div style="color:var(--muted);font-size:12.5px;">No distinct root-cause fix identified — run an investigation for deeper analysis.</div>';
-    return out;
-  }
+  // ── shared bits ── (single implementation lives on window.Exalm, set by
+  // dashboard.js; panels.js and chat.js both alias it so neither duplicates
+  // the rendering logic.)
+  var card = E.cardStyle || '';
+  var lbl = E.lblStyle || '';
+  function sevColor(sev) { return E.sevColor ? E.sevColor(sev) : 'var(--muted)'; }
+  function confBadge(c) { return E.confBadge ? E.confBadge(c) : ''; }
+  function evidenceHTML(items) { return E.evidenceHTML ? E.evidenceHTML(items) : ''; }
+  function fixSectionsHTML(fixes, findingID) { return E.fixSectionsHTML ? E.fixSectionsHTML(fixes, findingID) : ''; }
 
   function wireCommon() {
-    root.querySelectorAll('.ex-copy').forEach(function (b) {
-      b.addEventListener('click', function () { try { navigator.clipboard.writeText(b.getAttribute('data-copy')); b.textContent = 'copied'; setTimeout(function () { b.textContent = 'copy'; }, 1200); } catch (e) {} });
-    });
+    if (E.wireCopyButtons) E.wireCopyButtons(root);
     root.querySelectorAll('.ex-apply').forEach(function (b) {
       b.addEventListener('click', function () {
         var id = b.getAttribute('data-id');
@@ -117,41 +70,14 @@
     wireCommon();
   }
 
-  // ── Investigation panel (deep root-cause) ──
+  // ── Investigation → opens the conversational chat, scoped to this finding.
+  // The old one-shot POST /api/findings/{id}/investigate endpoint still
+  // exists server-side (additive, for non-UI callers); the UI now always
+  // opens a follow-up-capable chat instead of a single static report.
   function openInvestigation(id) {
+    if (window.ExalmChat && window.ExalmChat.openScoped) { window.ExalmChat.openScoped(id); return; }
     var f = E.finding ? E.finding(id) : null;
-    var title = '✦ Investigating ' + esc(f ? f.title : id);
-    overlay(title, '<div style="display:flex;align-items:center;gap:10px;color:var(--muted);font-size:13px;"><span style="display:inline-block;width:14px;height:14px;border:2px solid var(--faint);border-top-color:transparent;border-radius:50%;animation:ex-spin 1s linear infinite;"></span>Gathering evidence and synthesizing root cause…</div>');
-    fetch('/api/findings/' + encodeURIComponent(id) + '/investigate', { method: 'POST', headers: { 'X-Exalm-Request': 'true' } })
-      .then(function (r) {
-        if (r.status === 503) return { _unavailable: true };
-        return r.json();
-      })
-      .then(function (inv) {
-        if (inv && inv._unavailable) {
-          overlay(title, '<div style="color:var(--muted);font-size:13px;">Live investigation is unavailable in this mode (no cluster connection / LLM). The finding\'s evidence and classification are still shown in the remediation panel.</div>');
-          return;
-        }
-        renderInvestigation(title, id, inv);
-      })
-      .catch(function (err) { overlay(title, '<div style="color:var(--crit);font-size:13px;">Investigation failed: ' + esc(err.message) + '</div>'); });
-  }
-
-  function renderInvestigation(title, id, inv) {
-    var steps = (inv.steps || []).map(function (st) {
-      var mark = st.status === 'done' ? '<span style="color:var(--good);">✓</span>' : st.status === 'unavailable' ? '<span style="color:var(--faint);">○</span>' : '<span style="color:var(--faint);">–</span>';
-      return '<div style="display:flex;gap:8px;align-items:baseline;padding:3px 0;font-size:12.5px;">' + mark + '<span style="flex:1;">' + esc(st.label) + (st.detail ? ' <span style="color:var(--muted);">— ' + esc(st.detail) + '</span>' : '') + '</span></div>';
-    }).join('');
-    var body =
-      '<div style="' + card + 'margin-bottom:14px;"><div style="display:flex;align-items:center;gap:8px;"><div style="' + lbl + '">Root cause analysis</div>' + confBadge(inv.confidence) + '</div>' +
-      '<div style="font-size:13px;line-height:1.6;margin-top:6px;">' + (E.mdToHtml ? E.mdToHtml(inv.summary || inv.rootCause) : esc(inv.summary || inv.rootCause)) + '</div></div>' +
-      '<h4 style="margin:0 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--fg);">Investigation steps</h4>' +
-      '<div style="' + card + 'margin-bottom:14px;">' + (steps || '<span style="color:var(--muted)">No steps recorded.</span>') + '</div>' +
-      '<h4 style="margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--fg);">Evidence</h4>' +
-      evidenceHTML(inv.evidence) +
-      fixSectionsHTML((inv.temporaryFixes || []).concat(inv.rootCauseFixes || []), id);
-    overlay(title, body);
-    wireCommon();
+    overlay('✦ Investigate ' + esc(f ? f.title : id), '<div style="color:var(--crit);font-size:13px;">The investigation assistant failed to load. Reload the page and try again.</div>');
   }
 
   // ── Chart drill-down ──
@@ -185,5 +111,5 @@
     });
   }
 
-  window.ExalmPanels = { openRemediation: openRemediation, openInvestigation: openInvestigation, openDrilldown: openDrilldown, close: close };
+  window.ExalmPanels = { openRemediation: openRemediation, openInvestigation: openInvestigation, openDrilldown: openDrilldown, overlay: overlay, close: close };
 })();
