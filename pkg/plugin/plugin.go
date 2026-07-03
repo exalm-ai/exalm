@@ -179,10 +179,15 @@ type Conversation struct {
 	// Focus is the "namespace/name" of the resource currently under
 	// discussion. Updated as the conversation resolves new resource mentions;
 	// reused when the user refers to "it", "this pod", "the previous logs", etc.
-	Focus     string                `json:"focus,omitempty"`
-	CreatedAt time.Time             `json:"created_at"`
-	UpdatedAt time.Time             `json:"updated_at"`
-	Messages  []ConversationMessage `json:"messages"`
+	Focus string `json:"focus,omitempty"`
+	// Fingerprint identifies the symptom under investigation
+	// ("oom-killed\x1fprod/payment-api") so future conversations about the
+	// same resource + symptom can surface this one as a similar past
+	// incident. Set by the planner on the first turn that matches a symptom.
+	Fingerprint string                `json:"fingerprint,omitempty"`
+	CreatedAt   time.Time             `json:"created_at"`
+	UpdatedAt   time.Time             `json:"updated_at"`
+	Messages    []ConversationMessage `json:"messages"`
 }
 
 // ConversationMessage is one turn in a Conversation. User turns only set
@@ -201,6 +206,18 @@ type ConversationMessage struct {
 	Fixes       []RemediationAction `json:"fixes,omitempty"`
 	Timeline    []TimelineEvent     `json:"timeline,omitempty"`
 	Suggestions []string            `json:"suggestions,omitempty"`
+
+	// Copilot enrichment (all additive; absent on transcripts recorded
+	// before the investigation planner shipped — renderers must null-guard).
+	//
+	// Score is the numeric confidence (0–100) derived from evidence quality;
+	// Confidence above stays populated with the tier ("high"/"medium"/"low")
+	// mapped from Score for backward compatibility.
+	Score          int                 `json:"score,omitempty"`
+	ScoreRationale string              `json:"score_rationale,omitempty"`
+	Plan           []PlanStep          `json:"plan,omitempty"`
+	Hypotheses     []Hypothesis        `json:"hypotheses,omitempty"`
+	Prevention     []RemediationAction `json:"prevention,omitempty"` // FixType "prevention"
 }
 
 // TimelineEvent is one entry in a Conversation's visual investigation
@@ -230,7 +247,8 @@ type ChangeRef struct {
 
 // EvidenceItem is one verifiable fact backing a finding.
 type EvidenceItem struct {
-	// Kind is "log", "metric", "event", or "change".
+	// Kind is "log", "metric", "event", "change", "config", "topology", or
+	// "history".
 	Kind string `json:"kind"`
 	// Source identifies the origin (pod name, metric query, event reason,
 	// change ID).
@@ -242,6 +260,20 @@ type EvidenceItem struct {
 	// Anchor is a deep link or kubectl command the user can run to retrieve
 	// the full context. Example: "kubectl logs -n ns pod --tail 200".
 	Anchor string `json:"anchor,omitempty"`
+
+	// Copilot enrichment (additive; empty on older records).
+	//
+	// Label is the citation key ("E1", "E2", …) assigned per turn so the
+	// answer text and hypotheses can reference this item precisely.
+	Label string `json:"label,omitempty"`
+	// Edge is the resource-graph relationship the evidence came from
+	// ("pod→ownerDeployment"). Explains WHY this evidence was gathered.
+	Edge string `json:"edge,omitempty"`
+	// FromCache is true when the item was served from the conversation's
+	// evidence cache instead of a fresh cluster call; CollectedAt then holds
+	// the original collection time (At stays "when observed").
+	FromCache   bool      `json:"from_cache,omitempty"`
+	CollectedAt time.Time `json:"collected_at,omitempty"`
 }
 
 // RemediationAction describes how a finding can be automatically remediated.
@@ -264,8 +296,10 @@ type RemediationAction struct {
 	Shell       string `json:"shell,omitempty"`   // "powershell" | "bash" | "" (kubectl)
 	Warning     string `json:"warning,omitempty"` // safety note shown before applying
 	// FixType classifies the action: "temporary" (restart/delete/scale — buys
-	// time but the issue recurs) or "root-cause" (addresses the underlying
-	// cause). Empty when unclassified. Set by plugins/k8s/classify.go.
+	// time but the issue recurs), "root-cause" (addresses the underlying
+	// cause), or "prevention" (keeps the issue from recurring — alerts,
+	// limits policy, pinned digests). Empty when unclassified. Set by
+	// plugins/k8s/classify.go and plugins/k8s/prevention.go.
 	FixType string `json:"fix_type,omitempty"`
 	// Risk is the blast radius of applying this action: "low", "medium", "high".
 	Risk string `json:"risk,omitempty"`
