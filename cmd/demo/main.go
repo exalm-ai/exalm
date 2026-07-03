@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -191,8 +192,16 @@ and a PVC approaching capacity.
 		}
 	}()
 
-	fmt.Fprintf(os.Stderr, "Demo dashboard: http://localhost:7433\n") //nolint:errcheck // startup info to stderr
-	fmt.Fprintf(os.Stderr, "Press Ctrl-C to stop.\n")                 //nolint:errcheck // startup info to stderr
+	// PORT overrides the default so the demo can run beside a real exalm
+	// serve instance (e.g. in preview harnesses).
+	port := 7433
+	if p := os.Getenv("PORT"); p != "" {
+		if n, err := strconv.Atoi(p); err == nil && n > 0 {
+			port = n
+		}
+	}
+	fmt.Fprintf(os.Stderr, "Demo dashboard: http://localhost:%d\n", port) //nolint:errcheck // startup info to stderr
+	fmt.Fprintf(os.Stderr, "Press Ctrl-C to stop.\n")                     //nolint:errcheck // startup info to stderr
 
 	// Synthetic pod inventory + a stubbed fix so the demo exercises the full
 	// dashboard (namespace selector, pod-derived metrics, Fix flow).
@@ -246,7 +255,7 @@ and a PVC approaching capacity.
 	converse, getConversation := newDemoConverse(report.Findings)
 
 	if err := web.Serve(ctx, report, web.ServeOpts{
-		Port:          7433,
+		Port:          port,
 		OpenBrowser:   false,
 		ReportUpdates: updates,
 		Provider:      "ollama",

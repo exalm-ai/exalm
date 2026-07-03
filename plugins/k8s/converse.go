@@ -1,19 +1,26 @@
 package k8s
 
-// converse.go generalizes investigate.go's "one finding, one shot" pattern
-// into "one conversation, many turns" — still exactly ONE redacted LLM call
-// per turn, never an agentic tool-use loop. Each turn:
+// converse.go is the conversation engine behind the AI Operations Copilot —
+// still exactly ONE redacted LLM call per turn, never an agentic tool-use
+// loop. Each turn:
 //  1. resolves which resource the conversation is focused on,
-//  2. classifies intent deterministically (keyword/regex, not an LLM call),
-//  3. gathers evidence deterministically for that intent, reusing the same
-//     snapshot/log/changestore/metrics machinery investigate.go uses, plus
-//     the on-demand collectors in configmaps.go/secrets.go/nodedetail.go,
-//  4. makes one llm.Complete() call over redacted evidence + conversation
-//     history, and
-//  5. persists both turns (redacted) via the injected convo.Store.
+//  2. classifies question intents deterministically (keyword/regex),
+//  3. builds a deterministic investigation plan (planner.go): the symptom
+//     catalog (symptoms.go) + the intents decide which collectors run,
+//     following the resource-graph edges in graph.go,
+//  4. executes the plan through the collector dispatch table, serving
+//     repeat questions from the per-conversation evidence cache
+//     (evidcache.go) and labeling every evidence item E1..En for citation,
+//  5. ranks root-cause hypotheses (hypotheses.go), scores confidence from
+//     evidence quality (confidence.go), and picks prevention advice
+//     (prevention.go) — all deterministic,
+//  6. makes one llm.Complete() call over redacted evidence + history
+//     (fallback: a deterministic sectioned reply), and
+//  7. persists both turns (redacted transcript only) via convo.Store.
 //
 // No step opens a network connection outside the already-injected
-// kubernetes.Interface, metrics.Provider, or LLMClient.
+// kubernetes.Interface, metrics.Provider, or LLMClient. The LLM never
+// chooses collectors — it only narrates what the plan gathered.
 
 import (
 	"context"
