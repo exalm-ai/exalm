@@ -479,13 +479,18 @@
       table + '</div>';
   }
 
-  // ── Page: AI Analysis — conversational investigation workspace ──
+  // ── Page: AI Analysis — two-pane investigation workspace ──
+  // Left: the cumulative investigation tree (tree.js). Right: the chat.
   function pageAI(v) {
     var header = '<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">' +
       '<span style="width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#7b5bff,var(--accent));display:flex;align-items:center;justify-content:center;color:#fff;">' + icon('ai') + '</span>' +
-      '<div style="flex:1;"><div style="font-size:14px;font-weight:700;">Investigation assistant</div><div style="font-size:12px;color:var(--muted);">Ask follow-ups — Exalm remembers the investigation and gathers evidence automatically, scoped to ' + esc(v.nsLabel) + '</div></div>' +
+      '<div style="flex:1;"><div style="font-size:14px;font-weight:700;">Investigation assistant</div><div style="font-size:12px;color:var(--muted);">Ask follow-ups — Exalm plans the investigation, gathers evidence across the cluster, and remembers it all, scoped to ' + esc(v.nsLabel) + '</div></div>' +
       '<button data-act="reanalyze" style="display:flex;align-items:center;gap:8px;height:36px;padding:0 16px;border-radius:9px;border:none;background:var(--accent);color:#04222b;font-size:12.5px;font-weight:700;cursor:pointer;">✦ Re-analyze ' + v.totalFindings + ' findings</button></div>';
-    return card(header + '<div id="ai-chat-root"></div>', '18px 20px');
+    return card(header +
+      '<div class="ex-ai-grid" style="display:grid;grid-template-columns:minmax(280px,34%) 1fr;gap:16px;">' +
+      '<div id="ai-tree-root" style="min-width:0;border-right:1px solid var(--border);padding-right:14px;max-height:62vh;overflow-y:auto;"></div>' +
+      '<div id="ai-chat-root" style="min-width:0;"></div>' +
+      '</div>', '18px 20px');
   }
 
   // ── Page: Alerts (read-only critical+high findings) ──

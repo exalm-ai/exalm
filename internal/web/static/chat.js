@@ -43,11 +43,13 @@
     this.scope = scope || {};
     this.id = loadCachedId(key);
     this.messages = [];
+    this.focus = '';
     this.loading = false;
     this.error = null;
     this.draft = '';
     this.hydrated = false;
     this.lastSuggestions = [];
+    this.treeOpenKeys = {};
     this.onChange = null;
   }
   Session.prototype.notify = function () { if (this.onChange) this.onChange(); };
@@ -57,7 +59,7 @@
     self.hydrated = true;
     fetch('/api/chat/' + encodeURIComponent(self.id))
       .then(function (r) { if (!r.ok) throw new Error('not found'); return r.json(); })
-      .then(function (conv) { self.id = conv.id; self.messages = conv.messages || []; self.notify(); })
+      .then(function (conv) { self.id = conv.id; self.focus = conv.focus || ''; self.messages = conv.messages || []; self.notify(); })
       .catch(function () { self.id = null; clearCachedId(self.key); self.notify(); });
   };
   Session.prototype.send = function (text) {
@@ -75,7 +77,7 @@
       if (r.status === 503) throw new Error('Chat is unavailable in this mode (no LLM or cluster connection).');
       throw new Error('The investigation request failed (HTTP ' + r.status + ').');
     }).then(function (conv) {
-      self.id = conv.id; self.messages = conv.messages || []; self.loading = false;
+      self.id = conv.id; self.focus = conv.focus || ''; self.messages = conv.messages || []; self.loading = false;
       saveCachedId(self.key, self.id);
       self.notify();
     }).catch(function (err) {
@@ -124,17 +126,73 @@
       }).join('') + '</div>';
   }
 
+  // scoreLine renders the numeric confidence bar + rationale; falls back to
+  // the legacy tier badge for transcripts recorded before scoring shipped.
+  function scoreLine(msg) {
+    if (!msg.score) return (E.confBadge && msg.confidence) ? '<div style="margin-top:9px;">' + E.confBadge(msg.confidence) + '</div>' : '';
+    var col = msg.score >= 75 ? 'var(--good)' : msg.score >= 45 ? 'var(--med)' : 'var(--high)';
+    return '<div style="margin-top:9px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+      '<span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--faint);">Confidence</span>' +
+      '<span style="display:inline-block;width:90px;height:6px;border-radius:3px;background:var(--track);overflow:hidden;"><span style="display:block;width:' + Math.max(2, Math.min(100, msg.score)) + '%;height:100%;background:' + col + ';"></span></span>' +
+      '<b style="font-size:11.5px;color:' + col + ';">' + msg.score + '%</b>' +
+      (msg.scoreRationale ? '<span style="font-size:11px;color:var(--muted);">— ' + esc(msg.scoreRationale) + '</span>' : '') +
+      '</div>';
+  }
+
+  function planHTML(plan) {
+    if (!plan || !plan.length) return '';
+    return plan.map(function (ps) {
+      var mark = ps.status === 'done' ? '<span style="color:var(--good);">✓</span>'
+        : ps.fromCache ? '<span style="color:var(--faint);" title="served from this conversation\'s evidence cache">↺</span>'
+        : ps.status === 'unavailable' ? '<span style="color:var(--faint);">○</span>' : '<span style="color:var(--faint);">–</span>';
+      return '<div style="display:flex;gap:8px;align-items:baseline;padding:3px 0;font-size:12px;">' + mark +
+        '<span style="flex:1;"><code style="font-family:\'IBM Plex Mono\',monospace;font-size:10.5px;color:var(--accent);">' + esc(ps.collector) + '</code>' +
+        (ps.edge ? ' <span style="color:var(--faint);font-size:10.5px;">' + esc(ps.edge) + '</span>' : '') +
+        (ps.fromCache ? ' <span style="color:var(--faint);font-size:10px;">(cached)</span>' : '') +
+        ' <span style="color:var(--muted);">— ' + esc(ps.reason) + '</span></span></div>';
+    }).join('');
+  }
+
+  function hypothesesHTML(hyps) {
+    if (!hyps || !hyps.length) return '';
+    return hyps.map(function (h, i) {
+      var col = h.score >= 75 ? 'var(--good)' : h.score >= 45 ? 'var(--med)' : 'var(--faint)';
+      var cites = function (labels, colr) {
+        return (labels || []).map(function (l) { return '<a class="ex-cite" data-ev="' + esc(l) + '" style="cursor:pointer;color:' + colr + ';font-family:\'IBM Plex Mono\',monospace;font-size:10px;">[' + esc(l) + ']</a>'; }).join(' ');
+      };
+      return '<div style="padding:5px 0;border-bottom:1px solid var(--border);font-size:12px;">' +
+        '<div style="display:flex;gap:8px;align-items:center;"><b style="color:var(--fg);">' + (i + 1) + '. ' + esc(h.title) + '</b>' +
+        '<span style="display:inline-block;width:44px;height:5px;border-radius:3px;background:var(--track);overflow:hidden;"><span style="display:block;width:' + Math.max(2, Math.min(100, h.score)) + '%;height:100%;background:' + col + ';"></span></span>' +
+        '<span style="font-size:10.5px;color:' + col + ';">' + h.score + '</span></div>' +
+        '<div style="color:var(--muted);font-size:11px;margin-top:2px;">' + esc(h.rationale || '') +
+        (h.evidenceFor && h.evidenceFor.length ? ' · for: ' + cites(h.evidenceFor, 'var(--good)') : '') +
+        (h.evidenceAgainst && h.evidenceAgainst.length ? ' · against: ' + cites(h.evidenceAgainst, 'var(--high)') : '') +
+        '</div></div>';
+    }).join('');
+  }
+
   function metaRow(msg, session) {
-    var out = '';
-    var conf = E.confBadge ? E.confBadge(msg.confidence) : '';
-    if (conf) out += '<div style="margin-top:9px;">' + conf + '</div>';
+    var out = scoreLine(msg);
+    out += expandable('Investigation plan', planHTML(msg.plan), (msg.plan || []).length || null);
+    out += expandable('Alternative hypotheses', hypothesesHTML(msg.hypotheses), (msg.hypotheses || []).length || null);
     out += expandable('Investigation steps', stepsHTML(msg.steps));
     out += expandable('Supporting evidence', (msg.evidence && msg.evidence.length && E.evidenceHTML) ? E.evidenceHTML(msg.evidence) : '', (msg.evidence || []).length || null);
     out += expandable('Investigation timeline', timelineHTML(msg.timeline));
     if (msg.fixes && msg.fixes.length && E.fixSectionsHTML) {
       out += expandable('Suggested fixes', E.fixSectionsHTML(msg.fixes, session.scope.findingId || ''), msg.fixes.length);
     }
+    if (msg.prevention && msg.prevention.length && E.fixCardHTML) {
+      out += expandable('Prevention', msg.prevention.map(function (fx) { return E.fixCardHTML(fx, ''); }).join(''), msg.prevention.length);
+    }
     return out;
+  }
+
+  // citeify turns [E3] markers in the assistant's HTML into clickable chips
+  // that flash the matching evidence node in the tree (or open the details).
+  function citeify(html) {
+    return html.replace(/\[(E\d+)\]/g, function (_m, label) {
+      return '<a class="ex-cite" data-ev="' + label + '" style="cursor:pointer;color:var(--accent);font-family:\'IBM Plex Mono\',monospace;font-size:11px;background:var(--accentSoft);padding:0 4px;border-radius:5px;">' + label + '</a>';
+    });
   }
 
   function bubble(msg, session) {
@@ -142,7 +200,7 @@
       return '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;">' +
         '<div style="max-width:78%;background:var(--accent);color:#04222b;border-radius:14px;padding:10px 14px;font-size:13px;line-height:1.5;white-space:pre-wrap;">' + esc(msg.content) + '</div></div>';
     }
-    var bodyHTML = E.mdToHtml ? E.mdToHtml(msg.content) : esc(msg.content);
+    var bodyHTML = citeify(E.mdToHtml ? E.mdToHtml(msg.content) : esc(msg.content));
     return '<div style="display:flex;justify-content:flex-start;margin-bottom:12px;">' +
       '<div style="max-width:88%;background:var(--panel2);border:1px solid var(--border);border-radius:14px;padding:11px 14px;font-size:13px;line-height:1.55;color:var(--fg);">' +
       bodyHTML + metaRow(msg, session) + '</div></div>';
@@ -192,11 +250,22 @@
       '<button class="ex-chat-send" ' + (session.loading ? 'disabled' : '') + ' style="height:38px;padding:0 16px;border:none;border-radius:9px;background:var(--accent);color:#04222b;font-size:12.5px;font-weight:700;cursor:pointer;white-space:nowrap;' + (session.loading ? 'opacity:.6;cursor:not-allowed;' : '') + '">' + (session.loading ? '…' : 'Send') + '</button></div>';
   }
 
+  // toolbarHTML renders the export/print actions once a conversation exists.
+  function toolbarHTML(session) {
+    if (!session.id || !session.messages.length) return '';
+    var btn = 'border:1px solid var(--border);background:var(--panel2);color:var(--muted);border-radius:7px;cursor:pointer;font-size:10.5px;padding:3px 10px;text-decoration:none;display:inline-block;';
+    return '<div class="ex-chat-toolbar" style="display:flex;gap:6px;justify-content:flex-end;margin-bottom:6px;">' +
+      '<a href="/api/chat/' + encodeURIComponent(session.id) + '/export?format=md" style="' + btn + '">⬇ Markdown</a>' +
+      '<a href="/api/chat/' + encodeURIComponent(session.id) + '/export?format=json" style="' + btn + '">⬇ JSON</a>' +
+      '<button class="ex-chat-print" style="' + btn + '">🖨 Print / PDF</button></div>';
+  }
+
   function renderChat(session, opts) {
     opts = opts || {};
     var lastAssistant = lastAssistantMessage(session.messages);
     session.lastSuggestions = (lastAssistant && lastAssistant.suggestions && lastAssistant.suggestions.length) ? lastAssistant.suggestions : (opts.starters || []);
-    return '<div class="ex-chat-scroll" style="max-height:' + (opts.maxHeight || '520px') + ';overflow-y:auto;padding:2px 2px 10px;">' + renderBody(session, opts) + '</div>' + inputBarHTML(session);
+    return toolbarHTML(session) +
+      '<div class="ex-chat-scroll" style="max-height:' + (opts.maxHeight || '520px') + ';overflow-y:auto;padding:2px 2px 10px;">' + renderBody(session, opts) + '</div>' + inputBarHTML(session);
   }
 
   // ── Event wiring (delegated once per root; root.innerHTML is replaced on
@@ -207,6 +276,23 @@
     root._exWired = true;
     root.addEventListener('click', function (e) {
       if (e.target.closest('.ex-chat-send')) { doSend(); return; }
+      if (e.target.closest('.ex-chat-print')) { window.print(); return; }
+      var cite = e.target.closest('.ex-cite');
+      if (cite) {
+        var label = cite.getAttribute('data-ev');
+        // Prefer flashing the tree node (inline page); otherwise open the
+        // matching evidence <details> in this chat (scoped overlay).
+        var tree = document.getElementById('ai-tree-root');
+        if (window.ExalmTree && tree && window.ExalmTree.flash(tree, label)) return;
+        var det = root.querySelector('details');
+        var target = null;
+        root.querySelectorAll('details').forEach(function (d) {
+          if (!target && d.textContent.indexOf(label) !== -1) target = d;
+        });
+        if (target) { target.open = true; target.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+        void det;
+        return;
+      }
       var sugg = e.target.closest('.ex-chat-sugg');
       if (sugg) {
         var text = (session.lastSuggestions || [])[+sugg.getAttribute('data-sugg-idx')];
@@ -259,6 +345,15 @@
     var caret = wasFocused ? active.selectionStart : 0;
     root.innerHTML = renderChat(inlineSession, { seedHTML: E.legacyNarrativeHTML ? E.legacyNarrativeHTML() : '', starters: INLINE_STARTERS, maxHeight: '54vh' });
     wire(root, inlineSession);
+    // The cumulative investigation tree lives in the sibling pane; expanded
+    // state persists across repaints via openKeys held on the session.
+    var treeRoot = document.getElementById('ai-tree-root');
+    if (treeRoot && window.ExalmTree) {
+      inlineSession.treeOpenKeys = inlineSession.treeOpenKeys || {};
+      window.ExalmTree.renderHTML(
+        window.ExalmTree.buildModel(inlineSession.messages, inlineSession.focus),
+        treeRoot, inlineSession.treeOpenKeys);
+    }
     if (wasFocused) {
       var inp = root.querySelector('.ex-chat-input');
       if (inp) { inp.focus(); try { inp.setSelectionRange(caret, caret); } catch (e) {} }
@@ -291,6 +386,22 @@
     paint();
     session.hydrate();
   }
+
+  // Print support: browsers don't reliably render closed <details> content
+  // even with print CSS, so expand everything before printing (covers both
+  // the Print button and Ctrl+P) and restore afterwards.
+  var reCloseAfterPrint = [];
+  window.addEventListener('beforeprint', function () {
+    reCloseAfterPrint = [];
+    document.querySelectorAll('details:not([open])').forEach(function (d) {
+      d.open = true;
+      reCloseAfterPrint.push(d);
+    });
+  });
+  window.addEventListener('afterprint', function () {
+    reCloseAfterPrint.forEach(function (d) { d.open = false; });
+    reCloseAfterPrint = [];
+  });
 
   window.ExalmChat = { attach: attach, openScoped: openScoped };
   // dashboard.js's first paint may already have happened before this module

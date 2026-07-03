@@ -34,6 +34,25 @@
       .ex-sidebar .ex-brand-text { display: none !important; }
       .ex-statcards { grid-template-columns: 1fr 1fr !important; }
     }
+    /* AI workspace: stack the tree above the chat on narrow screens. */
+    @media (max-width: 900px) {
+      .ex-ai-grid { grid-template-columns: 1fr !important; }
+      .ex-ai-grid > #ai-tree-root { border-right: none !important; padding-right: 0 !important; max-height: 30vh !important; }
+    }
+    /* Print / Save-as-PDF: a clean investigation report. Hides the app
+       chrome, expands every collapsed section, forces readable colors. */
+    @media print {
+      body { background: #fff !important; color: #111 !important; }
+      .ex-sidebar, footer, .ex-chat-toolbar, .ex-chat-input, .ex-chat-send,
+      .ex-chat-sugg, #ex-overlay, button[data-act], .ex-copy { display: none !important; }
+      .ex-chat-scroll, #ai-tree-root { max-height: none !important; overflow: visible !important; }
+      details { display: block; }
+      details > *:not(summary) { display: block !important; }
+      details summary { list-style: none; }
+      * { box-shadow: none !important; text-shadow: none !important; }
+      [style] { background: transparent !important; color: #111 !important; border-color: #ccc !important; }
+      pre, code { color: #333 !important; }
+    }
   </style>
 </head>
 <body>
@@ -49,6 +68,7 @@
        interactivity, and the log viewer. -->
   <script src="/static/dashboard.js"></script>
   <script src="/static/panels.js"></script>
+  <script src="/static/tree.js"></script>
   <script src="/static/chat.js"></script>
   <script src="/static/charts.js"></script>
   <script src="/static/logviewer.js"></script>
