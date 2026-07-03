@@ -558,6 +558,31 @@ func runSubcommand(ctx context.Context, p plugin.Plugin, sc plugin.Subcommand, f
 			// deterministic evidence gathering across the cluster + exactly one
 			// redacted LLM call per turn, persisted across turns and reloads.
 			convoStore := convopkg.NewStore()
+			// Historical recurrence ("has this happened before?") reads the
+			// incident store through a decoupled closure so plugins/k8s never
+			// imports plugins/incident.
+			incStore := incidentplugin.NewFileStore()
+			k8sPlug.SetHistorySources(func(ctx context.Context, from, to time.Time) ([]k8splugin.PastIncident, error) {
+				incidents, err := incStore.QueryByDateRange(ctx, from, to)
+				if err != nil {
+					return nil, err
+				}
+				out := make([]k8splugin.PastIncident, 0, len(incidents))
+				for _, inc := range incidents {
+					past := k8splugin.PastIncident{
+						Title: inc.Title, Namespace: inc.Namespace, Service: inc.Service,
+						Status: string(inc.Status), OpenedAt: inc.OpenedAt,
+					}
+					if pm := inc.Postmortem; pm != nil {
+						past.Resolution = pm.Mitigation
+						if past.Resolution == "" && len(pm.ActionItems) > 0 {
+							past.Resolution = strings.Join(pm.ActionItems, "; ")
+						}
+					}
+					out = append(out, past)
+				}
+				return out, nil
+			})
 			serveOpts.Converse = func(ctx context.Context, req web.ConverseRequest) (*plugin.Conversation, error) {
 				return k8sPlug.Converse(ctx, req.ConversationID, req.FindingID, req.Namespace, req.Message,
 					trackedLLM, redactor, convoStore, metricsProvider)

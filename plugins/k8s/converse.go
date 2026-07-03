@@ -66,6 +66,11 @@ func (p *Plugin) Converse(ctx context.Context, convoID, findingID, namespace, me
 	ns, name := splitFocus(conv.Focus)
 	pod := findPod(snap, ns, name)
 	intents := classifyIntent(message)
+	// The first turn of every investigation checks recurrence automatically —
+	// "has this happened before?" is the first thing a senior SRE asks.
+	if len(conv.Messages) == 1 && !hasIntent(intents, "history") {
+		intents = append(intents, "history")
+	}
 
 	// Baseline: pod status + snapshot evidence come free — always first.
 	var steps []plugin.InvestigationStep
@@ -91,9 +96,16 @@ func (p *Plugin) Converse(ctx context.Context, convoID, findingID, namespace, me
 	if conv.Fingerprint == "" {
 		conv.Fingerprint = fingerprintFor(pod, snap, conv.Focus)
 	}
+	p.mu.Lock()
+	incidentHistory := p.incidentHistory
+	p.mu.Unlock()
 	executedPlan, planSteps, planEvidence := executePlan(ctx, plan, execDeps{
 		cs: cs, red: red, newLF: newLF, mp: mp, snap: snap, ns: ns, name: name, now: now,
 		cache: p.evidCache, convoID: conv.ID,
+		history: historyDeps{
+			convoStore: store, incidents: incidentHistory,
+			selfID: conv.ID, focus: conv.Focus, fingerprint: conv.Fingerprint,
+		},
 	})
 	steps = append(steps, planSteps...)
 	evidence = labelEvidence(append(evidence, planEvidence...))

@@ -46,6 +46,11 @@ type Store interface {
 	Get(ctx context.Context, id string) (plugin.Conversation, error)
 	List(ctx context.Context) ([]plugin.Conversation, error)
 	Update(ctx context.Context, c plugin.Conversation) error
+	// ListByFocus returns conversations about a focus resource ("ns/name"),
+	// newest-updated first — feeds "has this happened before?" answers.
+	// Namespace narrows the scan when the focus alone is ambiguous; either
+	// argument may be empty to match all.
+	ListByFocus(ctx context.Context, focus, namespace string) ([]plugin.Conversation, error)
 }
 
 // NewStore returns the active Store implementation: SQLite when SetConvoDB
@@ -132,6 +137,31 @@ func (s *fileStore) List(_ context.Context) ([]plugin.Conversation, error) {
 		return convos[i].UpdatedAt.After(convos[j].UpdatedAt)
 	})
 	return convos, nil
+}
+
+func (s *fileStore) ListByFocus(ctx context.Context, focus, namespace string) ([]plugin.Conversation, error) {
+	all, err := s.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return filterByFocus(all, focus, namespace), nil
+}
+
+// filterByFocus keeps conversations matching the focus and/or namespace.
+// Shared by both store implementations (focus is not an indexed column, so
+// SQLite also filters in Go after narrowing by namespace).
+func filterByFocus(convos []plugin.Conversation, focus, namespace string) []plugin.Conversation {
+	var out []plugin.Conversation
+	for _, c := range convos {
+		if focus != "" && c.Focus != focus {
+			continue
+		}
+		if namespace != "" && c.Namespace != namespace && c.Namespace != "" {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 func (s *fileStore) Update(_ context.Context, c plugin.Conversation) error {

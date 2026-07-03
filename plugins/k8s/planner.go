@@ -173,6 +173,8 @@ type execDeps struct {
 	// cache/convoID enable per-conversation evidence reuse (both optional).
 	cache   *evidenceCache
 	convoID string
+	// history carries the optional recurrence sources (see history.go).
+	history historyDeps
 }
 
 // collectorFn is one dispatch-table entry.
@@ -231,6 +233,9 @@ var collectorTable = map[string]collectorFn{
 	"vpa": func(_ context.Context, _ execDeps) ([]plugin.InvestigationStep, []plugin.EvidenceItem) {
 		return []plugin.InvestigationStep{step("VerticalPodAutoscaler inspected", "unavailable",
 			"VPA is a CRD and not supported yet — checking HPA and resource limits instead covers most of the same ground", "")}, nil
+	},
+	"history": func(ctx context.Context, d execDeps) ([]plugin.InvestigationStep, []plugin.EvidenceItem) {
+		return gatherHistory(ctx, d.history, d.ns, d.name, d.now)
 	},
 }
 

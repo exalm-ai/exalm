@@ -42,6 +42,9 @@ type Plugin struct {
 	// evidCache is the per-conversation evidence cache (memory-only; see
 	// evidcache.go). Guarded by its own mutex, not p.mu.
 	evidCache *evidenceCache
+	// incidentHistory is the optional decoupled incident source for
+	// "has this happened before?" answers (see history.go). Guarded by p.mu.
+	incidentHistory IncidentHistoryFn
 }
 
 // New returns a production-configured k8s plugin.

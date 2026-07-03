@@ -199,3 +199,68 @@ func TestNewStore_PrefersSQLiteWhenConfigured(t *testing.T) {
 		t.Errorf("expected NewStore() to return a *sqliteConvoStore once SetConvoDB is called, got %T", s)
 	}
 }
+
+// ─── ListByFocus (both backends) ───────────────────────────────────────────
+
+func TestListByFocus_BothBackends(t *testing.T) {
+	backends := map[string]func(t *testing.T) Store{
+		"sqlite": openSQLiteStore,
+		"file": func(t *testing.T) Store {
+			old := ConversationDir
+			ConversationDir = t.TempDir()
+			t.Cleanup(func() { ConversationDir = old })
+			return &fileStore{}
+		},
+	}
+	for name, open := range backends {
+		t.Run(name, func(t *testing.T) {
+			s := open(t)
+			ctx := context.Background()
+
+			match := sampleConversation("c-match")
+			otherFocus := sampleConversation("c-other-focus")
+			otherFocus.Focus = "prod/other-api"
+			otherNs := sampleConversation("c-other-ns")
+			otherNs.Namespace = "staging"
+			otherNs.Focus = "staging/payment-api"
+			for _, c := range []plugin.Conversation{match, otherFocus, otherNs} {
+				if err := s.Create(ctx, c); err != nil {
+					t.Fatalf("Create %s: %v", c.ID, err)
+				}
+			}
+
+			got, err := s.ListByFocus(ctx, "prod/payment-api", "prod")
+			if err != nil {
+				t.Fatalf("ListByFocus: %v", err)
+			}
+			if len(got) != 1 || got[0].ID != "c-match" {
+				t.Errorf("expected only c-match, got %+v", got)
+			}
+
+			all, err := s.ListByFocus(ctx, "", "")
+			if err != nil {
+				t.Fatalf("ListByFocus(all): %v", err)
+			}
+			if len(all) != 3 {
+				t.Errorf("empty filters should match everything, got %d", len(all))
+			}
+		})
+	}
+}
+
+func TestConversation_FingerprintRoundTrip(t *testing.T) {
+	s := openSQLiteStore(t)
+	ctx := context.Background()
+	c := sampleConversation("c-fp")
+	c.Fingerprint = "oom-killed\x1fprod/payment-api"
+	if err := s.Create(ctx, c); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	got, err := s.Get(ctx, c.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Fingerprint != c.Fingerprint {
+		t.Errorf("Fingerprint: got %q want %q", got.Fingerprint, c.Fingerprint)
+	}
+}

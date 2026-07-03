@@ -63,6 +63,27 @@ func (s *sqliteConvoStore) List(_ context.Context) ([]plugin.Conversation, error
 	return scanConvoRows(rows)
 }
 
+func (s *sqliteConvoStore) ListByFocus(_ context.Context, focus, namespace string) ([]plugin.Conversation, error) {
+	// Namespace is an indexed column; focus lives only inside the JSON blob,
+	// so narrow by namespace in SQL and filter focus in Go (bounded scan —
+	// conversations are small and capped by the recent-first LIMIT).
+	query, args := `SELECT data FROM conversations ORDER BY updated_at DESC LIMIT 100`, []any{}
+	if namespace != "" {
+		query = `SELECT data FROM conversations WHERE namespace IN (?, '') ORDER BY updated_at DESC LIMIT 100`
+		args = append(args, namespace)
+	}
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite convo: list by focus: %w", err)
+	}
+	defer rows.Close()
+	convos, err := scanConvoRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	return filterByFocus(convos, focus, namespace), nil
+}
+
 func (s *sqliteConvoStore) Update(_ context.Context, c plugin.Conversation) error {
 	data, err := json.Marshal(c)
 	if err != nil {
