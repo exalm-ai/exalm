@@ -123,8 +123,14 @@ func (p *Plugin) Converse(ctx context.Context, convoID, findingID, namespace, me
 	}
 	suggestions := suggestFollowUps(intents, pod, steps)
 
-	llmMessages := buildLLMMessages(conv, conv.Focus, steps, evidence, fixes)
-	content := synthesizeConversationReply(ctx, llmMessages, llm, red)
+	tc := turnContext{
+		Question: message, Focus: conv.Focus,
+		Plan: executedPlan, Steps: steps, Evidence: evidence,
+		Hypotheses: hypotheses, Score: score, ScoreRationale: scoreRationale,
+		Fixes: fixes, Prevention: prevention,
+	}
+	llmMessages := buildLLMMessages(conv, tc)
+	content := synthesizeConversationReply(ctx, llmMessages, tc, llm, red)
 
 	conv.Messages = append(conv.Messages, plugin.ConversationMessage{
 		Role: "assistant", Content: content, At: time.Now().UTC(),
@@ -574,7 +580,28 @@ func suggestFollowUps(intents []string, pod *PodSummary, steps []plugin.Investig
 // enriched with the freshly gathered steps/evidence/fixes. Earlier turns keep
 // their original (already-redacted) content — only the newest user message
 // carries new evidence, so context doesn't balloon turn over turn.
-func buildLLMMessages(conv plugin.Conversation, focus string, steps []plugin.InvestigationStep, evidence []plugin.EvidenceItem, fixes []plugin.RemediationAction) []plugin.Message {
+// turnContext bundles everything the copilot assembled for one turn — the
+// input to both the enriched LLM message and the deterministic fallback.
+type turnContext struct {
+	Question       string
+	Focus          string
+	Plan           []plugin.PlanStep
+	Steps          []plugin.InvestigationStep
+	Evidence       []plugin.EvidenceItem
+	Hypotheses     []plugin.Hypothesis
+	Score          int
+	ScoreRationale string
+	Fixes          []plugin.RemediationAction
+	Prevention     []plugin.RemediationAction
+}
+
+// evidenceByteBudget caps the total evidence text per turn so eight
+// collectors' output can't blow up the prompt. Evidence is emitted in
+// collection order (baseline pod facts first), so what gets summarized away
+// is the lowest-priority tail.
+const evidenceByteBudget = 48 * 1024
+
+func buildLLMMessages(conv plugin.Conversation, tc turnContext) []plugin.Message {
 	msgs := make([]plugin.Message, 0, len(conv.Messages))
 	for i, m := range conv.Messages {
 		if i == len(conv.Messages)-1 {
@@ -582,33 +609,79 @@ func buildLLMMessages(conv plugin.Conversation, focus string, steps []plugin.Inv
 		}
 		msgs = append(msgs, plugin.Message{Role: m.Role, Content: m.Content})
 	}
-	last := conv.Messages[len(conv.Messages)-1]
-	msgs = append(msgs, plugin.Message{Role: "user", Content: buildEnrichedTurn(last.Content, focus, steps, evidence, fixes)})
+	msgs = append(msgs, plugin.Message{Role: "user", Content: buildEnrichedTurn(tc)})
 	return msgs
 }
 
-func buildEnrichedTurn(question, focus string, steps []plugin.InvestigationStep, evidence []plugin.EvidenceItem, fixes []plugin.RemediationAction) string {
+func buildEnrichedTurn(tc turnContext) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "QUESTION: %s\n", question)
-	if focus != "" {
-		fmt.Fprintf(&b, "FOCUS RESOURCE: %s\n", focus)
+	fmt.Fprintf(&b, "QUESTION: %s\n", tc.Question)
+	if tc.Focus != "" {
+		fmt.Fprintf(&b, "FOCUS RESOURCE: %s\n", tc.Focus)
 	}
-	if len(steps) > 0 {
+	if len(tc.Plan) > 0 {
+		b.WriteString("\nINVESTIGATION PLAN EXECUTED:\n")
+		for _, ps := range tc.Plan {
+			cached := ""
+			if ps.FromCache {
+				cached = " (cached)"
+			}
+			edge := ""
+			if ps.Edge != "" {
+				edge = " (" + ps.Edge + ")"
+			}
+			fmt.Fprintf(&b, "- [%s]%s %s %s%s: %s\n", ps.Status, cached, ps.ID, ps.Collector, edge, ps.Reason)
+		}
+	}
+	if len(tc.Steps) > 0 {
 		b.WriteString("\nCHECKS PERFORMED THIS TURN:\n")
-		for _, s := range steps {
+		for _, s := range tc.Steps {
 			fmt.Fprintf(&b, "- [%s] %s — %s\n", s.Status, s.Label, s.Detail)
 		}
 	}
-	if len(evidence) > 0 {
+	if len(tc.Evidence) > 0 {
 		b.WriteString("\nEVIDENCE:\n")
-		for _, e := range evidence {
-			fmt.Fprintf(&b, "- (%s/%s) %s\n", e.Kind, e.Source, e.Excerpt)
+		spent, omitted := 0, 0
+		for _, e := range tc.Evidence {
+			line := fmt.Sprintf("- [%s] (%s/%s", e.Label, e.Kind, e.Source)
+			if e.Edge != "" {
+				line += ", edge=" + e.Edge
+			}
+			line += ") "
+			if e.FromCache {
+				line += "(cached) "
+			}
+			line += e.Excerpt + "\n"
+			if spent+len(line) > evidenceByteBudget {
+				omitted++
+				continue
+			}
+			spent += len(line)
+			b.WriteString(line)
+		}
+		if omitted > 0 {
+			fmt.Fprintf(&b, "- …and %d more evidence item(s) omitted for size\n", omitted)
 		}
 	}
-	if len(fixes) > 0 {
+	if len(tc.Hypotheses) > 0 {
+		b.WriteString("\nHYPOTHESES (deterministic ranking — explain, do not re-rank):\n")
+		for i, h := range tc.Hypotheses {
+			fmt.Fprintf(&b, "- %d. %s (score %d) for=%v against=%v — %s\n", i+1, h.Title, h.Score, h.EvidenceFor, h.EvidenceAgainst, h.Rationale)
+		}
+	}
+	if tc.Score > 0 {
+		fmt.Fprintf(&b, "\nCONFIDENCE: %d%% — %s\n", tc.Score, tc.ScoreRationale)
+	}
+	if len(tc.Fixes) > 0 {
 		b.WriteString("\nKNOWN FIXES FOR THIS RESOURCE:\n")
-		for _, fx := range fixes {
+		for _, fx := range tc.Fixes {
 			fmt.Fprintf(&b, "- [%s] %s\n", fx.FixType, fx.Description)
+		}
+	}
+	if len(tc.Prevention) > 0 {
+		b.WriteString("\nPREVENTION:\n")
+		for _, fx := range tc.Prevention {
+			fmt.Fprintf(&b, "- %s\n", fx.Description)
 		}
 	}
 	return b.String()
@@ -617,9 +690,9 @@ func buildEnrichedTurn(question, focus string, steps []plugin.InvestigationStep,
 // synthesizeConversationReply makes the ONE LLM call for this turn, redacting
 // every message first. Falls back to a deterministic reply when llm is nil or
 // the call fails — mirrors investigate.go's synthesizeNarrative().
-func synthesizeConversationReply(ctx context.Context, messages []plugin.Message, llm plugin.LLMClient, red plugin.Redactor) string {
+func synthesizeConversationReply(ctx context.Context, messages []plugin.Message, tc turnContext, llm plugin.LLMClient, red plugin.Redactor) string {
 	if llm == nil {
-		return deterministicConvReply(messages)
+		return deterministicConvReply(tc)
 	}
 	redacted := make([]plugin.Message, len(messages))
 	for i, m := range messages {
@@ -631,16 +704,72 @@ func synthesizeConversationReply(ctx context.Context, messages []plugin.Message,
 	}
 	resp, err := llm.Complete(ctx, plugin.CompleteRequest{System: conversationPrompt, MaxTokens: 900, Messages: redacted})
 	if err != nil || strings.TrimSpace(resp.Content) == "" {
-		return deterministicConvReply(messages)
+		return deterministicConvReply(tc)
 	}
 	return strings.TrimSpace(resp.Content)
 }
 
-// deterministicConvReply is the no-LLM fallback: it cannot synthesize a
-// narrative, but it can honestly report what was checked.
-func deterministicConvReply(messages []plugin.Message) string {
-	if len(messages) == 0 {
-		return "No information available yet — ask about a specific pod, deployment, or namespace."
+// deterministicConvReply is the no-LLM fallback: it renders the same
+// sections the LLM would — root cause from the top hypothesis, alternatives,
+// fixes, prevention — from the deterministic engines alone, so the copilot
+// degrades honestly instead of going silent.
+func deterministicConvReply(tc turnContext) string {
+	if len(tc.Evidence) == 0 && len(tc.Hypotheses) == 0 {
+		return "No information available yet — ask about a specific pod, deployment, or namespace, or run an analysis first so the copilot has a snapshot to investigate."
 	}
-	return "No LLM is configured, so I can't synthesize a narrative answer, but the evidence and steps below were gathered for your question."
+	var b strings.Builder
+	b.WriteString("_No LLM is configured — this summary is assembled deterministically from the gathered evidence._\n\n")
+	if len(tc.Hypotheses) > 0 {
+		top := tc.Hypotheses[0]
+		fmt.Fprintf(&b, "**Root cause** (most likely): %s %s", top.Title, citationList(top.EvidenceFor))
+		if tc.Score > 0 {
+			fmt.Fprintf(&b, " — confidence %d%% (%s)", tc.Score, tc.ScoreRationale)
+		}
+		b.WriteString("\n")
+		if len(tc.Hypotheses) > 1 {
+			b.WriteString("\n**Alternative hypotheses**\n")
+			for _, h := range tc.Hypotheses[1:] {
+				fmt.Fprintf(&b, "- %s (score %d) — %s\n", h.Title, h.Score, h.Rationale)
+			}
+		}
+	}
+	var temp, root []plugin.RemediationAction
+	for _, fx := range tc.Fixes {
+		if fx.FixType == "root-cause" {
+			root = append(root, fx)
+		} else {
+			temp = append(temp, fx)
+		}
+	}
+	if len(temp) > 0 {
+		b.WriteString("\n**Immediate mitigation** (temporary)\n")
+		for _, fx := range temp {
+			fmt.Fprintf(&b, "- %s\n", fx.Description)
+		}
+	}
+	if len(root) > 0 {
+		b.WriteString("\n**Root-cause fix**\n")
+		for _, fx := range root {
+			fmt.Fprintf(&b, "- %s\n", fx.Description)
+		}
+	}
+	if len(tc.Prevention) > 0 {
+		b.WriteString("\n**Prevention**\n")
+		for _, fx := range tc.Prevention {
+			fmt.Fprintf(&b, "- %s\n", fx.Description)
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// citationList renders evidence labels as "[E1] [E3]".
+func citationList(labels []string) string {
+	if len(labels) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, l := range labels {
+		b.WriteString("[" + l + "] ")
+	}
+	return strings.TrimSpace(b.String())
 }

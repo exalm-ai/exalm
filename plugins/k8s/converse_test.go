@@ -238,3 +238,64 @@ func TestResolveFocus_KeepsPriorFocusWhenNothingMentioned(t *testing.T) {
 		t.Errorf("expected focus to persist when nothing new is mentioned, got %q", got)
 	}
 }
+
+// ─── copilot turn context: citations, plan, hypotheses in the prompt ────────
+
+func TestConverse_PromptCarriesPlanHypothesesAndCitations(t *testing.T) {
+	p := New()
+	p.setLastSnapshot(Snapshot{UnhealthyPods: []PodSummary{crashPod("prod", "payment-api")}})
+	store := newTestConvoStore(t)
+	llm := &chatRecordingLLM{}
+
+	conv, err := p.Converse(context.Background(), "", "", "prod", "Why is payment-api crashing?", llm, fakeRedactor{}, store, nil)
+	if err != nil {
+		t.Fatalf("Converse: %v", err)
+	}
+	if len(llm.calls) != 1 {
+		t.Fatalf("expected exactly 1 LLM call, got %d", len(llm.calls))
+	}
+	enriched := llm.calls[0][len(llm.calls[0])-1].Content
+	for _, want := range []string{"INVESTIGATION PLAN EXECUTED:", "HYPOTHESES", "CONFIDENCE:", "[E1]"} {
+		if !strings.Contains(enriched, want) {
+			t.Errorf("enriched turn missing %q:\n%s", want, truncateString(enriched, 1200))
+		}
+	}
+	last := conv.Messages[len(conv.Messages)-1]
+	if last.Score <= 0 || last.ScoreRationale == "" {
+		t.Errorf("assistant message should carry a numeric score + rationale, got %d %q", last.Score, last.ScoreRationale)
+	}
+	if len(last.Hypotheses) == 0 {
+		t.Error("assistant message should carry ranked hypotheses")
+	}
+	if len(last.Prevention) == 0 {
+		t.Error("assistant message should carry prevention actions for a crashloop")
+	}
+	if len(last.Plan) == 0 {
+		t.Error("assistant message should carry the executed plan")
+	}
+	for _, e := range last.Evidence {
+		if e.Label == "" {
+			t.Errorf("every evidence item must carry a citation label: %+v", e)
+		}
+	}
+}
+
+func TestDeterministicConvReply_RendersSections(t *testing.T) {
+	tc := turnContext{
+		Question: "why?", Focus: "prod/api",
+		Evidence: []plugin.EvidenceItem{{Kind: "log", Source: "p", Excerpt: "panic", Label: "E1"}},
+		Hypotheses: []plugin.Hypothesis{
+			{Title: "Bad config", Score: 60, Rationale: "supported by [E1]", EvidenceFor: []string{"E1"}},
+			{Title: "Recent deploy", Score: 40, Rationale: "no direct evidence"},
+		},
+		Score: 60, ScoreRationale: "log-pattern only",
+		Fixes:      []plugin.RemediationAction{{FixType: "temporary", Description: "Restart the deployment"}},
+		Prevention: []plugin.RemediationAction{{FixType: "prevention", Description: "Validate config in CI"}},
+	}
+	out := deterministicConvReply(tc)
+	for _, want := range []string{"**Root cause**", "Bad config", "[E1]", "60%", "**Alternative hypotheses**", "Recent deploy", "**Immediate mitigation**", "**Prevention**"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("fallback missing %q:\n%s", want, out)
+		}
+	}
+}
