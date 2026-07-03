@@ -67,9 +67,9 @@ func (p *Plugin) Converse(ctx context.Context, convoID, findingID, namespace, me
 	pod := findPod(snap, ns, name)
 	intents := classifyIntent(message)
 
+	// Baseline: pod status + snapshot evidence come free — always first.
 	var steps []plugin.InvestigationStep
 	var evidence []plugin.EvidenceItem
-
 	if pod != nil {
 		steps = append(steps, investigationSteps(syntheticFinding(*pod, ns, name), snap)...)
 		evidence = append(evidence, podEvidence(*pod, ns, name, now)...)
@@ -77,11 +77,21 @@ func (p *Plugin) Converse(ctx context.Context, convoID, findingID, namespace, me
 		steps = append(steps, step("Pod status inspected", "unavailable", "no pod "+conv.Focus+" in the current snapshot", ""))
 	}
 
-	for _, intent := range intents {
-		s, e := gatherForIntent(ctx, intent, cs, red, newLF, mp, snap, ns, name, now)
-		steps = append(steps, s...)
-		evidence = append(evidence, e...)
+	// Deterministic investigation plan: symptom catalog + question intents
+	// decide which collectors run this turn. Still exactly one LLM call.
+	plan := buildPlan(planInput{
+		Message: message, Intents: intents, Focus: conv.Focus,
+		Pod: pod, Snap: snap,
+		Refresh: hasIntent(intents, "refresh"),
+	})
+	if conv.Fingerprint == "" {
+		conv.Fingerprint = fingerprintFor(pod, snap, conv.Focus)
 	}
+	executedPlan, planSteps, planEvidence := executePlan(ctx, plan, execDeps{
+		cs: cs, red: red, newLF: newLF, mp: mp, snap: snap, ns: ns, name: name, now: now,
+	})
+	steps = append(steps, planSteps...)
+	evidence = labelEvidence(append(evidence, planEvidence...))
 
 	timeline := buildTimeline(snap, ns, name, now)
 	var fixes []plugin.RemediationAction
@@ -101,6 +111,7 @@ func (p *Plugin) Converse(ctx context.Context, convoID, findingID, namespace, me
 		Fixes:       fixes,
 		Timeline:    timeline,
 		Suggestions: suggestions,
+		Plan:        executedPlan,
 	})
 	conv.UpdatedAt = time.Now().UTC()
 
@@ -225,6 +236,13 @@ var intentPatterns = []struct {
 	{"rca", regexp.MustCompile(`(?i)\brca\b|postmortem|incident report|root cause analysis`)},
 	{"related-services", regexp.MustCompile(`(?i)related (service|pod)|depends on|dependency|dependent service|which service`)},
 	{"ingress", regexp.MustCompile(`(?i)ingress|external traffic|\b503\b|\b502\b|gateway`)},
+	{"storage", regexp.MustCompile(`(?i)\bpvc\b|\bpv\b|volume|storage ?class|disk (full|space)|persistent`)},
+	{"rbac-question", regexp.MustCompile(`(?i)\brbac\b|permission|forbidden|service ?account|role ?binding`)},
+	{"quota", regexp.MustCompile(`(?i)quota|limit ?range|namespace limit`)},
+	{"scaling", regexp.MustCompile(`(?i)\bhpa\b|autoscal|scale|replicas|disruption budget|\bpdb\b`)},
+	{"history", regexp.MustCompile(`(?i)happened before|recurr|similar (incident|issue)|last time|how often|more frequent`)},
+	{"refresh", regexp.MustCompile(`(?i)\brefresh\b|re-?check|fetch again|latest (data|state)|re-?collect`)},
+	{"vpa", regexp.MustCompile(`(?i)\bvpa\b|vertical pod autoscal`)},
 }
 
 // classifyIntent maps free-text to zero or more intent tags via keyword/regex
@@ -243,32 +261,14 @@ func classifyIntent(message string) []string {
 	return out
 }
 
-// gatherForIntent runs the deterministic evidence-gathering for one classified
-// intent. Each branch reuses an existing collector/client — no new network
-// surface beyond what's already injected.
-func gatherForIntent(ctx context.Context, intent string, cs kubernetes.Interface, red plugin.Redactor,
-	newLF func(kubernetes.Interface) logFetcher, mp metrics.Provider, snap Snapshot, ns, name string, now time.Time,
-) ([]plugin.InvestigationStep, []plugin.EvidenceItem) {
-	switch intent {
-	case "previous-logs":
-		return gatherPreviousLogs(ctx, cs, newLF, ns, name)
-	case "deploy-correlation", "comparison":
-		return gatherChangeHistory(snap, ns, name, now)
-	case "configmap":
-		return gatherConfigMaps(ctx, cs, red, ns, name)
-	case "secret":
-		return gatherSecrets(ctx, cs, ns, name)
-	case "node-pressure":
-		return gatherNodePressure(ctx, cs, snap, ns, name)
-	case "resource-usage":
-		return gatherMetrics(ctx, mp, ns, name, now)
-	case "dns":
-		return gatherDNSHeuristic(snap, ns, name)
-	case "related-services", "db-connectivity", "ingress":
-		return gatherRelatedResources(snap, ns)
-	default:
-		return nil, nil
+// hasIntent reports whether the classified intents include the given tag.
+func hasIntent(intents []string, tag string) bool {
+	for _, i := range intents {
+		if i == tag {
+			return true
+		}
 	}
+	return false
 }
 
 func gatherPreviousLogs(ctx context.Context, cs kubernetes.Interface, newLF func(kubernetes.Interface) logFetcher, ns, name string) ([]plugin.InvestigationStep, []plugin.EvidenceItem) {
