@@ -38,6 +38,10 @@ type Plugin struct {
 	lastOpts     CollectOpts
 	lastSnapshot Snapshot           // most recent collected state; feeds the dashboard pod inventory
 	watchCh      chan plugin.Report // non-nil during watch subcommand
+
+	// evidCache is the per-conversation evidence cache (memory-only; see
+	// evidcache.go). Guarded by its own mutex, not p.mu.
+	evidCache *evidenceCache
 }
 
 // New returns a production-configured k8s plugin.
@@ -48,6 +52,7 @@ func New() *Plugin {
 		newLogFetcher: func(cs kubernetes.Interface) logFetcher {
 			return &restLogFetcher{clientset: cs}
 		},
+		evidCache: newEvidenceCache(),
 	}
 }
 

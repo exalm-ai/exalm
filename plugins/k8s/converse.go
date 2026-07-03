@@ -79,9 +79,13 @@ func (p *Plugin) Converse(ctx context.Context, convoID, findingID, namespace, me
 
 	// Deterministic investigation plan: symptom catalog + question intents
 	// decide which collectors run this turn. Still exactly one LLM call.
+	p.evidCache.purge(now)
 	plan := buildPlan(planInput{
 		Message: message, Intents: intents, Focus: conv.Focus,
 		Pod: pod, Snap: snap,
+		Cached: func(collector string) bool {
+			return p.evidCache.has(conv.ID, collector, conv.Focus, now)
+		},
 		Refresh: hasIntent(intents, "refresh"),
 	})
 	if conv.Fingerprint == "" {
@@ -89,6 +93,7 @@ func (p *Plugin) Converse(ctx context.Context, convoID, findingID, namespace, me
 	}
 	executedPlan, planSteps, planEvidence := executePlan(ctx, plan, execDeps{
 		cs: cs, red: red, newLF: newLF, mp: mp, snap: snap, ns: ns, name: name, now: now,
+		cache: p.evidCache, convoID: conv.ID,
 	})
 	steps = append(steps, planSteps...)
 	evidence = labelEvidence(append(evidence, planEvidence...))

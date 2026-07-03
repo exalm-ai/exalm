@@ -170,6 +170,9 @@ type execDeps struct {
 	ns    string
 	name  string
 	now   time.Time
+	// cache/convoID enable per-conversation evidence reuse (both optional).
+	cache   *evidenceCache
+	convoID string
 }
 
 // collectorFn is one dispatch-table entry.
@@ -241,6 +244,22 @@ func executePlan(ctx context.Context, plan []plugin.PlanStep, d execDeps) ([]plu
 	copy(executed, plan)
 
 	for i, ps := range executed {
+		// Serve from the conversation's evidence cache when the planner
+		// marked the step cached and the entry is still fresh.
+		if ps.Status == "cached" {
+			if entry, ok := d.cache.get(d.convoID, ps.Collector, ps.Target, d.now); ok {
+				for _, ev := range entry.Evidence {
+					ev.FromCache = true
+					ev.CollectedAt = entry.At
+					evidence = append(evidence, ev)
+				}
+				steps = append(steps, entry.Steps...)
+				executed[i].FromCache = true
+				continue
+			}
+			executed[i].Status = "planned" // expired between planning and execution
+		}
+
 		fn, ok := collectorTable[ps.Collector]
 		if !ok {
 			executed[i].Status = "unavailable"
@@ -259,6 +278,9 @@ func executePlan(ctx context.Context, plan []plugin.PlanStep, d execDeps) ([]plu
 		steps = append(steps, s...)
 		evidence = append(evidence, e...)
 		executed[i].Status = planStepOutcome(s)
+		if executed[i].Status == "done" {
+			d.cache.put(d.convoID, ps.Collector, ps.Target, cachedEvidence{Steps: s, Evidence: e, At: d.now}, d.now)
+		}
 	}
 	return executed, steps, evidence
 }
