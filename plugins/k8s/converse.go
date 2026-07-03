@@ -98,6 +98,12 @@ func (p *Plugin) Converse(ctx context.Context, convoID, findingID, namespace, me
 	steps = append(steps, planSteps...)
 	evidence = labelEvidence(append(evidence, planEvidence...))
 
+	// Rank root-cause hypotheses and score confidence from evidence quality.
+	matchedSymptoms := matchSymptoms(pod, snap, ns, name)
+	hypotheses := rankHypotheses(matchedSymptoms, evidence)
+	score, scoreRationale := scoreConfidence(evidence, steps, pod)
+	prevention := preventionFor(matchedSymptoms)
+
 	timeline := buildTimeline(snap, ns, name, now)
 	var fixes []plugin.RemediationAction
 	if findingID != "" {
@@ -110,13 +116,17 @@ func (p *Plugin) Converse(ctx context.Context, convoID, findingID, namespace, me
 
 	conv.Messages = append(conv.Messages, plugin.ConversationMessage{
 		Role: "assistant", Content: content, At: time.Now().UTC(),
-		Confidence:  deriveConvConfidence(evidence, steps),
-		Steps:       steps,
-		Evidence:    evidence,
-		Fixes:       fixes,
-		Timeline:    timeline,
-		Suggestions: suggestions,
-		Plan:        executedPlan,
+		Confidence:     tierFor(score),
+		Score:          score,
+		ScoreRationale: scoreRationale,
+		Steps:          steps,
+		Evidence:       evidence,
+		Fixes:          fixes,
+		Timeline:       timeline,
+		Suggestions:    suggestions,
+		Plan:           executedPlan,
+		Hypotheses:     hypotheses,
+		Prevention:     prevention,
 	})
 	conv.UpdatedAt = time.Now().UTC()
 
@@ -621,22 +631,4 @@ func deterministicConvReply(messages []plugin.Message) string {
 		return "No information available yet — ask about a specific pod, deployment, or namespace."
 	}
 	return "No LLM is configured, so I can't synthesize a narrative answer, but the evidence and steps below were gathered for your question."
-}
-
-// deriveConvConfidence scores this turn the same way classify.go scores a
-// finding: a recent change or several evidence items raise confidence.
-func deriveConvConfidence(evidence []plugin.EvidenceItem, steps []plugin.InvestigationStep) string {
-	if len(evidence) >= 3 {
-		return "high"
-	}
-	doneCount := 0
-	for _, s := range steps {
-		if s.Status == "done" {
-			doneCount++
-		}
-	}
-	if len(evidence) >= 1 || doneCount >= 3 {
-		return "medium"
-	}
-	return "low"
 }
