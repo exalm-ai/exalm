@@ -135,3 +135,81 @@ func TestHandleGetConversation_NotFound(t *testing.T) {
 		t.Errorf("expected 404, got %d", rr.Code)
 	}
 }
+
+// ─── export endpoint ────────────────────────────────────────────────────────
+
+func exportTestServer(t *testing.T) *liveServer {
+	t.Helper()
+	srv := chatTestServer()
+	srv.getConvoFn = func(_ context.Context, id string) (*plugin.Conversation, error) {
+		if id != "c1" {
+			return nil, errors.New("conversation not found")
+		}
+		conv := sampleConv(id)
+		conv.Focus = "prod/payment-api"
+		conv.Messages[1].Score = 85
+		conv.Messages[1].ScoreRationale = "recent change before first failure"
+		conv.Messages[1].Plan = []plugin.PlanStep{{ID: "p1", Collector: "owner-chain", Edge: "pod→ownerDeployment", Reason: "check limits", Status: "done"}}
+		conv.Messages[1].Hypotheses = []plugin.Hypothesis{{Title: "Memory limit too low", Score: 85, Rationale: "supported by [E1]", EvidenceFor: []string{"E1"}}}
+		conv.Messages[1].Evidence = []plugin.EvidenceItem{{Kind: "log", Source: "pod/payment-api", Excerpt: "OOMKilled", Label: "E1", Anchor: "kubectl logs payment-api -n prod --previous"}}
+		conv.Messages[1].Prevention = []plugin.RemediationAction{{Kind: "advice", FixType: "prevention", Description: "Alert at 80% of the memory limit"}}
+		return conv, nil
+	}
+	return srv
+}
+
+func TestHandleGetConversation_ExportMarkdown(t *testing.T) {
+	srv := exportTestServer(t)
+	rr := httptest.NewRecorder()
+	srv.handleGetConversation(rr, httptest.NewRequest(http.MethodGet, "/api/chat/c1/export?format=md", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", rr.Code, rr.Body.String())
+	}
+	if ct := rr.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/markdown") {
+		t.Errorf("Content-Type: %q", ct)
+	}
+	if cd := rr.Header().Get("Content-Disposition"); !strings.Contains(cd, "investigation-c1.md") {
+		t.Errorf("Content-Disposition: %q", cd)
+	}
+	body := rr.Body.String()
+	for _, want := range []string{"# Investigation report", "prod/payment-api", "confidence 85%", "### Investigation plan", "owner-chain", "### Hypotheses considered", "Memory limit too low", "**[E1]**", "kubectl logs payment-api", "### Prevention"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("markdown export missing %q", want)
+		}
+	}
+}
+
+func TestHandleGetConversation_ExportJSONAndDefaultFormat(t *testing.T) {
+	srv := exportTestServer(t)
+	rr := httptest.NewRecorder()
+	srv.handleGetConversation(rr, httptest.NewRequest(http.MethodGet, "/api/chat/c1/export?format=json", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("json export: expected 200, got %d", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), `"scoreRationale"`) {
+		t.Errorf("json export should use the camelCase DTO, got: %s", rr.Body.String()[:200])
+	}
+
+	// Default format (no query) is markdown.
+	rr2 := httptest.NewRecorder()
+	srv.handleGetConversation(rr2, httptest.NewRequest(http.MethodGet, "/api/chat/c1/export", nil))
+	if !strings.HasPrefix(rr2.Header().Get("Content-Type"), "text/markdown") {
+		t.Errorf("default export format should be markdown, got %q", rr2.Header().Get("Content-Type"))
+	}
+}
+
+func TestHandleGetConversation_ExportErrors(t *testing.T) {
+	srv := exportTestServer(t)
+
+	rr := httptest.NewRecorder()
+	srv.handleGetConversation(rr, httptest.NewRequest(http.MethodGet, "/api/chat/c1/export?format=pdf", nil))
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("unsupported format should 400, got %d", rr.Code)
+	}
+
+	rr2 := httptest.NewRecorder()
+	srv.handleGetConversation(rr2, httptest.NewRequest(http.MethodGet, "/api/chat/nope/export", nil))
+	if rr2.Code != http.StatusNotFound {
+		t.Errorf("unknown id export should 404, got %d", rr2.Code)
+	}
+}

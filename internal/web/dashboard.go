@@ -84,6 +84,11 @@ type dashEvidence struct {
 	Source  string `json:"source"`
 	Excerpt string `json:"excerpt,omitempty"`
 	Anchor  string `json:"anchor,omitempty"`
+	// Copilot enrichment (empty on non-chat evidence).
+	Label       string `json:"label,omitempty"`       // citation key "E1"…
+	Edge        string `json:"edge,omitempty"`        // resource-graph edge
+	FromCache   bool   `json:"fromCache,omitempty"`   // reused, not re-fetched
+	CollectedAt string `json:"collectedAt,omitempty"` // original collection time
 }
 
 // applicableKinds are the remediation kinds the server can auto-apply via
@@ -124,7 +129,14 @@ func mapEvidence(items []plugin.EvidenceItem) []dashEvidence {
 	}
 	out := make([]dashEvidence, 0, len(items))
 	for _, e := range items {
-		out = append(out, dashEvidence{Kind: e.Kind, Source: e.Source, Excerpt: e.Excerpt, Anchor: e.Anchor})
+		de := dashEvidence{
+			Kind: e.Kind, Source: e.Source, Excerpt: e.Excerpt, Anchor: e.Anchor,
+			Label: e.Label, Edge: e.Edge, FromCache: e.FromCache,
+		}
+		if !e.CollectedAt.IsZero() {
+			de.CollectedAt = e.CollectedAt.UTC().Format("2006-01-02T15:04:05Z")
+		}
+		out = append(out, de)
 	}
 	return out
 }

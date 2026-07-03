@@ -764,8 +764,9 @@ func (s *liveServer) handleChat(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(mapConversation(conv)) //nolint:errcheck
 }
 
-// handleGetConversation loads a previously persisted conversation by id, so
-// the chat UI can resume after a page reload: GET /api/chat/{id}.
+// handleGetConversation loads a previously persisted conversation by id
+// (GET /api/chat/{id}) or exports it as a downloadable report
+// (GET /api/chat/{id}/export?format=md|json).
 func (s *liveServer) handleGetConversation(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -776,7 +777,11 @@ func (s *liveServer) handleGetConversation(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	id := strings.TrimPrefix(r.URL.Path, "/api/chat/")
-	if id == "" {
+	export := false
+	if rest, ok := strings.CutSuffix(id, "/export"); ok {
+		id, export = rest, true
+	}
+	if id == "" || strings.Contains(id, "/") {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
@@ -785,8 +790,26 @@ func (s *liveServer) handleGetConversation(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "conversation not found", http.StatusNotFound)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(mapConversation(conv)) //nolint:errcheck
+
+	if !export {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(mapConversation(conv)) //nolint:errcheck
+		return
+	}
+	switch format := r.URL.Query().Get("format"); format {
+	case "", "md":
+		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+		w.Header().Set("Content-Disposition", `attachment; filename="investigation-`+id+`.md"`)
+		fmt.Fprint(w, conversationMarkdown(conv)) //nolint:errcheck
+	case "json":
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Disposition", `attachment; filename="investigation-`+id+`.json"`)
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		enc.Encode(mapConversation(conv)) //nolint:errcheck
+	default:
+		http.Error(w, "unsupported format (use md or json)", http.StatusBadRequest)
+	}
 }
 
 func (s *liveServer) handleReportJSON(w http.ResponseWriter, _ *http.Request) {
