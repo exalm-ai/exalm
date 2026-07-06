@@ -101,6 +101,11 @@ type ServeOpts struct {
 	// /api/chat/{id} returns 503.
 	GetConversation func(ctx context.Context, id string) (*plugin.Conversation, error)
 
+	// AnalyzeLogLine, when non-nil, runs a one-shot AI analysis of a single
+	// log entry (the log viewer's "✦ Analyze line" action). Nil => POST
+	// /api/logs/analyze returns 503.
+	AnalyzeLogLine func(ctx context.Context, req LogAnalyzeRequest) (string, error)
+
 	// Metrics, when non-nil, supplies metric series for chart tooltips and
 	// drill-down. Nil => /api/metrics returns an empty series set.
 	Metrics metrics.Provider
@@ -219,6 +224,19 @@ type ConverseRequest struct {
 	Message        string `json:"message"`
 }
 
+// LogAnalyzeRequest is the body of POST /api/logs/analyze — one log entry
+// plus whatever context the log viewer already holds.
+type LogAnalyzeRequest struct {
+	Namespace string `json:"namespace,omitempty"`
+	Pod       string `json:"pod,omitempty"`
+	Container string `json:"container,omitempty"`
+	Severity  string `json:"severity,omitempty"`
+	Source    string `json:"source,omitempty"`
+	Labels    string `json:"labels,omitempty"`
+	Message   string `json:"message"`
+	Context   string `json:"context,omitempty"`
+}
+
 // liveServer holds runtime state for a running dashboard.
 type liveServer struct {
 	mu              sync.RWMutex
@@ -232,6 +250,7 @@ type liveServer struct {
 	logFetchFn      func(ctx context.Context, namespace, pod, container string, previous bool, tail int) (string, error)
 	converseFn      func(ctx context.Context, req ConverseRequest) (*plugin.Conversation, error)
 	getConvoFn      func(ctx context.Context, id string) (*plugin.Conversation, error)
+	logAnalyzeFn    func(ctx context.Context, req LogAnalyzeRequest) (string, error)
 	metrics         metrics.Provider
 	provider        string
 	autoRefresh     bool // true when a live refresh source (ReportUpdates or RefreshFindings) is wired
@@ -305,6 +324,7 @@ func Serve(ctx context.Context, report plugin.Report, opts ServeOpts) error {
 		logFetchFn:      opts.LogFetch,
 		converseFn:      opts.Converse,
 		getConvoFn:      opts.GetConversation,
+		logAnalyzeFn:    opts.AnalyzeLogLine,
 		metrics:         opts.Metrics,
 		provider:        opts.Provider,
 		autoRefresh:     opts.ReportUpdates != nil || opts.RefreshFindings != nil,
@@ -323,6 +343,7 @@ func Serve(ctx context.Context, report plugin.Report, opts ServeOpts) error {
 	mux.HandleFunc("/api/dashboard", srv.handleDashboardJSON)
 	mux.HandleFunc("/api/findings/", srv.handleFinding)
 	mux.HandleFunc("/api/logs", srv.handleLogs)
+	mux.HandleFunc("/api/logs/analyze", srv.handleLogAnalyze)
 	mux.HandleFunc("/api/metrics", srv.handleMetricsJSON)
 	mux.HandleFunc("/api/chat", srv.handleChat)
 	mux.HandleFunc("/api/chat/", srv.handleGetConversation)
@@ -762,6 +783,46 @@ func (s *liveServer) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(mapConversation(conv)) //nolint:errcheck
+}
+
+// handleLogAnalyze runs a one-shot AI analysis of a single log entry:
+// POST /api/logs/analyze. Shares the chat concurrency gate — it proxies an
+// LLM request of the same class.
+func (s *liveServer) handleLogAnalyze(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.logAnalyzeFn == nil {
+		http.Error(w, "log analysis not available", http.StatusServiceUnavailable)
+		return
+	}
+	var req LogAnalyzeRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024) // one line + bounded context
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Message) == "" {
+		http.Error(w, "message is required", http.StatusBadRequest)
+		return
+	}
+	select {
+	case s.chatSem <- struct{}{}:
+		defer func() { <-s.chatSem }()
+	default:
+		http.Error(w, "too many concurrent analysis requests", http.StatusTooManyRequests)
+		return
+	}
+	analysis, err := s.logAnalyzeFn(r.Context(), req)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()}) //nolint:errcheck
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"analysis": analysis}) //nolint:errcheck
 }
 
 // handleGetConversation loads a previously persisted conversation by id

@@ -594,6 +594,16 @@ func runSubcommand(ctx context.Context, p plugin.Plugin, sc plugin.Subcommand, f
 				}
 				return &c, nil
 			}
+
+			// Per-log-entry AI analysis (the log viewer's ✦ Analyze action):
+			// one redacted LLM call over a single line + its context.
+			serveOpts.AnalyzeLogLine = func(ctx context.Context, req web.LogAnalyzeRequest) (string, error) {
+				return k8sPlug.AnalyzeLogLine(ctx, k8splugin.LogLineRequest{
+					Namespace: req.Namespace, Pod: req.Pod, Container: req.Container,
+					Severity: req.Severity, Source: req.Source, Labels: req.Labels,
+					Message: req.Message, Context: req.Context,
+				}, trackedLLM, redactor)
+			}
 		}
 
 		// Inject CreatePR closure if a git provider token and repo are configured.

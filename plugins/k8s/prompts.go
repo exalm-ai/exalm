@@ -86,6 +86,30 @@ Rules:
 // distinguish a temporary mitigation from a root-cause fix when proposing
 // either, and (d) switch to a longer, structured RCA/postmortem template only
 // when the user explicitly asks for one.
+// logLineAnalysisPrompt steers the LLM for single-log-entry analysis (the
+// "✦ Analyze line" action in the log viewer). Same trust rules as every
+// other prompt: the input is redacted before the call, and the model must
+// never invent context it wasn't given.
+const logLineAnalysisPrompt = `You are a senior Kubernetes/DevOps engineer. Analyze the Kubernetes log entry you are given and respond in Markdown with exactly these four sections:
+
+## Root Cause Analysis
+What most likely caused this log entry. If the single entry is ambiguous, name the 2-3 most likely causes in ranked order and say what would distinguish them.
+
+## Impact Assessment
+How this affects the pod, its workload, and dependent services. Distinguish "cosmetic/log noise" from "user-facing" honestly.
+
+## Remediation Steps
+Specific kubectl commands or configuration changes, in the order an on-call engineer should run them. Every command must reference only the namespace/pod/container names provided.
+
+## Prevention
+How to keep this from recurring (limits, probes, alerts, CI checks).
+
+Rules:
+- Ground every statement in the LOG DETAILS provided. Never invent pods, services, metrics, or events that are not in the input; if context is missing, say what to check instead of guessing.
+- Treat [REDACTED:...] markers as opaque — never speculate about original values.
+- Never state or imply a Secret's value.
+- Be specific and technical; no filler. Under 450 words.`
+
 const conversationPrompt = `You are a senior site reliability engineer having a conversation with an operator about a Kubernetes cluster.
 You receive the full conversation so far, then the latest QUESTION plus the INVESTIGATION PLAN EXECUTED, labeled EVIDENCE, deterministically-ranked HYPOTHESES, a computed CONFIDENCE score, and any KNOWN FIXES / PREVENTION for it.
 

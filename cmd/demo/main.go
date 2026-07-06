@@ -278,6 +278,13 @@ and a PVC approaching capacity.
 		Metrics:         metrics.NewDerived(),
 		Converse:        converse,
 		GetConversation: getConversation,
+		AnalyzeLogLine: func(_ context.Context, req web.LogAnalyzeRequest) (string, error) {
+			time.Sleep(300 * time.Millisecond) // simulate LLM latency
+			return "## Root Cause Analysis\nThe line `" + strings.TrimSpace(req.Message) + "` matches an out-of-memory pattern: the container's working set exceeded its 256 Mi limit and the kernel OOM killer terminated it.\n\n" +
+				"## Impact Assessment\nUser-facing: the pod (" + req.Namespace + "/" + req.Pod + ") restarts on every OOM, dropping in-flight requests and removing itself from Service endpoints until the readiness probe passes again.\n\n" +
+				"## Remediation Steps\n1. `kubectl patch deployment payment-api -n " + req.Namespace + " --type=merge -p '{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"payment-api\",\"resources\":{\"limits\":{\"memory\":\"512Mi\"}}}]}}}}'`\n2. `kubectl rollout status deployment/payment-api -n " + req.Namespace + "`\n\n" +
+				"## Prevention\nSet requests=limits for memory, alert at 80% of the limit, and load-test memory headroom before raising traffic.", nil
+		},
 	}); err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintln(os.Stderr, "serve error:", err) //nolint:errcheck // fatal error to stderr before exit
 		os.Exit(1)

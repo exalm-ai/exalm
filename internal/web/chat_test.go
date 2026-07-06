@@ -213,3 +213,60 @@ func TestHandleGetConversation_ExportErrors(t *testing.T) {
 		t.Errorf("unknown id export should 404, got %d", rr2.Code)
 	}
 }
+
+// ─── /api/logs/analyze ──────────────────────────────────────────────────────
+
+func TestHandleLogAnalyze(t *testing.T) {
+	srv := chatTestServer()
+
+	// Unwired → 503.
+	rr := httptest.NewRecorder()
+	srv.handleLogAnalyze(rr, httptest.NewRequest(http.MethodPost, "/api/logs/analyze", strings.NewReader(`{"message":"x"}`)))
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Errorf("unwired should 503, got %d", rr.Code)
+	}
+
+	var got LogAnalyzeRequest
+	srv.logAnalyzeFn = func(_ context.Context, req LogAnalyzeRequest) (string, error) {
+		got = req
+		return "## Root Cause Analysis\nOOM.", nil
+	}
+
+	// Happy path.
+	rr = httptest.NewRecorder()
+	body := `{"namespace":"prod","pod":"payment-api","message":"OOMKilled","context":"a\nb"}`
+	srv.handleLogAnalyze(rr, httptest.NewRequest(http.MethodPost, "/api/logs/analyze", strings.NewReader(body)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", rr.Code, rr.Body.String())
+	}
+	if got.Pod != "payment-api" || got.Message != "OOMKilled" {
+		t.Errorf("decoded request wrong: %+v", got)
+	}
+	if !strings.Contains(rr.Body.String(), "Root Cause Analysis") {
+		t.Errorf("expected the analysis in the response: %s", rr.Body.String())
+	}
+
+	// Empty message → 400.
+	rr = httptest.NewRecorder()
+	srv.handleLogAnalyze(rr, httptest.NewRequest(http.MethodPost, "/api/logs/analyze", strings.NewReader(`{"message":""}`)))
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("empty message should 400, got %d", rr.Code)
+	}
+
+	// GET → 405.
+	rr = httptest.NewRecorder()
+	srv.handleLogAnalyze(rr, httptest.NewRequest(http.MethodGet, "/api/logs/analyze", nil))
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET should 405, got %d", rr.Code)
+	}
+
+	// Concurrency gate shared with chat → 429 when full.
+	for i := 0; i < maxConcurrentChats; i++ {
+		srv.chatSem <- struct{}{}
+	}
+	rr = httptest.NewRecorder()
+	srv.handleLogAnalyze(rr, httptest.NewRequest(http.MethodPost, "/api/logs/analyze", strings.NewReader(`{"message":"x"}`)))
+	if rr.Code != http.StatusTooManyRequests {
+		t.Errorf("full gate should 429, got %d", rr.Code)
+	}
+}
