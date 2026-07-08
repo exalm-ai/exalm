@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/exalm-ai/exalm/internal/convo"
+	"github.com/exalm-ai/exalm/internal/investigate"
 	"github.com/exalm-ai/exalm/pkg/plugin"
 )
 
@@ -34,9 +35,9 @@ func TestGatherHistory_PriorConversationAndFingerprint(t *testing.T) {
 	seedPriorConversation(t, store, "old-1", "prod/payment-api", "prod",
 		"oom-killed\x1fprod/payment-api", "Memory limit too low — raised to 512Mi.", past)
 
-	steps, evid := gatherHistory(context.Background(), historyDeps{
-		convoStore: store, selfID: "current-1",
-		focus: "prod/payment-api", fingerprint: "oom-killed\x1fprod/payment-api",
+	steps, evid := investigate.GatherHistory(context.Background(), investigate.HistoryDeps{
+		Sources: investigate.HistorySources{Convo: store}, SelfID: "current-1",
+		Focus: "prod/payment-api", Fingerprint: "oom-killed\x1fprod/payment-api",
 	}, "prod", "payment-api", time.Now())
 
 	if len(steps) != 1 || steps[0].Status != "done" {
@@ -64,8 +65,8 @@ func TestGatherHistory_ExcludesCurrentConversation(t *testing.T) {
 	store := newTestConvoStore(t)
 	seedPriorConversation(t, store, "current-1", "prod/payment-api", "prod", "", "in progress", time.Now())
 
-	_, evid := gatherHistory(context.Background(), historyDeps{
-		convoStore: store, selfID: "current-1", focus: "prod/payment-api",
+	_, evid := investigate.GatherHistory(context.Background(), investigate.HistoryDeps{
+		Sources: investigate.HistorySources{Convo: store}, SelfID: "current-1", Focus: "prod/payment-api",
 	}, "prod", "payment-api", time.Now())
 	for _, e := range evid {
 		if strings.Contains(e.Excerpt, "investigated") {
@@ -84,8 +85,9 @@ func TestGatherHistory_IncidentSourceWithResolution(t *testing.T) {
 			{Title: "unrelated", Namespace: "staging", Service: "other", OpenedAt: now.Add(-time.Hour)},
 		}, nil
 	}
-	_, evid := gatherHistory(context.Background(), historyDeps{incidents: incFn, focus: "prod/payment-api-7d8-xkp"},
-		"prod", "payment-api-7d8-xkp", now)
+	_, evid := investigate.GatherHistory(context.Background(), investigate.HistoryDeps{
+		Sources: investigate.HistorySources{Incidents: incFn}, Focus: "prod/payment-api-7d8-xkp",
+	}, "prod", "payment-api-7d8-xkp", now)
 
 	found := false
 	for _, e := range evid {

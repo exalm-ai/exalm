@@ -54,19 +54,3 @@ var preventionCatalog = map[string][]plugin.RemediationAction{
 			Description: "Ensure the workload emits structured logs and has liveness/readiness probes — without them, every future investigation starts from less evidence."},
 	},
 }
-
-// preventionFor returns the preventive actions for the matched symptoms
-// (first match wins per key; deduplicated by description).
-func preventionFor(symptoms []symptom) []plugin.RemediationAction {
-	var out []plugin.RemediationAction
-	seen := map[string]bool{}
-	for _, s := range symptoms {
-		for _, a := range preventionCatalog[s.Key] {
-			if !seen[a.Description] {
-				seen[a.Description] = true
-				out = append(out, a)
-			}
-		}
-	}
-	return out
-}

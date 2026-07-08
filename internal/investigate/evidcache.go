@@ -1,10 +1,9 @@
-package k8s
+package investigate
 
-// evidcache.go is the per-conversation evidence cache: repeated questions in
-// the same investigation reuse recently collected evidence instead of calling
-// the cluster again. MEMORY-ONLY — cached evidence is never written to disk
-// (the persisted transcript already carries redacted excerpts; the cache
-// itself lives and dies with the process). A "refresh" request bypasses it.
+// evidcache.go — the per-conversation evidence cache, moved verbatim from
+// plugins/k8s. MEMORY-ONLY: cached evidence is never written to disk (the
+// persisted transcript already carries redacted excerpts). TTLs come from
+// the Profile; a "refresh" request bypasses the cache.
 
 import (
 	"sync"
@@ -14,42 +13,11 @@ import (
 )
 
 const (
-	// evidCacheMaxConvos / evidCacheMaxEntries bound memory: least-recently
-	// used conversations and oldest entries are evicted past these caps.
 	evidCacheMaxConvos  = 32
 	evidCacheMaxEntries = 64
-	// evidCacheIdleTTL drops a conversation's whole cache after inactivity.
-	evidCacheIdleTTL = 30 * time.Minute
+	evidCacheIdleTTL    = 30 * time.Minute
+	defaultTTL          = 5 * time.Minute
 )
-
-// collectorTTL is how long each collector class's evidence stays fresh.
-// Fast-moving signals expire quickly; topology/config are more stable.
-var collectorTTL = map[string]time.Duration{
-	"previous-logs":     90 * time.Second,
-	"metrics":           90 * time.Second,
-	"service-endpoints": 90 * time.Second,
-	"dns-heuristic":     90 * time.Second,
-	"related-services":  90 * time.Second,
-	"owner-chain":       5 * time.Minute,
-	"node-detail":       5 * time.Minute,
-	"configmaps":        5 * time.Minute,
-	"secrets":           5 * time.Minute,
-	"storage-chain":     5 * time.Minute,
-	"scaling":           5 * time.Minute,
-	"netpol":            5 * time.Minute,
-	"rbac":              5 * time.Minute,
-	"namespace-detail":  5 * time.Minute,
-	"change-history":    10 * time.Minute,
-	"history":           10 * time.Minute,
-}
-
-// ttlFor returns the collector's freshness window (default 5 minutes).
-func ttlFor(collector string) time.Duration {
-	if ttl, ok := collectorTTL[collector]; ok {
-		return ttl
-	}
-	return 5 * time.Minute
-}
 
 // cachedEvidence is one collector run's output.
 type cachedEvidence struct {
@@ -61,18 +29,28 @@ type cachedEvidence struct {
 // convoCache holds one conversation's entries, keyed collector+"\x1f"+target.
 type convoCache struct {
 	entries  map[string]cachedEvidence
-	order    []string // insertion order for oldest-first eviction
+	order    []string
 	lastUsed time.Time
 }
 
-// evidenceCache is the process-wide cache, keyed by conversation ID.
+// evidenceCache is the engine-owned cache, keyed by conversation ID.
 type evidenceCache struct {
 	mu     sync.Mutex
+	ttls   map[string]time.Duration // injected from the Profile
 	convos map[string]*convoCache
 }
 
-func newEvidenceCache() *evidenceCache {
-	return &evidenceCache{convos: map[string]*convoCache{}}
+func newEvidenceCache(ttls map[string]time.Duration) *evidenceCache {
+	return &evidenceCache{ttls: ttls, convos: map[string]*convoCache{}}
+}
+
+func (c *evidenceCache) ttlFor(collector string) time.Duration {
+	if c != nil {
+		if ttl, ok := c.ttls[collector]; ok {
+			return ttl
+		}
+	}
+	return defaultTTL
 }
 
 func cacheKey(collector, target string) string { return collector + "\x1f" + target }
@@ -90,7 +68,7 @@ func (c *evidenceCache) get(convoID, collector, target string, now time.Time) (c
 	}
 	cc.lastUsed = now
 	entry, ok := cc.entries[cacheKey(collector, target)]
-	if !ok || now.Sub(entry.At) > ttlFor(collector) {
+	if !ok || now.Sub(entry.At) > c.ttlFor(collector) {
 		return cachedEvidence{}, false
 	}
 	return entry, true
@@ -125,7 +103,6 @@ func (c *evidenceCache) put(convoID, collector, target string, entry cachedEvide
 	cc.entries[key] = entry
 }
 
-// evictLRULocked removes the least-recently-used conversation. Caller holds mu.
 func (c *evidenceCache) evictLRULocked() {
 	var lruID string
 	var lruAt time.Time

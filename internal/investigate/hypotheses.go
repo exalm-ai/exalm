@@ -1,10 +1,11 @@
-package k8s
+package investigate
 
 // hypotheses.go ranks candidate root causes deterministically: the matched
-// symptoms' causeTemplates are scored against the evidence that actually came
-// back this turn — matched "for" evidence raises a cause, matched "against"
-// evidence lowers it, and every match is recorded by citation label so the
-// user can see exactly which evidence argues for and against each hypothesis.
+// symptoms' cause templates are scored against the evidence that actually
+// came back this turn — matched "for" evidence raises a cause, matched
+// "against" evidence lowers it, and every match is recorded by citation
+// label so the user sees exactly which evidence argues for and against each
+// hypothesis. Moved verbatim from plugins/k8s (already domain-agnostic).
 
 import (
 	"sort"
@@ -12,12 +13,12 @@ import (
 	"github.com/exalm-ai/exalm/pkg/plugin"
 )
 
-// maxHypotheses bounds how many alternatives the copilot presents.
-const maxHypotheses = 4
+// MaxHypotheses bounds how many alternatives the copilot presents.
+const MaxHypotheses = 4
 
-// rankHypotheses scores every cause template from the matched symptoms
+// RankHypotheses scores every cause template from the matched symptoms
 // against the labeled evidence. Deterministic; ties break by catalog order.
-func rankHypotheses(symptoms []symptom, evidence []plugin.EvidenceItem) []plugin.Hypothesis {
+func RankHypotheses(symptoms []Symptom, evidence []plugin.EvidenceItem) []plugin.Hypothesis {
 	var out []plugin.Hypothesis
 	seen := map[string]bool{}
 	for _, s := range symptoms {
@@ -50,15 +51,14 @@ func rankHypotheses(symptoms []symptom, evidence []plugin.EvidenceItem) []plugin
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
-	if len(out) > maxHypotheses {
-		out = out[:maxHypotheses]
+	if len(out) > MaxHypotheses {
+		out = out[:MaxHypotheses]
 	}
 	return out
 }
 
-// matchLabels returns the citation labels of evidence items the matcher hits
-// (deduplicated, in evidence order).
-func matchLabels(evidence []plugin.EvidenceItem, m evidenceMatcher) []string {
+// matchLabels returns the citation labels of evidence items the matcher hits.
+func matchLabels(evidence []plugin.EvidenceItem, m EvidenceMatcher) []string {
 	var labels []string
 	for _, e := range evidence {
 		if m.Kind != "" && e.Kind != m.Kind {

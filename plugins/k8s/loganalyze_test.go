@@ -72,13 +72,15 @@ func TestAnalyzeLogLine_DeterministicFallback(t *testing.T) {
 func TestAnalyzeLogLine_CapsOversizedContext(t *testing.T) {
 	p := New()
 	llm := &chatRecordingLLM{replies: []string{"ok"}}
-	huge := strings.Repeat("x", maxLogContextBytes*2)
+	// The framework caps the surrounding context at 24 KB and the log line at
+	// 4 KB (formerly the package constants maxLogContextBytes/maxLogLineBytes).
+	huge := strings.Repeat("x", 2*24*1024)
 	_, err := p.AnalyzeLogLine(context.Background(), LogLineRequest{Message: "ERROR y", Context: huge}, llm, fakeRedactor{})
 	if err != nil {
 		t.Fatalf("AnalyzeLogLine: %v", err)
 	}
 	sent := llm.calls[0][len(llm.calls[0])-1].Content
-	if len(sent) > maxLogContextBytes+maxLogLineBytes+4096 {
+	if len(sent) > 24*1024+4*1024+4096 {
 		t.Errorf("prompt not capped: %d bytes", len(sent))
 	}
 }

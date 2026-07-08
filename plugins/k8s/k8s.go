@@ -13,6 +13,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/exalm-ai/exalm/internal/investigate"
 	"github.com/exalm-ai/exalm/pkg/plugin"
 )
 
@@ -39,9 +40,11 @@ type Plugin struct {
 	lastSnapshot Snapshot           // most recent collected state; feeds the dashboard pod inventory
 	watchCh      chan plugin.Report // non-nil during watch subcommand
 
-	// evidCache is the per-conversation evidence cache (memory-only; see
-	// evidcache.go). Guarded by its own mutex, not p.mu.
-	evidCache *evidenceCache
+	// eng is the generic investigation engine (internal/investigate) built
+	// from the k8s profile on first use. It owns the per-conversation
+	// evidence cache, so it must be a single long-lived instance. Guarded by
+	// p.mu; see profile.go.
+	eng *investigate.Engine
 	// incidentHistory is the optional decoupled incident source for
 	// "has this happened before?" answers (see history.go). Guarded by p.mu.
 	incidentHistory IncidentHistoryFn
@@ -55,7 +58,6 @@ func New() *Plugin {
 		newLogFetcher: func(cs kubernetes.Interface) logFetcher {
 			return &restLogFetcher{clientset: cs}
 		},
-		evidCache: newEvidenceCache(),
 	}
 }
 

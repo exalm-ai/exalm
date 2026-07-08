@@ -1,22 +1,13 @@
 package k8s
 
-// converse.go is the conversation engine behind the AI Operations Copilot —
-// still exactly ONE redacted LLM call per turn, never an agentic tool-use
-// loop. Each turn:
-//  1. resolves which resource the conversation is focused on,
-//  2. classifies question intents deterministically (keyword/regex),
-//  3. builds a deterministic investigation plan (planner.go): the symptom
-//     catalog (symptoms.go) + the intents decide which collectors run,
-//     following the resource-graph edges in graph.go,
-//  4. executes the plan through the collector dispatch table, serving
-//     repeat questions from the per-conversation evidence cache
-//     (evidcache.go) and labeling every evidence item E1..En for citation,
-//  5. ranks root-cause hypotheses (hypotheses.go), scores confidence from
-//     evidence quality (confidence.go), and picks prevention advice
-//     (prevention.go) — all deterministic,
-//  6. makes one llm.Complete() call over redacted evidence + history
-//     (fallback: a deterministic sectioned reply), and
-//  7. persists both turns (redacted transcript only) via convo.Store.
+// converse.go — the Kubernetes entry point into the generic investigation
+// framework (internal/investigate). The per-turn pipeline (focus → intents →
+// deterministic plan → cached collector execution → hypotheses → confidence →
+// prevention → ONE redacted LLM call → persisted transcript) lives in the
+// framework engine; this file supplies only what is Kubernetes: focus
+// resolution against the snapshot, the baseline pod evidence, the timeline,
+// finding-anchored fixes, follow-up suggestions, and the domain collectors
+// the profile registers (profile.go).
 //
 // No step opens a network connection outside the already-injected
 // kubernetes.Interface, metrics.Provider, or LLMClient. The LLM never
@@ -33,17 +24,20 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/exalm-ai/exalm/internal/convo"
+	"github.com/exalm-ai/exalm/internal/investigate"
 	"github.com/exalm-ai/exalm/internal/metrics"
 	"github.com/exalm-ai/exalm/pkg/plugin"
 )
 
-var convoIDCounter int64
-
-// newConvoID returns a process-unique conversation id. Not cryptographically
-// random — conversation ids aren't a security boundary, just a lookup key.
-func newConvoID() string {
-	convoIDCounter++
-	return fmt.Sprintf("c%d%06d", time.Now().UTC().Unix(), convoIDCounter)
+// k8sFacts is the opaque Facts bundle the k8s profile's hooks and collectors
+// unwrap: the most recent snapshot, the focus pod (resolved per turn by
+// PrepareTurn), and the injected clients.
+type k8sFacts struct {
+	snap  Snapshot
+	pod   *PodSummary
+	cs    kubernetes.Interface
+	newLF func(kubernetes.Interface) logFetcher
+	mp    metrics.Provider
 }
 
 // Converse runs one turn of a multi-turn investigation conversation and
@@ -58,123 +52,40 @@ func (p *Plugin) Converse(ctx context.Context, convoID, findingID, namespace, me
 	snap := p.lastSnapshot
 	cs := p.lastCS
 	newLF := p.newLogFetcher
-	p.mu.Unlock()
-
-	now := time.Now().UTC()
-	message = strings.TrimSpace(message)
-	if message == "" {
-		return nil, fmt.Errorf("message is required")
-	}
-
-	conv := loadOrCreateConversation(ctx, store, convoID, findingID, namespace, now)
-	conv.Messages = append(conv.Messages, plugin.ConversationMessage{Role: "user", Content: message, At: now})
-
-	conv.Focus = resolveFocus(conv.Focus, findingID, message, snap)
-	ns, name := splitFocus(conv.Focus)
-	pod := findPod(snap, ns, name)
-	intents := classifyIntent(message)
-	// The first turn of every investigation checks recurrence automatically —
-	// "has this happened before?" is the first thing a senior SRE asks.
-	if len(conv.Messages) == 1 && !hasIntent(intents, "history") {
-		intents = append(intents, "history")
-	}
-
-	// Baseline: pod status + snapshot evidence come free — always first.
-	var steps []plugin.InvestigationStep
-	var evidence []plugin.EvidenceItem
-	if pod != nil {
-		steps = append(steps, investigationSteps(syntheticFinding(*pod, ns, name), snap)...)
-		evidence = append(evidence, podEvidence(*pod, ns, name, now)...)
-	} else if ns != "" || name != "" {
-		steps = append(steps, step("Pod status inspected", "unavailable", "no pod "+conv.Focus+" in the current snapshot", ""))
-	}
-
-	// Deterministic investigation plan: symptom catalog + question intents
-	// decide which collectors run this turn. Still exactly one LLM call.
-	p.evidCache.purge(now)
-	plan := buildPlan(planInput{
-		Message: message, Intents: intents, Focus: conv.Focus,
-		Pod: pod, Snap: snap,
-		Cached: func(collector string) bool {
-			return p.evidCache.has(conv.ID, collector, conv.Focus, now)
-		},
-		Refresh: hasIntent(intents, "refresh"),
-	})
-	if conv.Fingerprint == "" {
-		conv.Fingerprint = fingerprintFor(pod, snap, conv.Focus)
-	}
-	p.mu.Lock()
 	incidentHistory := p.incidentHistory
 	p.mu.Unlock()
-	executedPlan, planSteps, planEvidence := executePlan(ctx, plan, execDeps{
-		cs: cs, red: red, newLF: newLF, mp: mp, snap: snap, ns: ns, name: name, now: now,
-		cache: p.evidCache, convoID: conv.ID,
-		history: historyDeps{
-			convoStore: store, incidents: incidentHistory,
-			selfID: conv.ID, focus: conv.Focus, fingerprint: conv.Fingerprint,
+
+	return p.engine().Converse(ctx, investigate.ConverseReq{
+		ConvoID: convoID, AnchorID: findingID, Scope: namespace, Message: message,
+	}, investigate.Deps{
+		LLM: llm, Red: red, Store: store,
+		Facts: k8sFacts{snap: snap, cs: cs, newLF: newLF, mp: mp},
+		History: investigate.HistorySources{
+			Convo:     store,
+			Incidents: incidentHistory,
+			Changes:   changeFrequency,
 		},
 	})
-	steps = append(steps, planSteps...)
-	evidence = labelEvidence(append(evidence, planEvidence...))
-
-	// Rank root-cause hypotheses and score confidence from evidence quality.
-	matchedSymptoms := matchSymptoms(pod, snap, ns, name)
-	hypotheses := rankHypotheses(matchedSymptoms, evidence)
-	score, scoreRationale := scoreConfidence(evidence, steps, pod)
-	prevention := preventionFor(matchedSymptoms)
-
-	timeline := buildTimeline(snap, ns, name, now)
-	var fixes []plugin.RemediationAction
-	if findingID != "" {
-		fixes = fixesForFinding(snap, findingID)
-	}
-	suggestions := suggestFollowUps(intents, pod, steps)
-
-	tc := turnContext{
-		Question: message, Focus: conv.Focus,
-		Plan: executedPlan, Steps: steps, Evidence: evidence,
-		Hypotheses: hypotheses, Score: score, ScoreRationale: scoreRationale,
-		Fixes: fixes, Prevention: prevention,
-	}
-	llmMessages := buildLLMMessages(conv, tc)
-	content := synthesizeConversationReply(ctx, llmMessages, tc, llm, red)
-
-	conv.Messages = append(conv.Messages, plugin.ConversationMessage{
-		Role: "assistant", Content: content, At: time.Now().UTC(),
-		Confidence:     tierFor(score),
-		Score:          score,
-		ScoreRationale: scoreRationale,
-		Steps:          steps,
-		Evidence:       evidence,
-		Fixes:          fixes,
-		Timeline:       timeline,
-		Suggestions:    suggestions,
-		Plan:           executedPlan,
-		Hypotheses:     hypotheses,
-		Prevention:     prevention,
-	})
-	conv.UpdatedAt = time.Now().UTC()
-
-	if err := store.Update(ctx, conv); err != nil {
-		return nil, fmt.Errorf("persist conversation: %w", err)
-	}
-	return &conv, nil
 }
 
-// loadOrCreateConversation fetches convoID from store, or starts a fresh one
-// when it's empty/unknown (e.g. the client generated a new id, or this is the
-// first turn after "Investigate" seeded findingID/namespace but no id yet).
-func loadOrCreateConversation(ctx context.Context, store convo.Store, convoID, findingID, namespace string, now time.Time) plugin.Conversation {
-	if convoID != "" {
-		if existing, err := store.Get(ctx, convoID); err == nil {
-			return existing
-		}
+// changeFrequency adapts the changestore into the framework's decoupled
+// recurrence closure.
+func changeFrequency(scope, name string, window time.Duration, now time.Time) []investigate.ChangeSummary {
+	cstore := defaultStore()
+	if cstore == nil || name == "" {
+		return nil
 	}
-	id := convoID
-	if id == "" {
-		id = newConvoID()
+	changes, err := cstore.RecentForResource(scope, name, correlationKinds, window, now)
+	if err != nil {
+		return nil
 	}
-	return plugin.Conversation{ID: id, FindingID: findingID, Namespace: namespace, CreatedAt: now}
+	out := make([]investigate.ChangeSummary, 0, len(changes))
+	for _, c := range changes {
+		out = append(out, investigate.ChangeSummary{
+			Kind: c.Kind, Name: c.Name, Action: c.Action, Actor: c.Actor, Timestamp: c.Timestamp,
+		})
+	}
+	return out
 }
 
 // syntheticFinding adapts a focus pod into the minimal plugin.Finding shape
@@ -191,10 +102,8 @@ func syntheticFinding(pod PodSummary, ns, name string) plugin.Finding {
 // splitFocus splits a "namespace/name" focus string. A bare name with no
 // namespace returns ns="".
 func splitFocus(focus string) (ns, name string) {
-	if i := strings.Index(focus, "/"); i >= 0 {
-		return focus[:i], focus[i+1:]
-	}
-	return "", focus
+	t := investigate.ParseFocus(focus)
+	return t.Scope, t.Name
 }
 
 // resolveFocus decides which resource this turn is about: an explicit mention
@@ -257,59 +166,43 @@ func podEvidence(pod PodSummary, ns, name string, now time.Time) []plugin.Eviden
 	return out
 }
 
-// ── intent classification (deterministic, not an LLM call) ──
+// ── k8s intent patterns (deterministic, not an LLM call) ──
 
-var intentPatterns = []struct {
-	intent string
-	re     *regexp.Regexp
-}{
-	{"previous-logs", regexp.MustCompile(`(?i)previous log|logs? before|prior log|last run|logs before it crashed`)},
-	{"deploy-correlation", regexp.MustCompile(`(?i)deploy(ment)?|rollout|release|recent change|last (change|update)|replicaset`)},
-	{"comparison", regexp.MustCompile(`(?i)compare|yesterday|did this happen before|previously|history|happened before`)},
-	{"db-connectivity", regexp.MustCompile(`(?i)database|\bdb\b|postgres|mysql|redis|connection (pool|refused)`)},
-	{"resource-usage", regexp.MustCompile(`(?i)memory|\bcpu\b|resource usage|\boom\b|out of memory`)},
-	{"node-pressure", regexp.MustCompile(`(?i)\bnode\b|disk pressure|node pressure|scheduling`)},
-	{"configmap", regexp.MustCompile(`(?i)config\s?map|configuration\b`)},
-	{"secret", regexp.MustCompile(`(?i)\bsecrets?\b|credential`)},
-	{"dns", regexp.MustCompile(`(?i)\bdns\b|resolve|resolution|no such host`)},
-	{"timeline", regexp.MustCompile(`(?i)timeline|sequence of events|what happened|order of events`)},
-	{"rca", regexp.MustCompile(`(?i)\brca\b|postmortem|incident report|root cause analysis`)},
-	{"related-services", regexp.MustCompile(`(?i)related (service|pod)|depends on|dependency|dependent service|which service`)},
-	{"ingress", regexp.MustCompile(`(?i)ingress|external traffic|\b503\b|\b502\b|gateway`)},
-	{"storage", regexp.MustCompile(`(?i)\bpvc\b|\bpv\b|volume|storage ?class|disk (full|space)|persistent`)},
-	{"rbac-question", regexp.MustCompile(`(?i)\brbac\b|permission|forbidden|service ?account|role ?binding`)},
-	{"quota", regexp.MustCompile(`(?i)quota|limit ?range|namespace limit`)},
-	{"scaling", regexp.MustCompile(`(?i)\bhpa\b|autoscal|scale|replicas|disruption budget|\bpdb\b`)},
-	{"history", regexp.MustCompile(`(?i)happened before|recurr|similar (incident|issue)|last time|how often|more frequent`)},
-	{"refresh", regexp.MustCompile(`(?i)\brefresh\b|re-?check|fetch again|latest (data|state)|re-?collect`)},
-	{"vpa", regexp.MustCompile(`(?i)\bvpa\b|vertical pod autoscal`)},
-}
+// k8sIntentPatterns extends the framework's common intents with the
+// Kubernetes vocabulary.
+var k8sIntentPatterns = append(investigate.CommonIntentPatterns(), []investigate.IntentPattern{
+	{Intent: "deploy-correlation", Re: regexp.MustCompile(`(?i)deploy(ment)?|rollout|release|recent change|last (change|update)|replicaset`)},
+	{Intent: "db-connectivity", Re: regexp.MustCompile(`(?i)database|\bdb\b|postgres|mysql|redis|connection (pool|refused)`)},
+	{Intent: "resource-usage", Re: regexp.MustCompile(`(?i)memory|\bcpu\b|resource usage|\boom\b|out of memory`)},
+	{Intent: "node-pressure", Re: regexp.MustCompile(`(?i)\bnode\b|disk pressure|node pressure|scheduling`)},
+	{Intent: "configmap", Re: regexp.MustCompile(`(?i)config\s?map|configuration\b`)},
+	{Intent: "secret", Re: regexp.MustCompile(`(?i)\bsecrets?\b|credential`)},
+	{Intent: "dns", Re: regexp.MustCompile(`(?i)\bdns\b|resolve|resolution|no such host`)},
+	{Intent: "related-services", Re: regexp.MustCompile(`(?i)related (service|pod)|depends on|dependency|dependent service|which service`)},
+	{Intent: "ingress", Re: regexp.MustCompile(`(?i)ingress|external traffic|\b503\b|\b502\b|gateway`)},
+	{Intent: "storage", Re: regexp.MustCompile(`(?i)\bpvc\b|\bpv\b|volume|storage ?class|disk (full|space)|persistent`)},
+	{Intent: "rbac-question", Re: regexp.MustCompile(`(?i)\brbac\b|permission|forbidden|service ?account|role ?binding`)},
+	{Intent: "quota", Re: regexp.MustCompile(`(?i)quota|limit ?range|namespace limit`)},
+	{Intent: "scaling", Re: regexp.MustCompile(`(?i)\bhpa\b|autoscal|scale|replicas|disruption budget|\bpdb\b`)},
+	{Intent: "vpa", Re: regexp.MustCompile(`(?i)\bvpa\b|vertical pod autoscal`)},
+}...)
 
-// classifyIntent maps free-text to zero or more intent tags via keyword/regex
-// matching — never via an LLM call. Returns ["general"] when nothing matches,
-// so the engine still gathers the baseline pod/event/log evidence.
+// classifyIntent keeps the historical k8s-package spelling for tests and
+// callers; it is the framework classifier over the k8s patterns.
 func classifyIntent(message string) []string {
-	var out []string
-	for _, p := range intentPatterns {
-		if p.re.MatchString(message) {
-			out = append(out, p.intent)
-		}
-	}
-	if len(out) == 0 {
-		out = append(out, "general")
-	}
-	return out
+	return investigate.ClassifyIntent(k8sIntentPatterns, message)
 }
 
 // hasIntent reports whether the classified intents include the given tag.
-func hasIntent(intents []string, tag string) bool {
-	for _, i := range intents {
-		if i == tag {
-			return true
-		}
-	}
-	return false
+func hasIntent(intents []string, tag string) bool { return investigate.HasIntent(intents, tag) }
+
+// matchSymptoms is the k8s-typed view over the profile's symptom matching,
+// kept for the catalog tests.
+func matchSymptoms(pod *PodSummary, snap Snapshot, ns, name string) []investigate.Symptom {
+	return k8sProfile().MatchSymptoms(k8sFacts{snap: snap, pod: pod}, investigate.Target{Scope: ns, Name: name})
 }
+
+// ── k8s collectors (invoked via the profile's dispatch table) ──
 
 func gatherPreviousLogs(ctx context.Context, cs kubernetes.Interface, newLF func(kubernetes.Interface) logFetcher, ns, name string) ([]plugin.InvestigationStep, []plugin.EvidenceItem) {
 	if cs == nil || newLF == nil || name == "" {
@@ -578,205 +471,4 @@ func suggestFollowUps(intents []string, pod *PodSummary, steps []plugin.Investig
 		add("Generate an RCA")
 	}
 	return out
-}
-
-// ── LLM assembly + synthesis (exactly one call per turn) ──
-
-// buildLLMMessages converts the conversation's existing turns into the
-// provider-agnostic Message history, then appends THIS turn's question
-// enriched with the freshly gathered steps/evidence/fixes. Earlier turns keep
-// their original (already-redacted) content — only the newest user message
-// carries new evidence, so context doesn't balloon turn over turn.
-// turnContext bundles everything the copilot assembled for one turn — the
-// input to both the enriched LLM message and the deterministic fallback.
-type turnContext struct {
-	Question       string
-	Focus          string
-	Plan           []plugin.PlanStep
-	Steps          []plugin.InvestigationStep
-	Evidence       []plugin.EvidenceItem
-	Hypotheses     []plugin.Hypothesis
-	Score          int
-	ScoreRationale string
-	Fixes          []plugin.RemediationAction
-	Prevention     []plugin.RemediationAction
-}
-
-// evidenceByteBudget caps the total evidence text per turn so eight
-// collectors' output can't blow up the prompt. Evidence is emitted in
-// collection order (baseline pod facts first), so what gets summarized away
-// is the lowest-priority tail.
-const evidenceByteBudget = 48 * 1024
-
-func buildLLMMessages(conv plugin.Conversation, tc turnContext) []plugin.Message {
-	msgs := make([]plugin.Message, 0, len(conv.Messages))
-	for i, m := range conv.Messages {
-		if i == len(conv.Messages)-1 {
-			break // last message is this turn's user question; build it enriched below
-		}
-		msgs = append(msgs, plugin.Message{Role: m.Role, Content: m.Content})
-	}
-	msgs = append(msgs, plugin.Message{Role: "user", Content: buildEnrichedTurn(tc)})
-	return msgs
-}
-
-func buildEnrichedTurn(tc turnContext) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "QUESTION: %s\n", tc.Question)
-	if tc.Focus != "" {
-		fmt.Fprintf(&b, "FOCUS RESOURCE: %s\n", tc.Focus)
-	}
-	if len(tc.Plan) > 0 {
-		b.WriteString("\nINVESTIGATION PLAN EXECUTED:\n")
-		for _, ps := range tc.Plan {
-			cached := ""
-			if ps.FromCache {
-				cached = " (cached)"
-			}
-			edge := ""
-			if ps.Edge != "" {
-				edge = " (" + ps.Edge + ")"
-			}
-			fmt.Fprintf(&b, "- [%s]%s %s %s%s: %s\n", ps.Status, cached, ps.ID, ps.Collector, edge, ps.Reason)
-		}
-	}
-	if len(tc.Steps) > 0 {
-		b.WriteString("\nCHECKS PERFORMED THIS TURN:\n")
-		for _, s := range tc.Steps {
-			fmt.Fprintf(&b, "- [%s] %s — %s\n", s.Status, s.Label, s.Detail)
-		}
-	}
-	if len(tc.Evidence) > 0 {
-		b.WriteString("\nEVIDENCE:\n")
-		spent, omitted := 0, 0
-		for _, e := range tc.Evidence {
-			line := fmt.Sprintf("- [%s] (%s/%s", e.Label, e.Kind, e.Source)
-			if e.Edge != "" {
-				line += ", edge=" + e.Edge
-			}
-			line += ") "
-			if e.FromCache {
-				line += "(cached) "
-			}
-			line += e.Excerpt + "\n"
-			if spent+len(line) > evidenceByteBudget {
-				omitted++
-				continue
-			}
-			spent += len(line)
-			b.WriteString(line)
-		}
-		if omitted > 0 {
-			fmt.Fprintf(&b, "- …and %d more evidence item(s) omitted for size\n", omitted)
-		}
-	}
-	if len(tc.Hypotheses) > 0 {
-		b.WriteString("\nHYPOTHESES (deterministic ranking — explain, do not re-rank):\n")
-		for i, h := range tc.Hypotheses {
-			fmt.Fprintf(&b, "- %d. %s (score %d) for=%v against=%v — %s\n", i+1, h.Title, h.Score, h.EvidenceFor, h.EvidenceAgainst, h.Rationale)
-		}
-	}
-	if tc.Score > 0 {
-		fmt.Fprintf(&b, "\nCONFIDENCE: %d%% — %s\n", tc.Score, tc.ScoreRationale)
-	}
-	if len(tc.Fixes) > 0 {
-		b.WriteString("\nKNOWN FIXES FOR THIS RESOURCE:\n")
-		for _, fx := range tc.Fixes {
-			fmt.Fprintf(&b, "- [%s] %s\n", fx.FixType, fx.Description)
-		}
-	}
-	if len(tc.Prevention) > 0 {
-		b.WriteString("\nPREVENTION:\n")
-		for _, fx := range tc.Prevention {
-			fmt.Fprintf(&b, "- %s\n", fx.Description)
-		}
-	}
-	return b.String()
-}
-
-// synthesizeConversationReply makes the ONE LLM call for this turn, redacting
-// every message first. Falls back to a deterministic reply when llm is nil or
-// the call fails — mirrors investigate.go's synthesizeNarrative().
-func synthesizeConversationReply(ctx context.Context, messages []plugin.Message, tc turnContext, llm plugin.LLMClient, red plugin.Redactor) string {
-	if llm == nil {
-		return deterministicConvReply(tc)
-	}
-	redacted := make([]plugin.Message, len(messages))
-	for i, m := range messages {
-		content := m.Content
-		if red != nil {
-			content = red.Redact(content)
-		}
-		redacted[i] = plugin.Message{Role: m.Role, Content: content}
-	}
-	resp, err := llm.Complete(ctx, plugin.CompleteRequest{System: conversationPrompt, MaxTokens: 900, Messages: redacted})
-	if err != nil || strings.TrimSpace(resp.Content) == "" {
-		return deterministicConvReply(tc)
-	}
-	return strings.TrimSpace(resp.Content)
-}
-
-// deterministicConvReply is the no-LLM fallback: it renders the same
-// sections the LLM would — root cause from the top hypothesis, alternatives,
-// fixes, prevention — from the deterministic engines alone, so the copilot
-// degrades honestly instead of going silent.
-func deterministicConvReply(tc turnContext) string {
-	if len(tc.Evidence) == 0 && len(tc.Hypotheses) == 0 {
-		return "No information available yet — ask about a specific pod, deployment, or namespace, or run an analysis first so the copilot has a snapshot to investigate."
-	}
-	var b strings.Builder
-	b.WriteString("_No LLM is configured — this summary is assembled deterministically from the gathered evidence._\n\n")
-	if len(tc.Hypotheses) > 0 {
-		top := tc.Hypotheses[0]
-		fmt.Fprintf(&b, "**Root cause** (most likely): %s %s", top.Title, citationList(top.EvidenceFor))
-		if tc.Score > 0 {
-			fmt.Fprintf(&b, " — confidence %d%% (%s)", tc.Score, tc.ScoreRationale)
-		}
-		b.WriteString("\n")
-		if len(tc.Hypotheses) > 1 {
-			b.WriteString("\n**Alternative hypotheses**\n")
-			for _, h := range tc.Hypotheses[1:] {
-				fmt.Fprintf(&b, "- %s (score %d) — %s\n", h.Title, h.Score, h.Rationale)
-			}
-		}
-	}
-	var temp, root []plugin.RemediationAction
-	for _, fx := range tc.Fixes {
-		if fx.FixType == "root-cause" {
-			root = append(root, fx)
-		} else {
-			temp = append(temp, fx)
-		}
-	}
-	if len(temp) > 0 {
-		b.WriteString("\n**Immediate mitigation** (temporary)\n")
-		for _, fx := range temp {
-			fmt.Fprintf(&b, "- %s\n", fx.Description)
-		}
-	}
-	if len(root) > 0 {
-		b.WriteString("\n**Root-cause fix**\n")
-		for _, fx := range root {
-			fmt.Fprintf(&b, "- %s\n", fx.Description)
-		}
-	}
-	if len(tc.Prevention) > 0 {
-		b.WriteString("\n**Prevention**\n")
-		for _, fx := range tc.Prevention {
-			fmt.Fprintf(&b, "- %s\n", fx.Description)
-		}
-	}
-	return strings.TrimSpace(b.String())
-}
-
-// citationList renders evidence labels as "[E1] [E3]".
-func citationList(labels []string) string {
-	if len(labels) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	for _, l := range labels {
-		b.WriteString("[" + l + "] ")
-	}
-	return strings.TrimSpace(b.String())
 }

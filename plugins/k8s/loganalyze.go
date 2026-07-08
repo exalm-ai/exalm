@@ -1,25 +1,16 @@
 package k8s
 
-// loganalyze.go implements per-log-entry AI analysis (the "✦ Analyze line"
-// action in the log viewer): one redacted LLM call over a single log line
-// plus its surrounding context, answering with Root Cause / Impact /
-// Remediation / Prevention. Same trust model as the rest of the plugin —
-// everything through the redactor first, deterministic fallback without an
-// LLM, no network surface beyond the injected LLMClient.
+// loganalyze.go — the k8s wrapper for the framework's per-log-entry analysis
+// (internal/investigate/lineanalyze.go): maps the k8s-shaped request into the
+// generic field list, and supplies the kubectl-flavored deterministic
+// fallback the framework calls when no LLM is wired.
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
+	"github.com/exalm-ai/exalm/internal/investigate"
 	"github.com/exalm-ai/exalm/pkg/plugin"
-)
-
-// Input caps: a log line is small; the surrounding context is bounded well
-// under MaxInputBytes so this endpoint can never balloon a prompt.
-const (
-	maxLogLineBytes    = 4 * 1024
-	maxLogContextBytes = 24 * 1024
 )
 
 // LogLineRequest is one log entry to analyze, with whatever context the
@@ -35,49 +26,49 @@ type LogLineRequest struct {
 	Context   string // surrounding lines (already fetched by the log viewer)
 }
 
-// AnalyzeLogLine fills the analysis template with REDACTED values and makes
-// one LLM call. Falls back to a deterministic answer when llm is nil or the
-// call fails.
+// AnalyzeLogLine runs the framework's single-entry analysis over the k8s
+// request shape: exactly one redacted LLM call, deterministic fallback.
 func (p *Plugin) AnalyzeLogLine(ctx context.Context, req LogLineRequest, llm plugin.LLMClient, red plugin.Redactor) (string, error) {
-	if strings.TrimSpace(req.Message) == "" {
-		return "", fmt.Errorf("message is required")
-	}
-	r := func(s string) string { return redactStr(red, s) }
+	return p.engine().AnalyzeLine(ctx, investigate.LineRequest{
+		Fields: []investigate.KV{
+			{Key: "Namespace", Value: req.Namespace},
+			{Key: "Pod", Value: req.Pod},
+			{Key: "Container", Value: req.Container},
+			{Key: "Severity", Value: req.Severity},
+			{Key: "Source", Value: req.Source},
+			{Key: "Labels", Value: req.Labels},
+		},
+		Message: req.Message,
+		Context: req.Context,
+	}, llm, red)
+}
 
-	var b strings.Builder
-	b.WriteString("LOG DETAILS:\n")
-	writeIf := func(k, v string) {
-		if strings.TrimSpace(v) != "" {
-			fmt.Fprintf(&b, "- %s: %s\n", k, r(v))
+// lineRequestToK8s reconstructs the k8s request shape from the generic field
+// list, for the deterministic fallback's kubectl-flavored guidance.
+func lineRequestToK8s(req investigate.LineRequest) LogLineRequest {
+	out := LogLineRequest{Message: req.Message, Context: req.Context}
+	for _, f := range req.Fields {
+		switch f.Key {
+		case "Namespace":
+			out.Namespace = f.Value
+		case "Pod":
+			out.Pod = f.Value
+		case "Container":
+			out.Container = f.Value
+		case "Severity":
+			out.Severity = f.Value
+		case "Source":
+			out.Source = f.Value
+		case "Labels":
+			out.Labels = f.Value
 		}
 	}
-	writeIf("Namespace", req.Namespace)
-	writeIf("Pod", req.Pod)
-	writeIf("Container", req.Container)
-	writeIf("Severity", req.Severity)
-	writeIf("Source", req.Source)
-	writeIf("Labels", req.Labels)
-	fmt.Fprintf(&b, "- Message: %s\n", truncateString(r(req.Message), maxLogLineBytes))
-	if strings.TrimSpace(req.Context) != "" {
-		fmt.Fprintf(&b, "\nSURROUNDING LOG CONTEXT:\n%s\n", truncateString(r(req.Context), maxLogContextBytes))
-	}
-
-	if llm == nil {
-		return deterministicLogAnalysis(req), nil
-	}
-	resp, err := llm.Complete(ctx, plugin.CompleteRequest{
-		System:    logLineAnalysisPrompt,
-		MaxTokens: 900,
-		Messages:  []plugin.Message{{Role: "user", Content: b.String()}},
-	})
-	if err != nil || strings.TrimSpace(resp.Content) == "" {
-		return deterministicLogAnalysis(req), nil
-	}
-	return strings.TrimSpace(resp.Content), nil
+	return out
 }
 
 // deterministicLogAnalysis is the honest no-LLM fallback: it classifies the
-// line against the known anomaly patterns and reports what to check.
+// line against the known anomaly patterns and reports the next kubectl
+// command to run.
 func deterministicLogAnalysis(req LogLineRequest) string {
 	lower := strings.ToLower(req.Message)
 	hint := "No LLM is configured, so this is a pattern-match classification, not a synthesized analysis."

@@ -7,8 +7,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/exalm-ai/exalm/internal/investigate"
 	"github.com/exalm-ai/exalm/pkg/plugin"
 )
+
+// maxHypotheses keeps the golden characterization test compiling unchanged
+// now that the cap lives in the framework.
+const maxHypotheses = investigate.MaxHypotheses
 
 func TestScoreConfidence_Table(t *testing.T) {
 	oom := &PodSummary{Reason: "OOMKilled"}
@@ -61,14 +66,14 @@ func TestScoreConfidence_Table(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			score, rationale := scoreConfidence(tc.evidence, nil, tc.pod)
+			score, rationale := investigate.ScoreConfidence(confidenceRules, tc.evidence, nil, k8sFacts{pod: tc.pod})
 			if score < tc.wantMin || score > tc.wantMax {
 				t.Errorf("score=%d want [%d,%d] (rationale: %s)", score, tc.wantMin, tc.wantMax, rationale)
 			}
 			if rationale == "" {
 				t.Error("rationale must always explain the score")
 			}
-			if got := tierFor(score); got != tc.tier {
+			if got := investigate.TierFor(score); got != tc.tier {
 				t.Errorf("tier=%q want %q (score=%d)", got, tc.tier, score)
 			}
 		})
@@ -81,8 +86,8 @@ func TestScoreConfidence_CorroborationBonus(t *testing.T) {
 		plugin.EvidenceItem{Kind: "event", Source: "p", Excerpt: "BackOff restarting"},
 		plugin.EvidenceItem{Kind: "config", Source: "d", Excerpt: "memLimits=false"},
 	)
-	s1, _ := scoreConfidence(single, nil, nil)
-	s2, _ := scoreConfidence(multi, nil, nil)
+	s1, _ := investigate.ScoreConfidence(confidenceRules, single, nil, k8sFacts{})
+	s2, _ := investigate.ScoreConfidence(confidenceRules, multi, nil, k8sFacts{})
 	if s2 <= s1 {
 		t.Errorf("independent corroborating kinds should raise the score: %d vs %d", s1, s2)
 	}
@@ -92,17 +97,17 @@ func TestRankHypotheses_ForAndAgainstLabels(t *testing.T) {
 	pod := &PodSummary{Namespace: "prod", Name: "api-1", Reason: "OOMKilled"}
 	syms := matchSymptoms(pod, Snapshot{}, "prod", "api-1")
 
-	evidence := labelEvidence([]plugin.EvidenceItem{
+	evidence := investigate.LabelEvidence([]plugin.EvidenceItem{
 		{Kind: "config", Source: "deployment/api", Excerpt: "ready 1/3 · memLimits=false cpuLimits=false"},
 		{Kind: "change", Source: "Deployment/api", Excerpt: "updated by ci-bot, 2h ago"},
 		{Kind: "log", Source: "pod/api-1", Excerpt: "OOMKilled: container exceeded memory limit"},
 	})
 
-	hyps := rankHypotheses(syms, evidence)
+	hyps := investigate.RankHypotheses(syms, evidence)
 	if len(hyps) == 0 {
 		t.Fatal("expected hypotheses for an OOM symptom")
 	}
-	if len(hyps) > maxHypotheses {
+	if len(hyps) > investigate.MaxHypotheses {
 		t.Errorf("hypotheses exceed cap: %d", len(hyps))
 	}
 	top := hyps[0]
@@ -125,9 +130,9 @@ func TestRankHypotheses_ForAndAgainstLabels(t *testing.T) {
 func TestRankHypotheses_Deterministic(t *testing.T) {
 	pod := &PodSummary{Namespace: "prod", Name: "api-1", Reason: "CrashLoopBackOff"}
 	syms := matchSymptoms(pod, Snapshot{}, "prod", "api-1")
-	ev := labelEvidence([]plugin.EvidenceItem{{Kind: "log", Source: "p", Excerpt: "panic: nil pointer"}})
-	a := rankHypotheses(syms, ev)
-	b := rankHypotheses(syms, ev)
+	ev := investigate.LabelEvidence([]plugin.EvidenceItem{{Kind: "log", Source: "p", Excerpt: "panic: nil pointer"}})
+	a := investigate.RankHypotheses(syms, ev)
+	b := investigate.RankHypotheses(syms, ev)
 	if len(a) != len(b) {
 		t.Fatalf("non-deterministic ranking: %d vs %d", len(a), len(b))
 	}
@@ -141,7 +146,7 @@ func TestRankHypotheses_Deterministic(t *testing.T) {
 func TestPreventionFor_MappedAndDeduped(t *testing.T) {
 	pod := &PodSummary{Namespace: "prod", Name: "api-1", Reason: "OOMKilled"}
 	syms := matchSymptoms(pod, Snapshot{}, "prod", "api-1")
-	prev := preventionFor(syms)
+	prev := investigate.PreventionFor(preventionCatalog, syms)
 	if len(prev) == 0 {
 		t.Fatal("expected prevention actions for OOM")
 	}

@@ -279,23 +279,3 @@ func TestConverse_PromptCarriesPlanHypothesesAndCitations(t *testing.T) {
 		}
 	}
 }
-
-func TestDeterministicConvReply_RendersSections(t *testing.T) {
-	tc := turnContext{
-		Question: "why?", Focus: "prod/api",
-		Evidence: []plugin.EvidenceItem{{Kind: "log", Source: "p", Excerpt: "panic", Label: "E1"}},
-		Hypotheses: []plugin.Hypothesis{
-			{Title: "Bad config", Score: 60, Rationale: "supported by [E1]", EvidenceFor: []string{"E1"}},
-			{Title: "Recent deploy", Score: 40, Rationale: "no direct evidence"},
-		},
-		Score: 60, ScoreRationale: "log-pattern only",
-		Fixes:      []plugin.RemediationAction{{FixType: "temporary", Description: "Restart the deployment"}},
-		Prevention: []plugin.RemediationAction{{FixType: "prevention", Description: "Validate config in CI"}},
-	}
-	out := deterministicConvReply(tc)
-	for _, want := range []string{"**Root cause**", "Bad config", "[E1]", "60%", "**Alternative hypotheses**", "Recent deploy", "**Immediate mitigation**", "**Prevention**"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("fallback missing %q:\n%s", want, out)
-		}
-	}
-}
