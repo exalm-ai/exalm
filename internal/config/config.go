@@ -34,6 +34,14 @@ type Config struct {
 	Apply          bool // required for any mutating plugin
 	ShowRedactions bool
 
+	// RemoteDiagTier gates on-demand SSH diagnostics during investigations:
+	// "off" (none), "readonly" (basic system state — the default), or "full"
+	// (adds security-sensitive reads: auth logs, firewall state,
+	// certificates, scheduled tasks). Commands always come from the fixed
+	// allowlist in internal/ssh/diagnostics.go — this tier only widens which
+	// rows are reachable. Overridable per run with --remote-diag.
+	RemoteDiagTier string
+
 	// Optional redaction patterns (comma-separated names).
 	OptionalRedactions []string
 }
@@ -50,6 +58,7 @@ func Load() Config {
 		OpenRouterAPIKey: os.Getenv("OPENROUTER_API_KEY"),
 		OllamaBaseURL:    getenv("EXALM_OLLAMA_URL", "http://localhost:11434"),
 		OutputFormat:     getenv("EXALM_OUTPUT", "markdown"),
+		RemoteDiagTier:   getenv("EXALM_REMOTE_DIAG", "readonly"),
 	}
 	return c
 }

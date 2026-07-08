@@ -133,6 +133,16 @@ var concurrentPlugins = map[string]bool{
 	"httplog":  true,
 }
 
+// investigableAnalyzers lists the log analyzers that build an investigation
+// session and can open the conversational dashboard with --open.
+var investigableAnalyzers = map[string]bool{
+	"eventlog": true,
+	"iis":      true,
+	"syslog":   true,
+	"httplog":  true,
+	"logs":     true,
+}
+
 // rootFlags holds top-level persistent flags. Subcommands read from this
 // after Cobra has parsed them.
 type rootFlags struct {
@@ -243,8 +253,12 @@ func buildPluginCmd(p plugin.Plugin, flags *rootFlags) *cobra.Command {
 			sub.Flags().String("ssh-port", "22", "SSH port (default: 22)")
 			sub.Flags().String("ssh-password", "", "SSH password (prefer EXALM_SSH_PASSWORD env var)")
 			sub.Flags().String("log-lines", "5000", "number of log lines to fetch from remote host")
+			sub.Flags().String("remote-diag", "", "on-demand SSH diagnostics tier during investigations: off, readonly, full (default: EXALM_REMOTE_DIAG or readonly)")
 		} else {
 			sub.Flags().String("file", "", "read input from this file instead of stdin")
+		}
+		if investigableAnalyzers[p.Name()] {
+			sub.Flags().Bool("open", false, "open the interactive investigation dashboard after the analysis")
 		}
 		if p.Name() == "httplog" {
 			sub.Flags().String("log-path", "", "custom log path on the remote host (default: /var/log/nginx/access.log)")
@@ -327,7 +341,7 @@ func extractFlags(cmd *cobra.Command, pluginName, subName string) (map[string]st
 			multi["file"] = vs
 			out["file"] = vs[len(vs)-1]
 		}
-		for _, name := range []string{"concurrency", "chunk-size", "host", "ssh-user", "ssh-key", "ssh-port", "ssh-password", "log-lines"} {
+		for _, name := range []string{"concurrency", "chunk-size", "host", "ssh-user", "ssh-key", "ssh-port", "ssh-password", "log-lines", "remote-diag"} {
 			if v, err := cmd.Flags().GetString(name); err == nil && v != "" {
 				out[name] = v
 			}
@@ -335,6 +349,11 @@ func extractFlags(cmd *cobra.Command, pluginName, subName string) (map[string]st
 	} else {
 		if v, err := cmd.Flags().GetString("file"); err == nil && v != "" {
 			out["file"] = v
+		}
+	}
+	if investigableAnalyzers[pluginName] {
+		if v, err := cmd.Flags().GetBool("open"); err == nil && v {
+			out["open"] = "true"
 		}
 	}
 
