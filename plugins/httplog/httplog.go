@@ -7,15 +7,20 @@ package httplog
 
 import (
 	"context"
+	"sync"
 
 	"github.com/exalm-ai/exalm/internal/analyzer"
+	"github.com/exalm-ai/exalm/internal/investigate"
 	exassh "github.com/exalm-ai/exalm/internal/ssh"
 	"github.com/exalm-ai/exalm/pkg/plugin"
 )
 
 const MaxInputBytes = 1024 * 1024
 
-type Plugin struct{}
+type Plugin struct {
+	mu          sync.Mutex
+	lastSession *investigate.LogSession
+}
 
 func New() *Plugin { return &Plugin{} }
 
@@ -32,18 +37,22 @@ func (p *Plugin) Subcommands() []plugin.Subcommand {
 		{
 			Name:        "analyze",
 			Description: "Analyze Apache/nginx access or error logs from --file (repeatable, supports globs), --host (SSH), or stdin",
-			Run:         analyze,
+			Run:         p.analyze,
 		},
 	}
 }
 
-func analyze(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) {
+func (p *Plugin) analyze(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) {
+	session := investigate.NewLogSession("httplog")
+
 	// Phase 2: SSH remote collection.
 	// Fetch both access log and error log when a remote host is given.
+	remoteHost := ""
 	if rem, err := exassh.CollectIfNeeded(ctx, args,
 		exassh.HTTPLogCmd(args.Flags["log-path"], exassh.LogLinesFromArgs(args, 10000))); err != nil {
 		return plugin.Report{}, err
 	} else if rem != nil {
+		remoteHost = rem.Host
 		args.Stdin = rem.Reader
 		args.FlagsMulti = map[string][]string{}
 		if args.Flags == nil {
@@ -52,11 +61,17 @@ func analyze(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) {
 		args.Flags["file"] = ""
 	}
 
+	if rp := sessionRemoteParams(args); rp != nil {
+		session.SSH = rp
+		session.DiagTier = args.Flags["remote-diag"]
+	}
+
 	title := "HTTP log analysis"
 	if h := args.Flags["host"]; h != "" {
 		title = "HTTP log analysis — " + h
 	}
 
+	srcIdx := map[string]int{}
 	spec := analyzer.Spec{
 		Sources:       analyzer.SourcesFromArgs(args),
 		Stdin:         args.Stdin,
@@ -70,6 +85,24 @@ func analyze(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) {
 		Redactor:      args.Redactor,
 		Progress:      args.Stderr,
 		Parse:         parseHTTP,
+		OnChunk: func(source string, data []byte) {
+			idx, ok := srcIdx[source]
+			if !ok {
+				d := investigate.SourceDesc{Path: source}
+				if remoteHost != "" {
+					d = investigate.SourceDesc{Host: remoteHost, Channel: args.Flags["log-path"]}
+				}
+				idx = session.AddSource(d)
+				srcIdx[source] = idx
+			}
+			session.Append(parseEvents(idx, data)...)
+		},
 	}
-	return analyzer.Analyze(ctx, spec)
+	rep, err := analyzer.Analyze(ctx, spec)
+	if err != nil {
+		return plugin.Report{}, err
+	}
+	session.Stats = buildStats(session)
+	p.setSession(session)
+	return rep, nil
 }

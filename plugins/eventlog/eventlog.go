@@ -11,8 +11,10 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 
 	"github.com/exalm-ai/exalm/internal/analyzer"
+	"github.com/exalm-ai/exalm/internal/investigate"
 	exassh "github.com/exalm-ai/exalm/internal/ssh"
 	"github.com/exalm-ai/exalm/pkg/plugin"
 )
@@ -21,7 +23,10 @@ import (
 // form are verbose; 512 KB is roughly 1k–2k events.
 const MaxInputBytes = 512 * 1024
 
-type Plugin struct{}
+type Plugin struct {
+	mu          sync.Mutex
+	lastSession *investigate.LogSession
+}
 
 func New() *Plugin { return &Plugin{} }
 
@@ -38,15 +43,17 @@ func (p *Plugin) Subcommands() []plugin.Subcommand {
 		{
 			Name:        "summarize",
 			Description: "Summarize Windows Event Log JSON and highlight critical events",
-			Run:         summarize,
+			Run:         p.summarize,
 		},
 	}
 }
 
-func summarize(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) {
+func (p *Plugin) summarize(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) {
 	if err := rejectEvtxBinary(args); err != nil {
 		return plugin.Report{}, err
 	}
+
+	session := investigate.NewLogSession("eventlog")
 
 	// Phase 2: SSH remote collection.
 	// Connect to a Windows host via SSH (requires OpenSSH for Windows on the target)
@@ -55,10 +62,12 @@ func summarize(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) 
 	if logName == "" {
 		logName = "Security"
 	}
+	remoteHost := ""
 	if rem, err := exassh.CollectIfNeeded(ctx, args,
 		exassh.EventLogCmd(logName, exassh.LogLinesFromArgs(args, 1000))); err != nil {
 		return plugin.Report{}, err
 	} else if rem != nil {
+		remoteHost = rem.Host
 		args.Stdin = rem.Reader
 		args.FlagsMulti = map[string][]string{} // clear --file; use stdin only
 		if args.Flags == nil {
@@ -67,11 +76,17 @@ func summarize(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) 
 		args.Flags["file"] = "" // suppress SourcesFromArgs
 	}
 
+	if rp := sessionRemoteParams(args, logName); rp != nil {
+		session.SSH = rp
+		session.DiagTier = args.Flags["remote-diag"]
+	}
+
 	title := "Windows Event Log analysis"
 	if h := args.Flags["host"]; h != "" {
 		title = "Windows Event Log analysis — " + h
 	}
 
+	srcIdx := map[string]int{}
 	spec := analyzer.Spec{
 		Sources:       analyzer.SourcesFromArgs(args),
 		Stdin:         args.Stdin,
@@ -85,8 +100,26 @@ func summarize(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) 
 		Redactor:      args.Redactor,
 		Progress:      args.Stderr,
 		Parse:         parseEvents,
+		OnChunk: func(source string, data []byte) {
+			idx, ok := srcIdx[source]
+			if !ok {
+				d := investigate.SourceDesc{Path: source}
+				if remoteHost != "" {
+					d = investigate.SourceDesc{Host: remoteHost, Channel: logName}
+				}
+				idx = session.AddSource(d)
+				srcIdx[source] = idx
+			}
+			session.Append(parseSessionEvents(idx, data)...)
+		},
 	}
-	return analyzer.Analyze(ctx, spec)
+	rep, err := analyzer.Analyze(ctx, spec)
+	if err != nil {
+		return plugin.Report{}, err
+	}
+	session.Stats = buildStats(session)
+	p.setSession(session)
+	return rep, nil
 }
 
 // rejectEvtxBinary returns a friendly error if the user pointed at a .evtx file.

@@ -15,7 +15,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 
+	"github.com/exalm-ai/exalm/internal/investigate"
 	"github.com/exalm-ai/exalm/pkg/plugin"
 )
 
@@ -25,7 +27,10 @@ import (
 const MaxInputBytes = 200 * 1024
 
 // Plugin implements plugin.Plugin for the logs domain.
-type Plugin struct{}
+type Plugin struct {
+	mu          sync.Mutex
+	lastSession *investigate.LogSession
+}
 
 // New returns a new logs plugin.
 func New() *Plugin { return &Plugin{} }
@@ -47,13 +52,13 @@ func (p *Plugin) Subcommands() []plugin.Subcommand {
 		{
 			Name:        "summarize",
 			Description: "Summarize logs from stdin or --file and return likely causes",
-			Run:         summarize,
+			Run:         p.summarize,
 		},
 	}
 }
 
 // summarize is the runner for `exalm logs summarize`.
-func summarize(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) {
+func (p *Plugin) summarize(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) {
 	raw, err := readInput(args)
 	if err != nil {
 		return plugin.Report{}, err
@@ -61,6 +66,17 @@ func summarize(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) 
 	if len(raw) == 0 {
 		return plugin.Report{}, errors.New("no input: pipe a log file to stdin or pass --file <path>")
 	}
+
+	// Build the investigation session from the same buffer, independent of
+	// the LLM call. It is published only after the analysis succeeds.
+	session := investigate.NewLogSession("logs")
+	srcPath := args.Flags["file"]
+	if srcPath == "" {
+		srcPath = "<stdin>"
+	}
+	idx := session.AddSource(investigate.SourceDesc{Path: srcPath})
+	session.Append(parseEvents(idx, raw)...)
+	session.Stats = buildStats(session)
 
 	// CRITICAL: redact before any data leaves the process.
 	redacted := args.Redactor.Redact(string(raw))
@@ -78,6 +94,8 @@ func summarize(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) 
 	if err != nil {
 		return plugin.Report{}, fmt.Errorf("llm: %w", err)
 	}
+
+	p.setSession(session)
 
 	return plugin.Report{
 		Title:   "Log analysis",
