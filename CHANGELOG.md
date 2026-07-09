@@ -9,6 +9,31 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Generic Investigation Framework** (`internal/investigate`) — the AI Operations Copilot
+  extracted from the Kubernetes plugin into a reusable engine: deterministic per-turn
+  investigation plans (symptom catalog + question intents), collectors with a
+  per-conversation evidence cache, E1..En evidence citations, ranked root-cause hypotheses,
+  numeric evidence-quality confidence, tiered remediation (mitigation / root-cause fix /
+  prevention), timelines, follow-up suggestions, and persisted conversation memory — with
+  exactly one redacted LLM call per turn. Kubernetes is now the reference Profile.
+- **Conversational investigation for all log analyzers** — `syslog`, `httplog`, `eventlog`,
+  `iis`, and `logs` gained investigation Profiles over an in-memory parsed corpus
+  (`LogSession`), the same two-pane chat + investigation-tree UI as Kubernetes, and a
+  `--open` flag that launches the dashboard after an analysis.
+- **Per-analyzer dashboards** — severity/request timelines, top units/URLs/clients/event IDs,
+  auth-failure/OOM/reboot/slow-request signals per analyzer; **every chart element drills
+  down** to the matching log lines (`GET /api/analyzer/logs`), each with the ✦ Analyze-line
+  action.
+- **Tiered remote diagnostics** (`internal/ssh/diagnostics.go`) — a fixed read-only allowlist
+  of SSH diagnostics (disk, memory, uptime, services, journal, kernel ring, IIS app pools;
+  opt-in `full` tier adds auth logs, login history, firewall state, certificate expiry,
+  scheduled tasks) gated by `EXALM_REMOTE_DIAG` / `--remote-diag`; parameters are
+  strictly validated and commands are never user- or LLM-supplied.
+- **Investigation report export** — `GET /api/chat/{id}/export` now also produces a
+  standalone styled HTML report (`format=html`) with an executive summary; the Markdown
+  export gained the same executive summary; PDF via the browser's print dialog.
+
 ---
 
 ## [0.7.0] — Phase 7: Publication Prep · v0.1.0-beta

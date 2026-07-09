@@ -174,6 +174,47 @@ exalm iis analyze --host iis-01 --log-dir 'C:\inetpub\logs\LogFiles\W3SVC1'
 stores the key fingerprint at `~/.exalm/known_hosts`. Subsequent connections verify it.
 A fingerprint mismatch stops the connection before any data is exchanged.
 
+**Remote diagnostics:** during an AI investigation (see below), exalm can run a small,
+fixed set of read-only commands on the remote host — disk/memory/uptime, service status,
+journal/event log excerpts, and similar — to answer questions like "is memory the real
+problem?" without another SSH round trip from you. Every command comes from a reviewed
+allowlist in `internal/ssh/diagnostics.go`; the LLM never chooses or writes a command.
+
+| Tier | Unlocks |
+|---|---|
+| `off` | No remote commands — investigation reasons over the collected logs only |
+| `readonly` (default) | Disk/memory/uptime, service status, journal/event excerpts, IIS app pools |
+| `full` | Also: auth logs, login history, firewall state, certificate expiry, scheduled tasks |
+
+Set with `--remote-diag off\|readonly\|full` per run, or `EXALM_REMOTE_DIAG` globally.
+
+---
+
+## AI investigation
+
+Every analyzer — Kubernetes, `syslog`, `httplog`, `eventlog`, `iis`, and `logs` — shares
+one investigation experience: ask a question in plain language and get evidence-backed
+root cause analysis, a numeric confidence score with its rationale, a chronological
+timeline, tiered remediation (immediate mitigation → root-cause fix → prevention), and
+automatic follow-up questions — all persisted so the conversation continues across
+reloads.
+
+```sh
+# Analyze, then open the AI investigation dashboard
+exalm syslog analyze --host db-01 --open
+exalm httplog analyze --file /var/log/nginx/access.log --open
+exalm k8s analyze --open
+```
+
+Ask things like "why is this failing?", "what changed recently?", "is memory the real
+problem?", or "generate an RCA" — every answer cites the exact evidence it used (click to
+expand), and every chart on the dashboard drills down into the matching raw log lines.
+Export the investigation as Markdown, JSON, or a standalone HTML report (PDF via your
+browser's print dialog).
+
+One redacted LLM call happens per turn; the assistant never picks which diagnostics run —
+that's always the deterministic planner above.
+
 ---
 
 ## Web dashboard
@@ -186,6 +227,7 @@ exalm k8s analyze && exalm serve --token $EXALM_TOKEN
 Open `http://localhost:7433`. The dashboard includes:
 
 - **Findings view** — severity-filtered findings with remediation steps
+- **AI investigation** — conversational root cause analysis (see above), on every analyzer
 - **DORA dashboard** — four-key metrics with deployment history
 - **Cross-signal timeline** — k8s findings, IaC changes, and incidents on a shared time axis
 - **`/metrics`** — Prometheus endpoint
@@ -331,6 +373,7 @@ receive the highest priority response.
 | `EXALM_OUTPUT` | Output format: `markdown` or `json` | `markdown` |
 | `EXALM_TOKEN` | Dashboard and MCP server bearer token | — |
 | `EXALM_SSH_PASSWORD` | SSH password authentication | — |
+| `EXALM_REMOTE_DIAG` | Remote diagnostics tier: `off` / `readonly` / `full` (see [SSH remote log collection](#ssh-remote-log-collection)) | `readonly` |
 
 Full reference: [docs/configuration.md](docs/configuration.md)
 

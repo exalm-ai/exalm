@@ -23,6 +23,7 @@ Exalm resolves configuration in the following order (highest precedence first):
 | `EXALM_PROMETHEUS_URL` | no | — | Prometheus base URL for SLO error-budget data |
 | `GITHUB_TOKEN` | for PR creation | — | Git provider token (also `--github-token`) |
 | `GITHUB_REPO` | for PR creation | — | Repo for fix PRs: `owner/repo` (also `--github-repo`) |
+| `EXALM_REMOTE_DIAG` | no | `readonly` | Remote diagnostics tier during AI investigations: `off`, `readonly`, `full` (also `--remote-diag`) |
 
 ---
 
@@ -58,6 +59,25 @@ These flags are available on every subcommand.
 | `--github-repo` | — | Repo for fix PRs: `owner/repo` (or `GITHUB_REPO`) |
 | `--github-base-branch` | `main` | Base branch for fix PRs |
 | `--git-provider` | `github` | Git hosting provider: `github`, `gitlab`, `bitbucket`, `azuredevops` |
+
+---
+
+## Log analyzer investigation flags
+
+`syslog analyze`, `httplog analyze`, `eventlog summarize`, `iis analyze`, and
+`logs summarize` share these flags, in addition to the SSH remote-collection flags
+documented in the [README](../README.md#ssh-remote-log-collection).
+
+| Flag | Default | Description |
+|---|---|---|
+| `--open` | `false` | Open the AI investigation dashboard after the analysis |
+| `--remote-diag` | `readonly` (or `EXALM_REMOTE_DIAG`) | Remote diagnostics tier during the investigation: `off`, `readonly`, `full` |
+
+`readonly` allows disk/memory/uptime, service status, and journal/event-log excerpts;
+`full` additionally allows auth logs, login history, firewall state, certificate expiry,
+and scheduled tasks. Every command comes from the fixed allowlist in
+`internal/ssh/diagnostics.go` — the LLM never chooses or writes a command, and `off`
+disables remote commands entirely.
 
 ---
 

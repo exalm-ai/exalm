@@ -178,6 +178,45 @@ construct either. This is the architectural guarantee that all LLM calls pass th
 
 ---
 
+## Investigation framework
+
+`internal/investigate` is the generic AI investigation engine shared by every analyzer
+(Kubernetes is the reference implementation; syslog, httplog, eventlog, iis, and logs plug in
+the same way). Each conversation turn runs one deterministic pipeline:
+
+```
+focus resolution → intent classification (regex) → symptom-driven plan
+→ collector execution (per-conversation cache, E1..En citation labels)
+→ hypothesis ranking → evidence-quality confidence → prevention
+→ ONE redacted LLM call → persisted transcript (convo store)
+```
+
+A domain supplies a `Profile`: its symptom catalog (what an experienced operator checks first
+per failure mode, with candidate causes), resource-graph edges, question-intent patterns,
+collectors, confidence rules, prevention catalog, cache TTLs, and prompt wording (built from
+shared skeletons that keep the citation/redaction/RCA discipline identical everywhere). The
+engine owns everything else. Adding a future analyzer (AWS, PostgreSQL, Docker, …) means
+writing a Profile — no engine, web, or UI code.
+
+**Trust model, enforced in the engine:** exactly one redacted `llm.Complete()` per turn; the
+LLM never chooses collectors or commands (plans come solely from the symptom/intent tables);
+every message passes the Redactor before the call; secrets are never collected (metadata only);
+the no-LLM fallback renders the same sectioned, cited answer deterministically.
+
+Log analyzers additionally build a bounded in-memory `LogSession` during analysis (parsed,
+normalized events — never persisted) that feeds the corpus collectors ("what happened
+before?"), the per-analyzer dashboard stats, and the chart-to-log drilldown.
+
+**Remote diagnostics** (`internal/ssh/diagnostics.go`) are the only path from an investigation
+to remote command execution: a fixed, reviewed, read-only allowlist keyed by collector name,
+tier-gated (`off` / `readonly` default / `full` opt-in via `EXALM_REMOTE_DIAG` or
+`--remote-diag`), with the single parameterized slot validated against a strict character
+class — refused, never sanitized. The `full` tier unlocks security-sensitive *reads* (auth
+logs, login history, firewall state, certificate expiry, scheduled tasks); no tier can read
+credential material.
+
+---
+
 ## SSH client
 
 `internal/ssh` provides the SSH transport for all remote log plugins.
