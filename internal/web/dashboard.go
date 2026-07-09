@@ -155,6 +155,12 @@ type dashboardPayload struct {
 	Pods        int  `json:"pods"`
 	Unhealthy   int  `json:"unhealthy"`
 	AutoRefresh bool `json:"autoRefresh"`
+
+	// Analyzer + Stats drive the per-analyzer dashboards (syslog, httplog,
+	// eventlog, iis, logs). Empty/nil for the k8s dashboard — the payload
+	// stays byte-compatible for existing consumers.
+	Analyzer string `json:"analyzer,omitempty"`
+	Stats    any    `json:"stats,omitempty"`
 }
 
 // groupOf folds the many internal categories into the six display groups the

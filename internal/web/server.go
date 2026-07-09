@@ -106,6 +106,17 @@ type ServeOpts struct {
 	// /api/logs/analyze returns 503.
 	AnalyzeLogLine func(ctx context.Context, req LogAnalyzeRequest) (string, error)
 
+	// Analyzer names the log analyzer serving this dashboard ("syslog",
+	// "httplog", "eventlog", "iis", "logs"). Empty for the k8s dashboard —
+	// the payload stays byte-compatible for existing consumers.
+	Analyzer string
+	// AnalyzerStats, when non-nil, returns the analyzer-typed stats payload
+	// driving the per-analyzer dashboard panels.
+	AnalyzerStats func() any
+	// LogQuery, when non-nil, serves the chart-to-log drilldown over the
+	// analyzer session's parsed corpus. Nil => GET /api/analyzer/logs 503s.
+	LogQuery func(ctx context.Context, req LogQueryRequest) (LogQueryResponse, error)
+
 	// Metrics, when non-nil, supplies metric series for chart tooltips and
 	// drill-down. Nil => /api/metrics returns an empty series set.
 	Metrics metrics.Provider
@@ -251,6 +262,9 @@ type liveServer struct {
 	converseFn      func(ctx context.Context, req ConverseRequest) (*plugin.Conversation, error)
 	getConvoFn      func(ctx context.Context, id string) (*plugin.Conversation, error)
 	logAnalyzeFn    func(ctx context.Context, req LogAnalyzeRequest) (string, error)
+	analyzer        string
+	analyzerStatsFn func() any
+	logQueryFn      func(ctx context.Context, req LogQueryRequest) (LogQueryResponse, error)
 	metrics         metrics.Provider
 	provider        string
 	autoRefresh     bool // true when a live refresh source (ReportUpdates or RefreshFindings) is wired
@@ -325,6 +339,9 @@ func Serve(ctx context.Context, report plugin.Report, opts ServeOpts) error {
 		converseFn:      opts.Converse,
 		getConvoFn:      opts.GetConversation,
 		logAnalyzeFn:    opts.AnalyzeLogLine,
+		analyzer:        opts.Analyzer,
+		analyzerStatsFn: opts.AnalyzerStats,
+		logQueryFn:      opts.LogQuery,
 		metrics:         opts.Metrics,
 		provider:        opts.Provider,
 		autoRefresh:     opts.ReportUpdates != nil || opts.RefreshFindings != nil,
@@ -344,6 +361,8 @@ func Serve(ctx context.Context, report plugin.Report, opts ServeOpts) error {
 	mux.HandleFunc("/api/findings/", srv.handleFinding)
 	mux.HandleFunc("/api/logs", srv.handleLogs)
 	mux.HandleFunc("/api/logs/analyze", srv.handleLogAnalyze)
+	mux.HandleFunc("/api/analyzer/stats", srv.handleAnalyzerStats)
+	mux.HandleFunc("/api/analyzer/logs", srv.handleAnalyzerLogs)
 	mux.HandleFunc("/api/metrics", srv.handleMetricsJSON)
 	mux.HandleFunc("/api/chat", srv.handleChat)
 	mux.HandleFunc("/api/chat/", srv.handleGetConversation)
@@ -556,9 +575,19 @@ func (s *liveServer) podInfo() *PodInfo {
 	return &pi
 }
 
+// attachAnalyzer stamps the analyzer name + stats onto the payload (no-op
+// for the k8s dashboard, keeping its payload byte-compatible).
+func (s *liveServer) attachAnalyzer(p *dashboardPayload) {
+	p.Analyzer = s.analyzer
+	if s.analyzerStatsFn != nil {
+		p.Stats = s.analyzerStatsFn()
+	}
+}
+
 func (s *liveServer) handleDashboard(w http.ResponseWriter, _ *http.Request) {
 	report := s.getReport()
 	payload := buildDashboard(report, s.podInfo(), s.provider, s.autoRefresh)
+	s.attachAnalyzer(&payload)
 	blob, err := json.Marshal(payload)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -582,6 +611,7 @@ func (s *liveServer) handleDashboard(w http.ResponseWriter, _ *http.Request) {
 func (s *liveServer) handleDashboardJSON(w http.ResponseWriter, _ *http.Request) {
 	report := s.getReport()
 	payload := buildDashboard(report, s.podInfo(), s.provider, s.autoRefresh)
+	s.attachAnalyzer(&payload)
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(payload); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -868,8 +898,12 @@ func (s *liveServer) handleGetConversation(w http.ResponseWriter, r *http.Reques
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		enc.Encode(mapConversation(conv)) //nolint:errcheck
+	case "html":
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Content-Disposition", `attachment; filename="investigation-`+id+`.html"`)
+		fmt.Fprint(w, conversationHTML(conv, s.analyzer)) //nolint:errcheck
 	default:
-		http.Error(w, "unsupported format (use md or json)", http.StatusBadRequest)
+		http.Error(w, "unsupported format (use md, json, or html)", http.StatusBadRequest)
 	}
 }
 

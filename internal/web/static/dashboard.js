@@ -479,6 +479,26 @@
       table + '</div>';
   }
 
+  // ── Page: Analyzer dashboard (syslog/httplog/eventlog/iis/logs) ──
+  // Rendered when the payload carries data.analyzer; the k8s dashboard page
+  // is untouched. Panels + drilldown live in analyzer.js (AnalyzerDash).
+  function pageAnalyzer(v) {
+    var header = '<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">' +
+      '<span style="width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#7b5bff,var(--accent));display:flex;align-items:center;justify-content:center;color:#fff;">' + icon('dashboard') + '</span>' +
+      '<div style="flex:1;"><div style="font-size:14px;font-weight:700;">' + esc((data.analyzer || '').toUpperCase()) + ' analysis</div>' +
+      '<div style="font-size:12px;color:var(--muted);">' + v.totalFindings + ' findings · click any chart to open the matching log lines</div></div></div>';
+    return header + '<div id="analyzer-dash-root"></div>';
+  }
+
+  // fillAnalyzerDash paints the analyzer panels after every re-render.
+  function fillAnalyzerDash() {
+    if (!data.analyzer || !window.AnalyzerDash) return;
+    var root = document.getElementById('analyzer-dash-root');
+    if (!root) return;
+    root.innerHTML = window.AnalyzerDash.render(data);
+    window.AnalyzerDash.attach();
+  }
+
   // ── Page: AI Analysis — two-pane investigation workspace ──
   // Left: the cumulative investigation tree (tree.js). Right: the chat.
   function pageAI(v) {
@@ -543,7 +563,7 @@
       case 'ai': shell += pageAI(v); break;
       case 'alerts': shell += pageAlerts(v); break;
       case 'settings': shell += pageSettings(v); break;
-      default: shell += pageDashboard(v);
+      default: shell += data.analyzer ? pageAnalyzer(v) : pageDashboard(v);
     }
     shell += '</main>' +
       '<footer style="display:flex;align-items:center;gap:8px;padding:10px 22px;border-top:1px solid var(--border);color:var(--faint);font-size:11.5px;"><span>exalm.com</span><span style="flex:1;"></span>' +
@@ -561,6 +581,7 @@
     }
     if (window.ExalmCharts && window.ExalmCharts.attach) window.ExalmCharts.attach();
     if (window.ExalmChat && window.ExalmChat.attach) window.ExalmChat.attach();
+    fillAnalyzerDash();
   }
 
   function fixBtn(f, isFixed, isFixing, large) {

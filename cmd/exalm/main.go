@@ -521,11 +521,13 @@ func runSubcommand(ctx context.Context, p plugin.Plugin, sc plugin.Subcommand, f
 
 	// k8s analyze/watch: open the web dashboard only when stdout is an
 	// interactive terminal. In CI / pipes / automated runs (no TTY), fall
-	// through to plain markdown output and exit cleanly.
+	// through to plain markdown output and exit cleanly. Log analyzers open
+	// the same dashboard when the user asks with --open.
 	stdoutStat, _ := os.Stdout.Stat()
-	openWeb := p.Name() == "k8s" && (sc.Name == "analyze" || sc.Name == "watch") &&
-		cfg.OutputFormat == "markdown" &&
-		stdoutStat != nil && (stdoutStat.Mode()&os.ModeCharDevice) != 0
+	isTTY := stdoutStat != nil && (stdoutStat.Mode()&os.ModeCharDevice) != 0
+	openWeb := cfg.OutputFormat == "markdown" && isTTY &&
+		((p.Name() == "k8s" && (sc.Name == "analyze" || sc.Name == "watch")) ||
+			pluginFlags["open"] == "true")
 
 	switch {
 	case cfg.OutputFormat == "json":
@@ -622,6 +624,17 @@ func runSubcommand(ctx context.Context, p plugin.Plugin, sc plugin.Subcommand, f
 					Severity: req.Severity, Source: req.Source, Labels: req.Labels,
 					Message: req.Message, Context: req.Context,
 				}, trackedLLM, redactor)
+			}
+		} else if inv, ok := p.(investigable); ok {
+			// Log analyzers (syslog, httplog, eventlog, iis, logs): the same
+			// conversational copilot over the analysis session's parsed
+			// corpus + the per-analyzer dashboard and drilldown.
+			wired, err := applyAnalyzerServeOpts(&serveOpts, inv, trackedLLM, redactor)
+			if err != nil {
+				return fmt.Errorf("investigation profile: %w", err)
+			}
+			if !wired {
+				fmt.Fprintln(os.Stderr, "note: no analysis session available — the dashboard will be static") //nolint:errcheck
 			}
 		}
 
