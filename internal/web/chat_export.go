@@ -29,6 +29,22 @@ func conversationMarkdown(c *plugin.Conversation) string {
 		fmt.Fprintf(&b, "**Started:** %s · **Last updated:** %s  \n",
 			c.CreatedAt.UTC().Format("2006-01-02 15:04 UTC"), c.UpdatedAt.UTC().Format("2006-01-02 15:04 UTC"))
 	}
+
+	// Executive summary — the latest conclusions, before the full technical
+	// transcript.
+	if last := lastAssistantMsg(c); last != nil {
+		b.WriteString("\n## Executive summary\n\n")
+		if len(last.Hypotheses) > 0 {
+			fmt.Fprintf(&b, "- **Root cause (most likely):** %s\n", last.Hypotheses[0].Title)
+		}
+		if last.Score > 0 {
+			fmt.Fprintf(&b, "- **Confidence:** %d%% — %s\n", last.Score, last.ScoreRationale)
+		}
+		if c.Fingerprint != "" {
+			fmt.Fprintf(&b, "- **Symptom:** `%s`\n", strings.SplitN(c.Fingerprint, "\x1f", 2)[0])
+		}
+		fmt.Fprintf(&b, "- **Investigation turns:** %d\n", len(c.Messages)/2)
+	}
 	b.WriteString("\n---\n")
 
 	for _, m := range c.Messages {

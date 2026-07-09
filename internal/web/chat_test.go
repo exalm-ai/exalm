@@ -270,3 +270,61 @@ func TestHandleLogAnalyze(t *testing.T) {
 		t.Errorf("full gate should 429, got %d", rr.Code)
 	}
 }
+
+func TestHandleGetConversation_ExportHTMLAndEscaping(t *testing.T) {
+	srv := exportTestServer(t)
+	srv.analyzer = "syslog"
+	srv.getConvoFn = func(_ context.Context, id string) (*plugin.Conversation, error) {
+		conv := sampleConv(id)
+		conv.Focus = "web-01/nginx.service"
+		conv.Fingerprint = "oom-kill\x1fweb-01/nginx.service"
+		conv.Messages[1].Score = 85
+		conv.Messages[1].ScoreRationale = "kernel OOM line"
+		conv.Messages[1].Hypotheses = []plugin.Hypothesis{{Title: "Memory exhaustion", Score: 85}}
+		// Hostile content must come out escaped, never as markup.
+		conv.Messages[1].Evidence = []plugin.EvidenceItem{{
+			Kind: "log", Source: "nginx", Label: "E1",
+			Excerpt: `<script>alert("xss")</script> & <img src=x>`,
+		}}
+		return conv, nil
+	}
+
+	rr := httptest.NewRecorder()
+	srv.handleGetConversation(rr, httptest.NewRequest(http.MethodGet, "/api/chat/c1/export?format=html", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if ct := rr.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Errorf("Content-Type: %q", ct)
+	}
+	body := rr.Body.String()
+	for _, want := range []string{"<h1>", "Executive summary", "Memory exhaustion", "85%", "oom-kill", "syslog", "@media print"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("html export missing %q", want)
+		}
+	}
+	if strings.Contains(body, `<script>alert`) {
+		t.Fatal("HOSTILE CONTENT EMITTED UNESCAPED")
+	}
+	if !strings.Contains(body, "&lt;script&gt;") {
+		t.Error("expected the hostile excerpt to be escaped into the document")
+	}
+}
+
+func TestConversationMarkdown_ExecutiveSummary(t *testing.T) {
+	conv := sampleConv("c9")
+	conv.Fingerprint = "oom-kill\x1fweb-01/nginx"
+	conv.Messages[1].Score = 85
+	conv.Messages[1].ScoreRationale = "kernel OOM line"
+	conv.Messages[1].Hypotheses = []plugin.Hypothesis{{Title: "Memory exhaustion", Score: 85}}
+	md := conversationMarkdown(conv)
+	for _, want := range []string{"## Executive summary", "Memory exhaustion", "85%", "`oom-kill`", "Investigation turns:** 1"} {
+		if !strings.Contains(md, want) {
+			t.Errorf("markdown exec summary missing %q", want)
+		}
+	}
+	// Existing structure preserved below the summary.
+	if !strings.Contains(md, "## Question") || !strings.Contains(md, "## Answer") {
+		t.Error("technical transcript sections missing")
+	}
+}

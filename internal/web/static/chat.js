@@ -256,6 +256,7 @@
     var btn = 'border:1px solid var(--border);background:var(--panel2);color:var(--muted);border-radius:7px;cursor:pointer;font-size:10.5px;padding:3px 10px;text-decoration:none;display:inline-block;';
     return '<div class="ex-chat-toolbar" style="display:flex;gap:6px;justify-content:flex-end;margin-bottom:6px;">' +
       '<a href="/api/chat/' + encodeURIComponent(session.id) + '/export?format=md" style="' + btn + '">⬇ Markdown</a>' +
+      '<a href="/api/chat/' + encodeURIComponent(session.id) + '/export?format=html" style="' + btn + '">⬇ HTML report</a>' +
       '<a href="/api/chat/' + encodeURIComponent(session.id) + '/export?format=json" style="' + btn + '">⬇ JSON</a>' +
       '<button class="ex-chat-print" style="' + btn + '">🖨 Print / PDF</button></div>';
   }
