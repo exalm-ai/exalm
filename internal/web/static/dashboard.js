@@ -532,8 +532,80 @@
     return head + cards;
   }
 
-  // ── Page: Settings (read-only) ──
+  // ── Page: Settings ──
+  // Appearance + environment stay local; the Dashboards card is persisted
+  // server-side via GET/PUT /api/settings (absent => read-only fallback).
+  var serverSettings = null;   // last fetched /api/settings document, or null
+  var settingsAvail = null;    // null=unknown, true/false after first fetch
+
+  function toggleBtn(on, act, id) {
+    return '<button data-act="' + act + '"' + (id ? ' data-id="' + esc(id) + '"' : '') +
+      ' style="position:relative;width:38px;height:21px;border-radius:11px;border:1px solid var(--border);cursor:pointer;transition:background .15s;background:' + (on ? 'var(--accent)' : 'var(--track)') + ';">' +
+      '<span style="position:absolute;top:1.5px;left:' + (on ? '18px' : '2px') + ';width:16px;height:16px;border-radius:50%;background:#fff;transition:left .15s;"></span></button>';
+  }
+
+  function settingsDashRows() {
+    if (settingsAvail === false) {
+      return '<div style="font-size:12px;color:var(--faint);padding:8px 0;">Dashboard settings are not available on this server — start the hub with <code>exalm serve</code>.</div>';
+    }
+    if (!serverSettings) return '<div style="font-size:12px;color:var(--faint);padding:8px 0;">Loading…</div>';
+    var dashes = data.dashboards || [];
+    var s = serverSettings;
+    var html = '<div style="display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid var(--border);">' +
+      '<span style="font-size:12.5px;font-weight:600;">Enable all dashboards</span>' + toggleBtn(!!s.dashboards.enableAll, 'set-enable-all') + '</div>';
+    if (!dashes.length) {
+      html += '<div style="font-size:12px;color:var(--faint);padding:8px 0;">No registered dashboards to configure on this server.</div>';
+    } else {
+      var enabledCount = dashes.filter(function (d) { return dashEnabled(d.id); }).length;
+      html += dashes.map(function (d) {
+        var on = dashEnabled(d.id);
+        var lastOn = on && enabledCount <= 1;
+        return '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);' + (s.dashboards.enableAll ? 'opacity:.5;' : '') + '">' +
+          '<div><div style="font-size:12.5px;font-weight:600;">' + esc(d.name) + '</div>' +
+          (d.description ? '<div style="font-size:11px;color:var(--faint);">' + esc(d.description) + '</div>' : '') + '</div>' +
+          (s.dashboards.enableAll || lastOn ? toggleBtn(on, 'noop') : toggleBtn(on, 'set-dash', d.id)) + '</div>';
+      }).join('');
+    }
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:11px 0;">' +
+      '<div><div style="font-size:12.5px;font-weight:600;">AI features</div><div style="font-size:11px;color:var(--faint);">Chat, investigations, and ✦ analyze actions on every dashboard</div></div>' +
+      toggleBtn(!!s.supportsAI, 'set-ai') + '</div>';
+    return html;
+  }
+
+  function dashEnabled(id) {
+    var s = serverSettings;
+    if (!s || s.dashboards.enableAll) return true;
+    var m = s.dashboards.enabled || {};
+    return m[id] !== false;
+  }
+
+  function loadServerSettings() {
+    fetch('/api/settings').then(function (r) {
+      if (r.status === 503) { settingsAvail = false; throw new Error('unavailable'); }
+      if (!r.ok) throw new Error('http ' + r.status);
+      return r.json();
+    }).then(function (json) {
+      settingsAvail = true; serverSettings = json;
+      if (state.page === 'settings') render();
+    }).catch(function () {
+      if (settingsAvail === null) settingsAvail = false;
+      if (state.page === 'settings') render();
+    });
+  }
+
+  function putServerSettings(next) {
+    serverSettings = next; render(); // optimistic
+    fetch('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Exalm-Request': 'true' },
+      body: JSON.stringify(next)
+    }).then(function (r) { if (r.ok) return r.json(); throw new Error('http ' + r.status); })
+      .then(function (json) { serverSettings = json; if (state.page === 'settings') render(); })
+      .catch(function () { loadServerSettings(); });
+  }
+
   function pageSettings(v) {
+    if (settingsAvail === null) loadServerSettings();
     function row(label, val) { return '<div style="display:flex;justify-content:space-between;padding:11px 0;border-bottom:1px solid var(--border);"><span style="color:var(--muted);font-size:12.5px;">' + esc(label) + '</span><span style="font-weight:600;font-size:12.5px;">' + val + '</span></div>'; }
     return '<div style="max-width:560px;">' +
       card(cardLabel('Appearance') +
@@ -541,12 +613,13 @@
         '<button data-act="theme" style="display:flex;align-items:center;gap:7px;height:32px;padding:0 13px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--fg);font-size:12.5px;font-weight:500;cursor:pointer;">' + (state.theme === 'dark' ? '☀ Light' : '☾ Dark') + '</button></div>' +
         row('Auto-refresh', data.autoRefresh ? '<span style="color:var(--good)">every 30s</span>' : 'static snapshot'), '18px 20px') +
       '<div style="height:14px;"></div>' +
+      card(cardLabel('Dashboards') + settingsDashRows(), '18px 20px') +
+      '<div style="height:14px;"></div>' +
       card(cardLabel('Environment') +
         row('LLM provider', esc(data.provider || 'llm')) +
         row('Namespaces', v.NS.length) +
         row('Pods (cluster)', fmt(data.pods || 0)) +
         row('Findings', v.totalFindings), '18px 20px') +
-      '<div style="margin-top:12px;font-size:11.5px;color:var(--faint);">Settings are read-only here — configure Exalm via CLI flags / environment variables.</div>' +
       '</div>';
   }
 
@@ -622,6 +695,10 @@
       case 'ns-toggle': state.nsMenuOpen = !state.nsMenuOpen; render(); break;
       case 'ns-select': state.selectedNs = el.getAttribute('data-ns'); state.nsMenuOpen = false; render(); break;
       case 'theme': state.theme = state.theme === 'dark' ? 'light' : 'dark'; try { localStorage.setItem(THEME_KEY, state.theme); } catch (x) {} applyTheme(); render(); break;
+      case 'set-enable-all': if (serverSettings) { var sA = JSON.parse(JSON.stringify(serverSettings)); sA.dashboards.enableAll = !sA.dashboards.enableAll; putServerSettings(sA); } break;
+      case 'set-dash': if (serverSettings) { var sD = JSON.parse(JSON.stringify(serverSettings)); sD.dashboards.enabled = sD.dashboards.enabled || {}; var did = el.getAttribute('data-id'); sD.dashboards.enabled[did] = !dashEnabled(did); putServerSettings(sD); } break;
+      case 'set-ai': if (serverSettings) { var sI = JSON.parse(JSON.stringify(serverSettings)); sI.supportsAI = !sI.supportsAI; putServerSettings(sI); } break;
+      case 'noop': break;
       case 'fixall': fixAll(); break;
       case 'freqscope': state.freqScope = el.getAttribute('data-v'); render(); break;
       case 'reanalyze': refresh(); break;

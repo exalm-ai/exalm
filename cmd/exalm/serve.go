@@ -27,6 +27,7 @@ import (
 	"github.com/exalm-ai/exalm/internal/llm"
 	"github.com/exalm-ai/exalm/internal/preflight"
 	"github.com/exalm-ai/exalm/internal/redact"
+	"github.com/exalm-ai/exalm/internal/settings"
 	"github.com/exalm-ai/exalm/internal/web"
 	"github.com/exalm-ai/exalm/pkg/plugin"
 	k8splugin "github.com/exalm-ai/exalm/plugins/k8s"
@@ -150,6 +151,7 @@ func runServe(ctx context.Context, root *rootFlags, f *serveCLIFlags) error {
 			OpenBrowser: f.openBrowser,
 			Token:       dashToken,
 			CreatePR:    buildCreatePRFn(f),
+			Settings:    settings.NewStore(),
 		}
 		fmt.Fprintf(os.Stderr, "exalm serve: --no-k8s mode — dashboard starting on http://localhost:%d\n", f.port) //nolint:errcheck // startup info to stderr
 		return web.Serve(ctx, plugin.Report{}, noK8sOpts)
@@ -233,6 +235,7 @@ func runServe(ctx context.Context, root *rootFlags, f *serveCLIFlags) error {
 		BindAddr:    f.bind,
 		OpenBrowser: f.openBrowser,
 		Token:       dashToken,
+		Settings:    settings.NewStore(),
 	}
 	if k8sCh := k8sPlug.WatchReportCh(); k8sCh != nil {
 		mergedCh := make(chan plugin.Report, 1)

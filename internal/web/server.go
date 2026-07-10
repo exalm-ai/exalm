@@ -22,6 +22,7 @@ import (
 
 	"github.com/exalm-ai/exalm/internal/changestore"
 	"github.com/exalm-ai/exalm/internal/metrics"
+	"github.com/exalm-ai/exalm/internal/settings"
 	"github.com/exalm-ai/exalm/pkg/plugin"
 	dorapkg "github.com/exalm-ai/exalm/plugins/dora"
 	incidentpkg "github.com/exalm-ai/exalm/plugins/incident"
@@ -116,6 +117,11 @@ type ServeOpts struct {
 	// LogQuery, when non-nil, serves the chart-to-log drilldown over the
 	// analyzer session's parsed corpus. Nil => GET /api/analyzer/logs 503s.
 	LogQuery func(ctx context.Context, req LogQueryRequest) (LogQueryResponse, error)
+
+	// Settings, when non-nil, persists user dashboard preferences and
+	// enables GET/PUT /api/settings. Nil => /api/settings returns 503 and
+	// every dashboard is treated as enabled (legacy single-dashboard mode).
+	Settings *settings.Store
 
 	// Metrics, when non-nil, supplies metric series for chart tooltips and
 	// drill-down. Nil => /api/metrics returns an empty series set.
@@ -265,6 +271,7 @@ type liveServer struct {
 	analyzer        string
 	analyzerStatsFn func() any
 	logQueryFn      func(ctx context.Context, req LogQueryRequest) (LogQueryResponse, error)
+	settings        *settings.Store
 	metrics         metrics.Provider
 	provider        string
 	autoRefresh     bool // true when a live refresh source (ReportUpdates or RefreshFindings) is wired
@@ -342,6 +349,7 @@ func Serve(ctx context.Context, report plugin.Report, opts ServeOpts) error {
 		analyzer:        opts.Analyzer,
 		analyzerStatsFn: opts.AnalyzerStats,
 		logQueryFn:      opts.LogQuery,
+		settings:        opts.Settings,
 		metrics:         opts.Metrics,
 		provider:        opts.Provider,
 		autoRefresh:     opts.ReportUpdates != nil || opts.RefreshFindings != nil,
@@ -363,6 +371,7 @@ func Serve(ctx context.Context, report plugin.Report, opts ServeOpts) error {
 	mux.HandleFunc("/api/logs/analyze", srv.handleLogAnalyze)
 	mux.HandleFunc("/api/analyzer/stats", srv.handleAnalyzerStats)
 	mux.HandleFunc("/api/analyzer/logs", srv.handleAnalyzerLogs)
+	mux.HandleFunc("/api/settings", srv.handleSettings)
 	mux.HandleFunc("/api/metrics", srv.handleMetricsJSON)
 	mux.HandleFunc("/api/chat", srv.handleChat)
 	mux.HandleFunc("/api/chat/", srv.handleGetConversation)
