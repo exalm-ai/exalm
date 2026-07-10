@@ -123,6 +123,12 @@ type ServeOpts struct {
 	// every dashboard is treated as enabled (legacy single-dashboard mode).
 	Settings *settings.Store
 
+	// Dashboards is the dashboard registry: every dashboard this server can
+	// show, driving the SPA's navigation. Nil/empty => legacy
+	// single-dashboard mode (payload omits the `dashboards` array and the
+	// frontend falls back to its hardcoded navigation).
+	Dashboards []DashboardDesc
+
 	// Metrics, when non-nil, supplies metric series for chart tooltips and
 	// drill-down. Nil => /api/metrics returns an empty series set.
 	Metrics metrics.Provider
@@ -272,6 +278,7 @@ type liveServer struct {
 	analyzerStatsFn func() any
 	logQueryFn      func(ctx context.Context, req LogQueryRequest) (LogQueryResponse, error)
 	settings        *settings.Store
+	dashboards      []DashboardDesc
 	metrics         metrics.Provider
 	provider        string
 	autoRefresh     bool // true when a live refresh source (ReportUpdates or RefreshFindings) is wired
@@ -350,6 +357,7 @@ func Serve(ctx context.Context, report plugin.Report, opts ServeOpts) error {
 		analyzerStatsFn: opts.AnalyzerStats,
 		logQueryFn:      opts.LogQuery,
 		settings:        opts.Settings,
+		dashboards:      opts.Dashboards,
 		metrics:         opts.Metrics,
 		provider:        opts.Provider,
 		autoRefresh:     opts.ReportUpdates != nil || opts.RefreshFindings != nil,
@@ -372,6 +380,7 @@ func Serve(ctx context.Context, report plugin.Report, opts ServeOpts) error {
 	mux.HandleFunc("/api/analyzer/stats", srv.handleAnalyzerStats)
 	mux.HandleFunc("/api/analyzer/logs", srv.handleAnalyzerLogs)
 	mux.HandleFunc("/api/settings", srv.handleSettings)
+	mux.HandleFunc("/api/dashboards", srv.handleDashboardsJSON)
 	mux.HandleFunc("/api/metrics", srv.handleMetricsJSON)
 	mux.HandleFunc("/api/chat", srv.handleChat)
 	mux.HandleFunc("/api/chat/", srv.handleGetConversation)
@@ -590,6 +599,13 @@ func (s *liveServer) attachAnalyzer(p *dashboardPayload) {
 	p.Analyzer = s.analyzer
 	if s.analyzerStatsFn != nil {
 		p.Stats = s.analyzerStatsFn()
+	}
+	// Registry mode: embed the settings-filtered dashboard list + the global
+	// AI toggle. Legacy mode (no registry) omits both — byte-compatible.
+	if len(s.dashboards) > 0 {
+		p.Dashboards = s.enabledDashboards()
+		ai := s.currentSettings().SupportsAI
+		p.SupportsAI = &ai
 	}
 }
 

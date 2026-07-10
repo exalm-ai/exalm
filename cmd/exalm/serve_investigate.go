@@ -12,6 +12,7 @@ import (
 
 	convopkg "github.com/exalm-ai/exalm/internal/convo"
 	"github.com/exalm-ai/exalm/internal/investigate"
+	"github.com/exalm-ai/exalm/internal/registry"
 	"github.com/exalm-ai/exalm/internal/web"
 	"github.com/exalm-ai/exalm/pkg/plugin"
 	incidentplugin "github.com/exalm-ai/exalm/plugins/incident"
@@ -22,6 +23,20 @@ import (
 type investigable interface {
 	InvestigationSession() *investigate.LogSession
 	InvestigationProfile() investigate.Profile
+}
+
+// dashboardRegistry builds the full dashboard descriptor list: platform
+// built-ins plus one entry per registered analyzer plugin that can host an
+// investigation. hasK8s controls the k8s findings dashboard entry.
+func dashboardRegistry(hasK8s bool) []web.DashboardDesc {
+	out := web.BuiltinDashboards(hasK8s)
+	var analyzerIDs []string
+	for _, p := range registry.All() {
+		if _, ok := p.(investigable); ok {
+			analyzerIDs = append(analyzerIDs, p.Name())
+		}
+	}
+	return append(out, web.AnalyzerDashboards(analyzerIDs)...)
 }
 
 // applyAnalyzerServeOpts fills the investigation-related ServeOpts for an

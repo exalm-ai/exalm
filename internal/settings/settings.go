@@ -49,34 +49,18 @@ func Default() Settings {
 }
 
 // DashboardEnabled reports whether the dashboard should be visible.
-// A dashboard absent from the Enabled map defaults to enabled; an Enabled
-// map that disables everything is treated as EnableAll so a bad write can
-// never brick the UI.
+// A dashboard absent from the Enabled map defaults to enabled. The
+// "everything ended up disabled" safety net lives in the web layer, which
+// knows the actual registry.
 func (s Settings) DashboardEnabled(id string) bool {
 	if s.Dashboards.EnableAll {
-		return true
-	}
-	if len(s.Dashboards.Enabled) == 0 {
 		return true
 	}
 	on, ok := s.Dashboards.Enabled[id]
 	if !ok {
 		return true
 	}
-	if !on && allDisabled(s.Dashboards.Enabled) {
-		return true
-	}
 	return on
-}
-
-// allDisabled reports whether every entry in the map is false.
-func allDisabled(m map[string]bool) bool {
-	for _, on := range m {
-		if on {
-			return false
-		}
-	}
-	return true
 }
 
 // Store reads and writes the settings file. Safe for concurrent use.

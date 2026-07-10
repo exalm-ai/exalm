@@ -86,7 +86,8 @@ func TestDashboardEnabled(t *testing.T) {
 		{"explicit off", Settings{Dashboards: Dashboards{Enabled: map[string]bool{"dora": false, "k8s": true}}}, "dora", false},
 		{"explicit on", Settings{Dashboards: Dashboards{Enabled: map[string]bool{"dora": false, "k8s": true}}}, "k8s", true},
 		{"empty map means all on", Settings{}, "anything", true},
-		{"all-disabled treated as enable-all", Settings{Dashboards: Dashboards{Enabled: map[string]bool{"a": false, "b": false}}}, "a", true},
+		{"only-disabled entries: listed ids off, missing ids on", Settings{Dashboards: Dashboards{Enabled: map[string]bool{"a": false, "b": false}}}, "a", false},
+		{"only-disabled entries: missing id stays on", Settings{Dashboards: Dashboards{Enabled: map[string]bool{"a": false, "b": false}}}, "c", true},
 	}
 	for _, tc := range cases {
 		if got := tc.s.DashboardEnabled(tc.id); got != tc.want {

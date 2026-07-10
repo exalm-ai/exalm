@@ -161,6 +161,14 @@ type dashboardPayload struct {
 	// stays byte-compatible for existing consumers.
 	Analyzer string `json:"analyzer,omitempty"`
 	Stats    any    `json:"stats,omitempty"`
+
+	// Dashboards is the settings-filtered dashboard registry driving the
+	// SPA navigation. Omitted in legacy single-dashboard mode, in which the
+	// frontend falls back to its built-in navigation.
+	Dashboards []DashboardDesc `json:"dashboards,omitempty"`
+	// SupportsAI mirrors the global settings toggle so the frontend can
+	// hide AI affordances everywhere. Nil in legacy mode (treated as true).
+	SupportsAI *bool `json:"supportsAI,omitempty"`
 }
 
 // groupOf folds the many internal categories into the six display groups the

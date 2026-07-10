@@ -41,15 +41,33 @@
   var SIDEBAR_FG = '#e8eef6', SIDEBAR_MUTED = '#8294aa';
 
   var data = window.__DASH__ || { namespaces: [], findings: [], raw: '', provider: 'llm', autoRefresh: false };
-  var savedTheme = 'dark', savedPage = 'dashboard';
+  var DASH_KEY = 'exalm.dash';
+  // Registry mode: the payload carries the settings-filtered dashboard list
+  // and the SPA builds navigation from it. Legacy mode (no registry — e.g.
+  // a single-analyzer --open run) keeps the hardcoded nav unchanged.
+  function dashList() { return (data.dashboards && data.dashboards.length) ? data.dashboards : null; }
+  function dashById(id) {
+    var list = dashList() || [];
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
+    return null;
+  }
+  function defaultDash() {
+    var list = dashList() || [];
+    if (data.analyzer && dashById(data.analyzer)) return data.analyzer;
+    for (var i = 0; i < list.length; i++) if (!list[i].standalone) return list[i].id;
+    return list.length ? list[0].id : '';
+  }
+  var savedTheme = 'dark', savedPage = 'dashboard', savedDash = '';
   try { var t0 = localStorage.getItem(THEME_KEY); if (t0 === 'light' || t0 === 'dark') savedTheme = t0; } catch (e) {}
   try { var p0 = localStorage.getItem(PAGE_KEY); if (PAGES.indexOf(p0) !== -1) savedPage = p0; } catch (e) {}
+  try { var d0 = localStorage.getItem(DASH_KEY); if (d0) savedDash = d0; } catch (e) {}
 
   var state = {
     theme: savedTheme, page: savedPage, query: '', filter: 'all', range: '24h',
     freqScope: 'cluster', selectedNs: 'all', nsMenuOpen: false,
     openGroups: { Pods: true, Resources: true }, openFinding: null,
-    fixed: {}, fixing: {}
+    fixed: {}, fixing: {},
+    dash: savedDash // selected dashboard id (registry mode); resolved lazily
   };
 
   // ── Helpers ──
@@ -310,23 +328,62 @@
       case 'ai': return '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.9 5.5L19.5 9l-5.6 1.5L12 16l-1.9-5.5L4.5 9l5.6-1.5z"/></svg>';
       case 'alerts': return '<svg ' + a + '><path d="M6 8a6 6 0 0112 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21a2 2 0 004 0"/></svg>';
       case 'settings': return '<svg ' + a + '><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.6 1.6 0 00-2.7 1.1V21a2 2 0 11-4 0v-.2a1.6 1.6 0 00-2.7-1.1l-.1.1a2 2 0 11-2.8-2.8l.1-.1A1.6 1.6 0 004 15a1.6 1.6 0 00-1.5-1H2a2 2 0 110-4h.2A1.6 1.6 0 004 9a1.6 1.6 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1A1.6 1.6 0 009 5h.1A1.6 1.6 0 0010 3.5V3a2 2 0 114 0v.2A1.6 1.6 0 0015 5a1.6 1.6 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1A1.6 1.6 0 0020 9v.1a1.6 1.6 0 001.5 1H22a2 2 0 110 4h-.2a1.6 1.6 0 00-1.4 1z"/></svg>';
+      case 'dora': return '<svg ' + a + '><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>';
+      case 'timeline': return '<svg ' + a + '><line x1="3" y1="12" x2="21" y2="12"/><circle cx="7" cy="12" r="2"/><circle cx="14" cy="12" r="2"/><circle cx="20" cy="12" r="1.5"/></svg>';
     }
     return '';
   }
 
   // ── Sidebar ──
-  function sidebar() {
-    var items = [['dashboard', 'Dashboard'], ['explorer', 'Log Explorer'], ['ai', 'AI Analysis'], ['alerts', 'Alerts'], ['settings', 'Settings']];
-    var nav = items.map(function (it) {
-      var active = state.page === it[0];
-      return '<button data-act="nav" data-page="' + it[0] + '" style="display:flex;align-items:center;gap:12px;width:100%;padding:10px 14px;border:none;border-left:3px solid ' + (active ? 'var(--accent)' : 'transparent') + ';cursor:pointer;font-family:inherit;font-size:13.5px;font-weight:' + (active ? '600' : '500') + ';text-align:left;background:' + (active ? 'var(--accentSoft)' : 'transparent') + ';color:' + (active ? 'var(--accent)' : SIDEBAR_MUTED) + ';">' +
-        '<span style="display:flex;width:18px;height:18px;flex:none;">' + icon(it[0]) + '</span><span>' + it[1] + '</span></button>';
+  function navBtn(active, act, attrs, iconKey, label, dim) {
+    return '<button data-act="' + act + '" ' + attrs + ' style="display:flex;align-items:center;gap:12px;width:100%;padding:10px 14px;border:none;border-left:3px solid ' + (active ? 'var(--accent)' : 'transparent') + ';cursor:pointer;font-family:inherit;font-size:13.5px;font-weight:' + (active ? '600' : '500') + ';text-align:left;background:' + (active ? 'var(--accentSoft)' : 'transparent') + ';color:' + (active ? 'var(--accent)' : SIDEBAR_MUTED) + (dim ? ';opacity:.55' : '') + ';">' +
+      '<span style="display:flex;width:18px;height:18px;flex:none;">' + icon(iconKey) + '</span><span>' + esc(label) + '</span></button>';
+  }
+  function navGroupLabel(t) {
+    return '<div class="ex-brand-text" style="padding:12px 16px 4px;font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:' + SIDEBAR_MUTED + ';opacity:.7;">' + esc(t) + '</div>';
+  }
+  function sidebarNav() {
+    var list = dashList();
+    if (!list) {
+      // Legacy single-dashboard mode: the original five fixed entries.
+      var items = [['dashboard', 'Dashboard'], ['explorer', 'Log Explorer'], ['ai', 'AI Analysis'], ['alerts', 'Alerts'], ['settings', 'Settings']];
+      return items.map(function (it) {
+        return navBtn(state.page === it[0], 'nav', 'data-page="' + it[0] + '"', it[0], it[1], false);
+      }).join('');
+    }
+    // Registry mode: dashboards grouped by category, then utility pages.
+    var html = '';
+    var groups = [['platform', 'Platform'], ['analyzer', 'Analyzers']];
+    groups.forEach(function (g) {
+      var members = list.filter(function (d) { return d.category === g[0]; });
+      if (!members.length) return;
+      html += navGroupLabel(g[1]);
+      html += members.map(function (d) {
+        if (d.standalone) {
+          return '<a href="/' + esc(d.id) + '" style="display:flex;align-items:center;gap:12px;width:100%;padding:10px 14px;border-left:3px solid transparent;font-size:13.5px;font-weight:500;text-decoration:none;color:' + SIDEBAR_MUTED + ';">' +
+            '<span style="display:flex;width:18px;height:18px;flex:none;">' + icon(d.icon) + '</span><span>' + esc(d.name) + '</span><span style="margin-left:auto;font-size:10px;opacity:.6;">↗</span></a>';
+        }
+        var active = state.page === 'dash' && state.dash === d.id;
+        return navBtn(active, 'nav-dash', 'data-dash="' + esc(d.id) + '"', d.icon, d.name, !d.live);
+      }).join('');
+    });
+    var util = [['explorer', 'Log Explorer'], ['ai', 'AI Analysis'], ['alerts', 'Alerts'], ['settings', 'Settings']];
+    // Explorer / AI / Alerts read the k8s findings payload; hide them when
+    // the k8s dashboard isn't in the registry (e.g. serve --no-k8s).
+    if (!dashById('k8s')) util = [['settings', 'Settings']];
+    html += navGroupLabel('Workspace');
+    html += util.map(function (it) {
+      return navBtn(state.page === it[0], 'nav', 'data-page="' + it[0] + '"', it[0], it[1], false);
     }).join('');
-    return '<aside class="ex-sidebar" style="width:230px;flex:none;background:var(--sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;position:sticky;top:0;height:100vh;">' +
+    return html;
+  }
+  function sidebar() {
+    var subtitle = dashList() ? 'Observability' : 'K8s Analyzer';
+    return '<aside class="ex-sidebar" style="width:230px;flex:none;background:var(--sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow-y:auto;">' +
       '<div style="display:flex;align-items:center;gap:10px;padding:18px 16px 16px;">' +
       '<div style="width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,var(--accent),#7b5bff);display:flex;align-items:center;justify-content:center;box-shadow:0 0 16px var(--accentGlow);"><div style="width:11px;height:11px;border-radius:3px;background:#fff;"></div></div>' +
-      '<div class="ex-brand-text"><div style="font-weight:700;font-size:15px;letter-spacing:-.2px;color:' + SIDEBAR_FG + ';">Exalm</div><div style="font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:' + SIDEBAR_MUTED + ';">K8s Analyzer</div></div></div>' +
-      '<nav style="display:flex;flex-direction:column;gap:2px;margin-top:6px;">' + nav + '</nav>' +
+      '<div class="ex-brand-text"><div style="font-weight:700;font-size:15px;letter-spacing:-.2px;color:' + SIDEBAR_FG + ';">Exalm</div><div style="font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:' + SIDEBAR_MUTED + ';">' + subtitle + '</div></div></div>' +
+      '<nav style="display:flex;flex-direction:column;gap:2px;margin-top:6px;">' + sidebarNav() + '</nav>' +
       '<div style="flex:1;"></div>' +
       '<div style="padding:14px 16px;border-top:1px solid var(--border);font-size:11px;color:' + SIDEBAR_MUTED + ';">' +
       '<span style="width:6px;height:6px;border-radius:50%;background:var(--good);display:inline-block;margin-right:6px;animation:ex-pulse 2s ease infinite;"></span>live · ' + esc(data.provider || 'llm') + '</div></aside>';
@@ -362,8 +419,12 @@
       explorer: ['Log Explorer', 'Search and filter all findings'],
       ai: ['AI Analysis', 'LLM-powered root-cause analysis'],
       alerts: ['Alerts', 'Critical and high-severity findings'],
-      settings: ['Settings', 'Theme and environment']
+      settings: ['Settings', 'Theme, dashboards, and environment']
     }[state.page] || ['Dashboard', ''];
+    if (state.page === 'dash') {
+      var dd = dashById(state.dash);
+      meta = dd ? [dd.name, dd.description || ''] : ['Dashboard', ''];
+    }
     var actions = '';
     if (data.canFix && (state.page === 'dashboard' || state.page === 'explorer')) {
       actions += '<button data-act="fixall" style="display:flex;align-items:center;gap:8px;height:34px;padding:0 15px;border-radius:9px;border:none;background:var(--accent);color:#04222b;font-size:12.5px;font-weight:700;cursor:pointer;box-shadow:0 2px 12px var(--accentGlow);"><span style="width:7px;height:7px;border-radius:2px;background:#04222b;"></span>Fix all (' + v.fixableCount + ')</button>';
@@ -623,6 +684,25 @@
       '</div>';
   }
 
+  // ── Page: registry-selected dashboard (registry mode only) ──
+  // k8s renders the classic findings dashboard; a live analyzer renders its
+  // analyzer page; anything else shows how to attach data.
+  function pageDash(v) {
+    var d = dashById(state.dash);
+    if (!d) return pageDashboard(v);
+    if (d.id === 'k8s') return pageDashboard(v);
+    if (d.id === data.analyzer) return pageAnalyzer(v);
+    if (d.id === 'incidents') return pageNotLive(d, 'Incident records appear here. Open incidents with <code>exalm incident open</code>.');
+    return pageNotLive(d, 'No analysis session is attached. Run <code>exalm ' + esc(d.id) + ' ' + (d.id === 'eventlog' || d.id === 'logs' ? 'summarize' : 'analyze') + ' … --open</code> while this hub is running to attach one.');
+  }
+  function pageNotLive(d, hint) {
+    return '<div style="padding:60px 20px;text-align:center;">' +
+      '<div style="font-size:15px;font-weight:700;margin-bottom:8px;">' + esc(d.name) + '</div>' +
+      '<div style="font-size:12.5px;color:var(--muted);max-width:480px;margin:0 auto;">' + hint + '</div>' +
+      (d.widgets && d.widgets.length ? '<div style="margin-top:18px;font-size:11.5px;color:var(--faint);">Widgets: ' + d.widgets.map(function (w) { return esc(w.title); }).join(' · ') + '</div>' : '') +
+      '</div>';
+  }
+
   // ── Render shell + page dispatch ──
   function render() {
     var v = computeVals();
@@ -636,6 +716,7 @@
       case 'ai': shell += pageAI(v); break;
       case 'alerts': shell += pageAlerts(v); break;
       case 'settings': shell += pageSettings(v); break;
+      case 'dash': shell += pageDash(v); break;
       default: shell += data.analyzer ? pageAnalyzer(v) : pageDashboard(v);
     }
     shell += '</main>' +
@@ -682,6 +763,13 @@
     render();
   }
 
+  function setDash(id) {
+    if (!dashById(id)) return;
+    state.page = 'dash'; state.dash = id; state.nsMenuOpen = false;
+    try { localStorage.setItem(DASH_KEY, id); localStorage.setItem(PAGE_KEY, 'dashboard'); } catch (e) {}
+    render();
+  }
+
   // ── Event delegation ──
   function onClick(e) {
     var el = e.target.closest ? e.target.closest('[data-act]') : null;
@@ -692,6 +780,7 @@
     var act = el.getAttribute('data-act');
     switch (act) {
       case 'nav': setPage(el.getAttribute('data-page')); break;
+      case 'nav-dash': setDash(el.getAttribute('data-dash')); break;
       case 'ns-toggle': state.nsMenuOpen = !state.nsMenuOpen; render(); break;
       case 'ns-select': state.selectedNs = el.getAttribute('data-ns'); state.nsMenuOpen = false; render(); break;
       case 'theme': state.theme = state.theme === 'dark' ? 'light' : 'dark'; try { localStorage.setItem(THEME_KEY, state.theme); } catch (x) {} applyTheme(); render(); break;
@@ -798,6 +887,17 @@
   };
 
   // ── Boot ──
+  // Registry mode: the "dashboard" page becomes a dashboard selection. Map
+  // the saved page (or default) onto a valid dashboard id.
+  if (dashList()) {
+    if (state.page === 'dashboard' || state.page === 'dash') {
+      state.page = 'dash';
+      if (!dashById(state.dash) || dashById(state.dash).standalone) state.dash = defaultDash();
+    }
+    if (!dashById('k8s') && (state.page === 'explorer' || state.page === 'ai' || state.page === 'alerts')) {
+      state.page = 'dash'; state.dash = defaultDash();
+    }
+  }
   applyTheme();
   render();
   document.getElementById('app').addEventListener('click', onClick);
