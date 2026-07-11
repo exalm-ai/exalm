@@ -8,7 +8,6 @@ package web
 import (
 	"encoding/json"
 	"net/http"
-	"strconv"
 	"time"
 )
 
@@ -73,39 +72,5 @@ func (s *liveServer) handleAnalyzerLogs(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "no analyzer session", http.StatusServiceUnavailable)
 		return
 	}
-	q := r.URL.Query()
-	req := LogQueryRequest{
-		Severity: q.Get("severity"),
-		Unit:     q.Get("unit"),
-		Scope:    q.Get("scope"),
-		Code:     q.Get("code"),
-		Contains: q.Get("contains"),
-	}
-	if v := q.Get("from"); v != "" {
-		if ts, err := time.Parse(time.RFC3339, v); err == nil {
-			req.From = ts
-		}
-	}
-	if v := q.Get("to"); v != "" {
-		if ts, err := time.Parse(time.RFC3339, v); err == nil {
-			req.To = ts
-		}
-	}
-	if v := q.Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			req.Limit = n
-		}
-	}
-	if v := q.Get("offset"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			req.Offset = n
-		}
-	}
-	resp, err := s.logQueryFn(r.Context(), req)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp) //nolint:errcheck
+	s.serveLogQuery(w, r, s.logQueryFn)
 }

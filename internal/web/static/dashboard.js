@@ -437,67 +437,13 @@
       actions + '</header>';
   }
 
-  // ── Stat cards ──
-  function statCards(v) {
-    var cards = [
-      ['Total findings', v.totalFindings, 'var(--accent)'],
-      ['Errors / high', v.sevCounts.high, 'var(--high)'],
-      ['Critical', v.sevCounts.crit, 'var(--crit)'],
-      ['Warnings / med', v.sevCounts.med, 'var(--med)'],
-      ['Namespaces', v.NS.length, 'var(--low)']
-    ];
-    return '<div class="ex-statcards" style="display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:16px;">' +
-      cards.map(function (c) {
-        return '<div style="background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:15px 16px;">' +
-          '<div style="display:flex;justify-content:space-between;align-items:center;">' + cardLabel(c[0]) + '<span style="width:8px;height:8px;border-radius:2px;background:' + c[2] + ';"></span></div>' +
-          '<div style="font-size:30px;font-weight:700;line-height:1;margin-top:12px;font-variant-numeric:tabular-nums;">' + fmt(c[1]) + '</div></div>';
-      }).join('') + '</div>';
-  }
+  // ── Stat cards (shared widget library) ──
+  function statCards(v) { return window.ExalmWidgets.statCards(v); }
 
-  // ── Severity donut + legend ──
-  function severityDonut(v) {
-    var legend = [['Critical', 'crit', v.sevCounts.crit], ['High', 'high', v.sevCounts.high], ['Medium', 'med', v.sevCounts.med], ['Low', 'low', v.sevCounts.low]];
-    return card(cardLabel('Severity distribution') +
-      '<div style="display:flex;align-items:center;gap:18px;margin-top:14px;flex-wrap:wrap;justify-content:center;">' +
-      '<svg width="150" height="150" viewBox="0 0 80 80" style="flex:none;"><g transform="rotate(-90 40 40)"><circle cx="40" cy="40" r="34" fill="none" stroke="var(--track)" stroke-width="9"></circle>' +
-      v.ringSegs.map(function (r) { return '<circle cx="40" cy="40" r="34" fill="none" stroke="' + r.color + '" stroke-width="9" stroke-dasharray="' + r.dash + '" stroke-dashoffset="' + r.offset + '"></circle>'; }).join('') +
-      '</g><text x="40" y="38" text-anchor="middle" font-size="16" font-weight="700" fill="var(--fg)">' + v.totalFindings + '</text><text x="40" y="50" text-anchor="middle" font-size="6.5" fill="var(--faint)" letter-spacing="1">FINDINGS</text></svg>' +
-      '<div style="display:flex;flex-direction:column;gap:8px;font-size:12.5px;min-width:130px;">' +
-      legend.map(function (x) { return '<div style="display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:2px;background:var(--' + x[1] + ');"></span><span style="color:var(--muted);flex:1;">' + x[0] + '</span><b>' + x[2] + '</b></div>'; }).join('') +
-      '</div></div>');
-  }
-
-  // ── Logs by namespace (horizontal bars) ──
-  function nsBars(v) {
-    var max = Math.max.apply(null, v.NS.map(function (n) { return n.findings; }).concat([1]));
-    var rows = v.NS.slice().sort(function (a, b) { return b.findings - a.findings; }).slice(0, 9).map(function (n) {
-      var active = state.selectedNs === n.key;
-      return '<button data-act="ns-select" data-ns="' + esc(n.key) + '" style="display:flex;align-items:center;gap:10px;width:100%;border:none;background:transparent;cursor:pointer;padding:3px 0;">' +
-        '<span style="width:120px;text-align:right;font-family:\'IBM Plex Mono\',monospace;font-size:11px;color:' + (active ? 'var(--accent)' : 'var(--muted)') + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(n.key) + '</span>' +
-        '<span style="flex:1;height:14px;background:var(--track);border-radius:4px;overflow:hidden;"><span style="display:block;height:100%;width:' + Math.max(4, (n.findings / max) * 100) + '%;background:' + n.color + ';border-radius:4px;transition:width .3s;"></span></span>' +
-        '<span style="width:26px;text-align:left;font-size:11px;font-weight:600;color:var(--fg);">' + n.findings + '</span></button>';
-    }).join('');
-    return card(cardLabel('Findings by namespace') + '<div style="display:flex;flex-direction:column;gap:6px;margin-top:14px;">' + (rows || '<div style="color:var(--faint);font-size:12px;">No namespaces.</div>') + '</div>');
-  }
-
-  // ── Error frequency time-series (Cluster/Namespace toggle) ──
-  function errorFreq(v) {
-    var toggle = ['cluster', 'namespace'].map(function (k) {
-      var a = state.freqScope === k;
-      return '<button data-act="freqscope" data-v="' + k + '" style="padding:4px 11px;border-radius:7px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;cursor:pointer;border:1px solid ' + (a ? 'var(--accent)' : 'var(--border)') + ';background:' + (a ? 'var(--accentSoft)' : 'transparent') + ';color:' + (a ? 'var(--accent)' : 'var(--muted)') + ';">' + k + '</button>';
-    }).join('');
-    var legend = [['crit', 'critical'], ['high', 'high'], ['med', 'medium'], ['low', 'low']].map(function (x) { return '<span style="display:flex;align-items:center;gap:5px;font-size:10.5px;color:var(--muted);"><span style="width:8px;height:8px;border-radius:2px;background:var(--' + x[0] + ');"></span>' + x[1] + '</span>'; }).join('');
-    var bars = v.tsBars.map(function (b) {
-      return '<div class="ex-chart-bar" data-act="drilldown" data-kind="time" data-label="' + esc(b.title) + '" title="' + esc(b.title) + '" style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;min-width:0;cursor:pointer;">' +
-        b.segs.map(function (sg) { return '<div style="width:100%;height:' + sg.h + 'px;background:' + sg.bg + ';border-radius:' + (sg.first ? '3px 3px 0 0' : '0') + ';"></div>'; }).join('') + '</div>';
-    }).join('');
-    return card('<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px;">' +
-      '<div>' + cardLabel('Error frequency · last 24h') + '<div style="font-size:11px;color:var(--muted);margin-top:2px;">Findings trend ' + (state.freqScope === 'namespace' && !v.allMode ? 'by namespace · ' + esc(v.nsLabel) : 'by cluster') + '</div></div>' +
-      '<div style="display:flex;gap:6px;">' + toggle + '</div></div>' +
-      '<div style="display:flex;gap:14px;margin-bottom:8px;">' + legend + '</div>' +
-      '<div style="display:flex;align-items:flex-end;gap:3px;height:150px;">' + bars + '</div>' +
-      '<div style="display:flex;justify-content:space-between;margin-top:7px;font-family:\'IBM Plex Mono\',monospace;font-size:10px;color:var(--faint);"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>now</span></div>');
-  }
+  // ── Severity donut / namespace bars / error frequency (shared library) ──
+  function severityDonut(v) { return window.ExalmWidgets.severityDonut(v); }
+  function nsBars(v) { return window.ExalmWidgets.nsBars(v); }
+  function errorFreq(v) { return window.ExalmWidgets.errorFreq(v); }
 
   // ── Page: Dashboard ──
   function pageDashboard(v) {
@@ -733,7 +679,7 @@
       var inp = document.getElementById('finding-search');
       if (inp) { inp.focus(); try { inp.setSelectionRange(caret, caret); } catch (e) {} }
     }
-    if (window.ExalmCharts && window.ExalmCharts.attach) window.ExalmCharts.attach();
+    if (window.ExalmWidgets && window.ExalmWidgets.attachTooltips) window.ExalmWidgets.attachTooltips();
     if (window.ExalmChat && window.ExalmChat.attach) window.ExalmChat.attach();
     fillAnalyzerDash();
   }

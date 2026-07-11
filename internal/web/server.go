@@ -129,6 +129,10 @@ type ServeOpts struct {
 	// frontend falls back to its hardcoded navigation).
 	Dashboards []DashboardDesc
 
+	// Incidents, when non-nil, returns the incidents-dashboard stats payload
+	// (GET /api/dashboards/incidents/stats). Nil => 503.
+	Incidents func() any
+
 	// Metrics, when non-nil, supplies metric series for chart tooltips and
 	// drill-down. Nil => /api/metrics returns an empty series set.
 	Metrics metrics.Provider
@@ -279,6 +283,7 @@ type liveServer struct {
 	logQueryFn      func(ctx context.Context, req LogQueryRequest) (LogQueryResponse, error)
 	settings        *settings.Store
 	dashboards      []DashboardDesc
+	incidentsFn     func() any
 	metrics         metrics.Provider
 	provider        string
 	autoRefresh     bool // true when a live refresh source (ReportUpdates or RefreshFindings) is wired
@@ -358,6 +363,7 @@ func Serve(ctx context.Context, report plugin.Report, opts ServeOpts) error {
 		logQueryFn:      opts.LogQuery,
 		settings:        opts.Settings,
 		dashboards:      opts.Dashboards,
+		incidentsFn:     opts.Incidents,
 		metrics:         opts.Metrics,
 		provider:        opts.Provider,
 		autoRefresh:     opts.ReportUpdates != nil || opts.RefreshFindings != nil,
@@ -381,6 +387,10 @@ func Serve(ctx context.Context, report plugin.Report, opts ServeOpts) error {
 	mux.HandleFunc("/api/analyzer/logs", srv.handleAnalyzerLogs)
 	mux.HandleFunc("/api/settings", srv.handleSettings)
 	mux.HandleFunc("/api/dashboards", srv.handleDashboardsJSON)
+	mux.HandleFunc("GET /api/dashboards/{id}/stats", srv.handleDashStats)
+	mux.HandleFunc("GET /api/dashboards/{id}/logs", srv.handleDashLogs)
+	mux.HandleFunc("POST /api/dashboards/{id}/chat", srv.handleDashChat)
+	mux.HandleFunc("POST /api/dashboards/{id}/logs/analyze", srv.handleDashLogAnalyze)
 	mux.HandleFunc("/api/metrics", srv.handleMetricsJSON)
 	mux.HandleFunc("/api/chat", srv.handleChat)
 	mux.HandleFunc("/api/chat/", srv.handleGetConversation)

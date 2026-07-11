@@ -2,146 +2,102 @@
 // analyzer.js — the per-analyzer dashboards (syslog / httplog / eventlog /
 // iis / logs). Active only when the payload carries __DASH__.analyzer; the
 // k8s dashboard is untouched. Panels render from the analyzer-typed stats
-// payload, and EVERY chart element carries data-drill filters — clicking it
-// queries /api/analyzer/logs and opens the matching corpus lines, each with
-// the ✦ Analyze line action.
+// payload via the shared ExalmWidgets chart library, and EVERY chart element
+// carries data-drill filters — clicking it opens a small menu to either show
+// the matching corpus lines or hand the query to the AI investigation chat.
 
 (function () {
   var E = window.Exalm || {};
   var esc = E.esc || function (s) { return String(s == null ? '' : s); };
+  var W = window.ExalmWidgets;
 
-  var SEV_COLORS = {
-    emerg: 'var(--crit)', alert: 'var(--crit)', crit: 'var(--crit)', critical: 'var(--crit)', fatal: 'var(--crit)',
-    err: 'var(--high)', error: 'var(--high)', '5xx': 'var(--crit)',
-    warn: 'var(--med)', warning: 'var(--med)', '4xx': 'var(--high)',
-    notice: 'var(--low)', info: 'var(--good)', information: 'var(--good)', '2xx': 'var(--good)', '3xx': 'var(--low)',
-    debug: 'var(--faint)'
-  };
-  function sevColor(s) { return SEV_COLORS[String(s || '').toLowerCase()] || 'var(--low)'; }
+  var sevColor = W.sevColor, pick = W.pick, panel = W.panel;
+  var card = W.card, lbl = W.lbl;
+  var timelineChart = W.timelineChart, barList = W.barList, counters = W.counters;
 
-  // pick tolerates minor JSON-tag spelling differences between Go structs.
-  function pick(obj) {
-    if (!obj) return null;
-    for (var i = 1; i < arguments.length; i++) {
-      var v = obj[arguments[i]];
-      if (v !== undefined && v !== null) return v;
-    }
-    return null;
-  }
-
-  var card = 'background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:14px 16px;';
-  var lbl = 'font-size:10.5px;letter-spacing:.7px;text-transform:uppercase;color:var(--faint);font-weight:600;margin-bottom:9px;';
-
-  function panel(title, inner) {
-    return '<div style="' + card + '"><div style="' + lbl + '">' + esc(title) + '</div>' + inner + '</div>';
-  }
-
-  // ── chart primitives (inline, CSS-var themed, drill-enabled) ──
-
-  // timeline: vertical bars per bucket; click drills into that minute.
-  function timelineChart(buckets, drillBase) {
-    if (!buckets || !buckets.length) return '<div style="color:var(--faint);font-size:12px;">No timestamped events.</div>';
-    var max = 1;
-    buckets.forEach(function (b) { if (b.count > max) max = b.count; });
-    var bars = buckets.map(function (b) {
-      var h = Math.max(3, Math.round((b.count / max) * 64));
-      var drill = drillBase + '&contains=&bucket=' + encodeURIComponent(b.t) + (b.sev ? '&severity=' + encodeURIComponent(b.sev) : '');
-      return '<div class="ex-an-drill" data-drill="' + esc(drill) + '" title="' + esc(b.t + ' · ' + b.count + (b.sev ? ' ' + b.sev : '')) + '"' +
-        ' style="flex:1;min-width:3px;max-width:22px;height:' + h + 'px;background:' + sevColor(b.sev) + ';border-radius:2px 2px 0 0;cursor:pointer;opacity:.85;"></div>';
-    }).join('');
-    var first = buckets[0].t, last = buckets[buckets.length - 1].t;
-    return '<div style="display:flex;align-items:flex-end;gap:2px;height:68px;">' + bars + '</div>' +
-      '<div style="display:flex;justify-content:space-between;font-family:\'IBM Plex Mono\',monospace;font-size:10px;color:var(--faint);margin-top:4px;"><span>' + esc(first) + '</span><span>' + esc(last) + '</span></div>';
-  }
-
-  // barList: horizontal top-N; click drills into that name.
-  function barList(items, dim, colorFor) {
-    if (!items || !items.length) return '<div style="color:var(--faint);font-size:12px;">Nothing recorded.</div>';
-    var max = 1;
-    items.forEach(function (it) { if (it.count > max) max = it.count; });
-    return items.map(function (it) {
-      var w = Math.max(2, Math.round((it.count / max) * 100));
-      var color = colorFor ? colorFor(it.name) : 'var(--accent)';
-      return '<div class="ex-an-drill" data-drill="' + esc(dim + '=' + encodeURIComponent(it.name)) + '" style="display:flex;align-items:center;gap:9px;padding:3px 0;cursor:pointer;">' +
-        '<span style="flex:0 0 34%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;color:var(--body);" title="' + esc(it.name) + '">' + esc(it.name) + '</span>' +
-        '<span style="flex:1;height:8px;background:var(--track);border-radius:4px;overflow:hidden;"><span style="display:block;width:' + w + '%;height:100%;background:' + color + ';"></span></span>' +
-        '<b style="flex:0 0 40px;text-align:right;font-size:11.5px;color:var(--fg);">' + it.count + '</b></div>';
-    }).join('');
-  }
-
-  // counters: severity-colored stat chips; click drills on the filter.
-  function counters(list) {
-    return '<div style="display:flex;gap:10px;flex-wrap:wrap;">' + list.map(function (c) {
-      return '<div class="ex-an-drill" data-drill="' + esc(c.drill || '') + '" style="' + (c.drill ? 'cursor:pointer;' : '') + 'flex:1;min-width:110px;background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:9px 12px;">' +
-        '<div style="font-size:20px;font-weight:700;color:' + (c.value > 0 ? (c.color || 'var(--fg)') : 'var(--faint)') + ';">' + c.value + '</div>' +
-        '<div style="font-size:10.5px;color:var(--muted);">' + esc(c.label) + '</div></div>';
-    }).join('') + '</div>';
+  // apiBase resolves the analyzer API root: registry mode routes through the
+  // per-dashboard prefix; legacy single-analyzer mode keeps /api/analyzer.
+  function apiBase() {
+    return (window.__DASH__ && window.__DASH__.dashboards && window.__DASH__.dashboards.length)
+      ? '/api/dashboards/' + encodeURIComponent(window.__DASH__.analyzer)
+      : '/api/analyzer';
   }
 
   var grid2 = 'display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;';
 
+  // section wraps a page area in a consistently styled collapsible block.
+  function section(title, inner) {
+    return '<details open style="margin-bottom:14px;">' +
+      '<summary style="cursor:pointer;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:10px;">' + esc(title) + '</summary>' +
+      inner + '</details>';
+  }
+
   // ── per-analyzer page builders ──
 
   function pageSyslog(st) {
-    return '<div style="' + grid2 + '">' +
-      panel('Severity timeline', timelineChart(pick(st, 'severityTimeline', 'errorTimeline') || [], '')) +
+    return section('Overview',
       panel('Signals', counters([
         { label: 'Auth failures', value: pick(st, 'authFailures') || 0, color: 'var(--high)', drill: 'contains=' + encodeURIComponent('authentication failure') },
         { label: 'OOM events', value: pick(st, 'oomEvents', 'ooms') || 0, color: 'var(--crit)', drill: 'contains=' + encodeURIComponent('out of memory') },
         { label: 'Disk errors', value: pick(st, 'diskErrors') || 0, color: 'var(--med)', drill: 'contains=' + encodeURIComponent('no space left') }
-      ])) +
-      panel('Top failing units', barList(pick(st, 'topUnits') || [], 'unit', function () { return 'var(--high)'; })) +
-      panel('Top hosts', barList(pick(st, 'topHosts') || [], 'scope')) +
-      '</div>';
+      ]))) +
+      section('Charts', '<div style="' + grid2 + '">' +
+        panel('Severity timeline', timelineChart(pick(st, 'severityTimeline', 'errorTimeline') || [], '')) +
+        panel('Top failing units', barList(pick(st, 'topUnits') || [], 'unit', function () { return 'var(--high)'; })) +
+        panel('Top hosts', barList(pick(st, 'topHosts') || [], 'scope')) +
+        '</div>');
   }
 
   function pageHTTP(st) {
-    return '<div style="' + grid2 + '">' +
-      panel('Requests over time', timelineChart(pick(st, 'requestTimeline') || [], '')) +
-      panel('5xx bursts', timelineChart(pick(st, 'bursts5xx', 'bursts5XX') || [], 'severity=5xx')) +
-      panel('Status codes', barList(pick(st, 'codeHistogram') || [], 'code', function (n) { return sevColor(n.charAt(0) + 'xx'); })) +
+    return section('Overview',
       panel('Latency & volume', counters([
         { label: 'Slow requests (>5s)', value: pick(st, 'slowRequests') || 0, color: 'var(--med)' },
         { label: 'Top URI count', value: (pick(st, 'topURIs', 'topUris') || []).length }
-      ])) +
-      panel('Top URLs', barList(pick(st, 'topURIs', 'topUris') || [], 'unit')) +
-      panel('Top clients', barList(pick(st, 'topClients') || [], 'contains')) +
-      '</div>';
+      ]))) +
+      section('Charts', '<div style="' + grid2 + '">' +
+        panel('Requests over time', timelineChart(pick(st, 'requestTimeline') || [], '')) +
+        panel('5xx bursts', timelineChart(pick(st, 'bursts5xx', 'bursts5XX') || [], 'severity=5xx')) +
+        panel('Status codes', barList(pick(st, 'codeHistogram') || [], 'code', function (n) { return sevColor(n.charAt(0) + 'xx'); })) +
+        panel('Top URLs', barList(pick(st, 'topURIs', 'topUris') || [], 'unit')) +
+        panel('Top clients', barList(pick(st, 'topClients') || [], 'contains')) +
+        '</div>');
   }
 
   function pageEventlog(st) {
-    return '<div style="' + grid2 + '">' +
-      panel('Event level timeline', timelineChart(pick(st, 'levelTimeline') || [], '')) +
+    return section('Overview',
       panel('Signals', counters([
         { label: 'Service events', value: pick(st, 'serviceEvents') || 0, color: 'var(--high)', drill: 'unit=' + encodeURIComponent('Service Control Manager') },
         { label: 'Reboots', value: pick(st, 'reboots') || 0, color: 'var(--med)', drill: 'code=6008' },
         { label: 'Auth failures (4625)', value: pick(st, 'authFailures') || 0, color: 'var(--crit)', drill: 'code=4625' }
-      ])) +
-      panel('Top event IDs', barList(pick(st, 'topEventIDs', 'topEventIds') || [], 'code', function () { return 'var(--accent)'; })) +
-      panel('Top providers', barList(pick(st, 'topProviders') || [], 'unit')) +
-      '</div>';
+      ]))) +
+      section('Charts', '<div style="' + grid2 + '">' +
+        panel('Event level timeline', timelineChart(pick(st, 'levelTimeline') || [], '')) +
+        panel('Top event IDs', barList(pick(st, 'topEventIDs', 'topEventIds') || [], 'code', function () { return 'var(--accent)'; })) +
+        panel('Top providers', barList(pick(st, 'topProviders') || [], 'unit')) +
+        '</div>');
   }
 
   function pageIIS(st) {
-    return '<div style="' + grid2 + '">' +
-      panel('Requests over time', timelineChart(pick(st, 'requestTimeline') || [], '')) +
-      panel('Status codes', barList(pick(st, 'codeHistogram') || [], 'code', function (n) { return sevColor(n.charAt(0) + 'xx'); })) +
-      panel('Slow requests', counters([{ label: 'Requests >5s', value: pick(st, 'slowRequests') || 0, color: 'var(--med)' }])) +
-      panel('Top sites / pools', barList(pick(st, 'topSites', 'topPools') || [], 'scope')) +
-      panel('Top URIs', barList(pick(st, 'topURIs', 'topUris') || [], 'unit')) +
-      '</div>';
+    return section('Overview',
+      panel('Slow requests', counters([{ label: 'Requests >5s', value: pick(st, 'slowRequests') || 0, color: 'var(--med)' }]))) +
+      section('Charts', '<div style="' + grid2 + '">' +
+        panel('Requests over time', timelineChart(pick(st, 'requestTimeline') || [], '')) +
+        panel('Status codes', barList(pick(st, 'codeHistogram') || [], 'code', function (n) { return sevColor(n.charAt(0) + 'xx'); })) +
+        panel('Top sites / pools', barList(pick(st, 'topSites', 'topPools') || [], 'scope')) +
+        panel('Top URIs', barList(pick(st, 'topURIs', 'topUris') || [], 'unit')) +
+        '</div>');
   }
 
   function pageLogs(st) {
-    return '<div style="' + grid2 + '">' +
+    return section('Charts', '<div style="' + grid2 + '">' +
       panel('Errors over time', timelineChart(pick(st, 'errorTimeline') || [], 'severity=error')) +
       panel('Severity mix', barList(pick(st, 'severityCounts') || [], 'severity', function (n) { return sevColor(n); })) +
-      '</div>';
+      '</div>');
   }
 
   var PAGES = { syslog: pageSyslog, httplog: pageHTTP, eventlog: pageEventlog, iis: pageIIS, logs: pageLogs };
 
-  // ── drilldown: chart click → /api/analyzer/logs → corpus lines ──
+  // ── drilldown: chart click → analyzer logs API → corpus lines ──
 
   function drillPanelHTML() {
     return '<div id="ex-an-drillpanel" style="display:none;' + card + 'margin-top:2px;">' +
@@ -164,7 +120,7 @@
     var q = query.replace(/(^|&)bucket=([^&]*)/, function (_m, p, v) {
       return p + 'contains=' + v;
     });
-    fetch('/api/analyzer/logs?' + q + '&limit=200').then(function (r) {
+    fetch(apiBase() + '/logs?' + q + '&limit=200').then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.json();
     }).then(function (d) {
@@ -218,11 +174,21 @@
     return builder(data.stats || {}) + drillPanelHTML() + truncNote;
   }
 
-  // attach wires drill + analyze clicks; idempotent per repaint.
+  // attach wires the drill menu + analyze clicks; idempotent per repaint.
   function attach() {
     var root = document.getElementById('analyzer-dash-root');
     if (!root || root._exWired) return;
     root._exWired = true;
+    W.attachDrillMenu(root, {
+      onLogs: runDrill,
+      onInvestigate: function (query, label) {
+        if (window.ExalmChat && window.ExalmChat.ask) {
+          window.ExalmChat.ask('Investigate ' + label + ' (' + query + ')');
+        } else {
+          runDrill(query);
+        }
+      }
+    });
     root.addEventListener('click', function (e) {
       var closeBtn = e.target.closest('#ex-an-drillclose');
       if (closeBtn) { document.getElementById('ex-an-drillpanel').style.display = 'none'; return; }
@@ -232,12 +198,6 @@
         var events = out._events || [];
         var ev = events[+analyze.getAttribute('data-idx')];
         if (ev) analyzeRow(ev, events);
-        return;
-      }
-      var drill = e.target.closest('.ex-an-drill');
-      if (drill) {
-        var q = drill.getAttribute('data-drill') || '';
-        runDrill(q);
       }
     });
   }

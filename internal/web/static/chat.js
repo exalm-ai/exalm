@@ -38,9 +38,12 @@
   function clearCachedId(key) { try { localStorage.removeItem(key); } catch (e) {} }
 
   // ── Session: one conversation's state + network calls ──
+  // scope.chatURL overrides the converse endpoint (per-dashboard scoped
+  // route in registry mode); default is the legacy /api/chat.
   function Session(key, scope) {
     this.key = key;
     this.scope = scope || {};
+    this.chatURL = (scope && scope.chatURL) || '/api/chat';
     this.id = loadCachedId(key);
     this.messages = [];
     this.focus = '';
@@ -67,7 +70,7 @@
     self.messages = self.messages.concat([{ role: 'user', content: text }]);
     self.loading = true; self.error = null; self.notify();
     var ns = self.scope.getNamespace ? self.scope.getNamespace() : (self.scope.namespace || '');
-    return fetch('/api/chat', {
+    return fetch(self.chatURL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Exalm-Request': 'true' },
       body: JSON.stringify({ conversationId: self.id || '', findingId: self.scope.findingId || '', namespace: ns, message: text })
@@ -327,15 +330,44 @@
     var root = document.getElementById('ai-chat-root');
     if (!root) return; // not on the AI page right now
     if (!inlineSession) {
+      var dash = (window.__DASH__ || {});
+      var analyzer = dash.analyzer || '';
+      var registry = !!(dash.dashboards && dash.dashboards.length);
       var nsKey = (E.state && E.state.selectedNs) || 'all';
-      inlineSession = new Session('exalm.chat.ns.' + nsKey, {
+      // Analyzer dashboards get their own conversation key + (in registry
+      // mode) the per-dashboard scoped chat route; the k8s workspace keeps
+      // the legacy per-namespace key and /api/chat.
+      var key = analyzer ? 'exalm.chat.' + analyzer : 'exalm.chat.ns.' + nsKey;
+      var chatURL = (analyzer && registry) ? '/api/dashboards/' + encodeURIComponent(analyzer) + '/chat' : '/api/chat';
+      inlineSession = new Session(key, {
         findingId: '',
+        chatURL: chatURL,
         getNamespace: function () { return (E.state && E.state.selectedNs && E.state.selectedNs !== 'all') ? E.state.selectedNs : ''; }
       });
       inlineSession.onChange = paintInline;
       inlineSession.hydrate();
     }
     paintInline(root);
+    drainPendingAsk();
+  }
+
+  // ── Programmatic entry: widgets' "✦ Investigate" menu seeds a question ──
+  var pendingAsk = null;
+  function drainPendingAsk() {
+    if (!pendingAsk || !inlineSession || inlineSession.loading) return;
+    var text = pendingAsk;
+    pendingAsk = null;
+    inlineSession.send(text);
+  }
+  function ask(text) {
+    if (!text) return;
+    pendingAsk = String(text);
+    // Navigate to the AI page if we're not on it; attach() drains the queue.
+    if (!document.getElementById('ai-chat-root')) {
+      var btn = document.querySelector('[data-act="nav"][data-page="ai"]');
+      if (btn) { btn.click(); return; }
+    }
+    attach();
   }
 
   function paintInline(rootArg) {
@@ -404,7 +436,7 @@
     reCloseAfterPrint = [];
   });
 
-  window.ExalmChat = { attach: attach, openScoped: openScoped };
+  window.ExalmChat = { attach: attach, openScoped: openScoped, ask: ask };
   // dashboard.js's first paint may already have happened before this module
   // loads (script tags run in order, after the page's initial render call).
   attach();

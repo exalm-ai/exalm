@@ -63,15 +63,15 @@
     window.__DASH__.canFix = {{if .HasApplyFix}}true{{else}}false{{end}};
     window.__DASH__.canCreatePR = {{if .HasCreatePR}}true{{else}}false{{end}};
   </script>
-  <!-- Core dashboard first (it defines window.Exalm), then the feature modules
-       that build on it: explainable remediation + investigation panels, chart
-       interactivity, and the log viewer. -->
+  <!-- Shared widget library first (charts, tooltips, drill menu — it reads
+       window.Exalm lazily), then the dashboard shell (defines window.Exalm),
+       then the feature modules that build on both. -->
+  <script src="/static/widgets.js"></script>
   <script src="/static/dashboard.js"></script>
   <script src="/static/panels.js"></script>
   <script src="/static/tree.js"></script>
   <script src="/static/chat.js"></script>
   <script src="/static/analyzer.js"></script>
-  <script src="/static/charts.js"></script>
   <script src="/static/logviewer.js"></script>
 </body>
 </html>

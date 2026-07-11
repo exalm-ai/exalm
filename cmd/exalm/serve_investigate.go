@@ -39,6 +39,42 @@ func dashboardRegistry(hasK8s bool) []web.DashboardDesc {
 	return append(out, web.AnalyzerDashboards(analyzerIDs)...)
 }
 
+// incidentsStatsFn returns the incidents-dashboard stats provider: a
+// read-only summary of the local incident store, newest first.
+func incidentsStatsFn() func() any {
+	store := incidentplugin.NewFileStore()
+	return func() any {
+		incidents, err := store.List(context.Background())
+		if err != nil {
+			return map[string]any{"error": "incident store unavailable"}
+		}
+		type row struct {
+			ID       string `json:"id"`
+			Title    string `json:"title"`
+			Status   string `json:"status"`
+			Severity string `json:"severity"`
+			OpenedAt string `json:"openedAt"`
+			Service  string `json:"service,omitempty"`
+		}
+		open := 0
+		rows := make([]row, 0, len(incidents))
+		for _, inc := range incidents {
+			if string(inc.Status) == "open" {
+				open++
+			}
+			rows = append(rows, row{
+				ID: inc.ID, Title: inc.Title, Status: string(inc.Status),
+				Severity: string(inc.Severity), OpenedAt: inc.OpenedAt.UTC().Format(time.RFC3339),
+				Service: inc.Service,
+			})
+		}
+		if len(rows) > 50 {
+			rows = rows[:50]
+		}
+		return map[string]any{"open": open, "total": len(incidents), "incidents": rows}
+	}
+}
+
 // applyAnalyzerServeOpts fills the investigation-related ServeOpts for an
 // analyzer plugin. Returns false when the plugin has no session to serve.
 func applyAnalyzerServeOpts(opts *web.ServeOpts, inv investigable, llm plugin.LLMClient, red plugin.Redactor) (bool, error) {

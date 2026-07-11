@@ -153,6 +153,7 @@ func runServe(ctx context.Context, root *rootFlags, f *serveCLIFlags) error {
 			CreatePR:    buildCreatePRFn(f),
 			Settings:    settings.NewStore(),
 			Dashboards:  dashboardRegistry(false),
+			Incidents:   incidentsStatsFn(),
 		}
 		fmt.Fprintf(os.Stderr, "exalm serve: --no-k8s mode — dashboard starting on http://localhost:%d\n", f.port) //nolint:errcheck // startup info to stderr
 		return web.Serve(ctx, plugin.Report{}, noK8sOpts)
@@ -238,6 +239,7 @@ func runServe(ctx context.Context, root *rootFlags, f *serveCLIFlags) error {
 		Token:       dashToken,
 		Settings:    settings.NewStore(),
 		Dashboards:  dashboardRegistry(true),
+		Incidents:   incidentsStatsFn(),
 	}
 	if k8sCh := k8sPlug.WatchReportCh(); k8sCh != nil {
 		mergedCh := make(chan plugin.Report, 1)
