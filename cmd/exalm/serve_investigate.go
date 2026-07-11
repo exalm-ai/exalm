@@ -75,20 +75,11 @@ func incidentsStatsFn() func() any {
 	}
 }
 
-// applyAnalyzerServeOpts fills the investigation-related ServeOpts for an
-// analyzer plugin. Returns false when the plugin has no session to serve.
-func applyAnalyzerServeOpts(opts *web.ServeOpts, inv investigable, llm plugin.LLMClient, red plugin.Redactor) (bool, error) {
-	session := inv.InvestigationSession()
-	if session == nil {
-		return false, nil
-	}
-	engine, err := investigate.NewEngine(inv.InvestigationProfile())
-	if err != nil {
-		return false, err
-	}
-	convoStore := convopkg.NewStore()
+// incidentHistorySources builds the shared history sources (prior
+// conversations + incident records) for an investigation engine.
+func incidentHistorySources(convoStore convopkg.Store) investigate.HistorySources {
 	incStore := incidentplugin.NewFileStore()
-	history := investigate.HistorySources{
+	return investigate.HistorySources{
 		Convo: convoStore,
 		Incidents: func(ctx context.Context, from, to time.Time) ([]investigate.PastIncident, error) {
 			incidents, err := incStore.QueryByDateRange(ctx, from, to)
@@ -112,57 +103,84 @@ func applyAnalyzerServeOpts(opts *web.ServeOpts, inv investigable, llm plugin.LL
 			return out, nil
 		},
 	}
+}
 
+// buildAnalyzerHandlers constructs the per-session web closures (chat,
+// conversation resume, line analysis, log query) for one analyzer session +
+// engine. Shared by the legacy single-analyzer path and the hub's ingest.
+func buildAnalyzerHandlers(session *investigate.LogSession, engine *investigate.Engine, llm plugin.LLMClient, red plugin.Redactor) web.SessionHandlers {
+	convoStore := convopkg.NewStore()
+	history := incidentHistorySources(convoStore)
+	return web.SessionHandlers{
+		Converse: func(ctx context.Context, req web.ConverseRequest) (*plugin.Conversation, error) {
+			return engine.Converse(ctx, investigate.ConverseReq{
+				ConvoID: req.ConversationID, AnchorID: req.FindingID,
+				Scope: req.Namespace, Message: req.Message,
+			}, investigate.Deps{
+				LLM: llm, Red: red, Store: convoStore,
+				Facts: session, History: history,
+			})
+		},
+		GetConversation: func(ctx context.Context, id string) (*plugin.Conversation, error) {
+			c, err := convoStore.Get(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			return &c, nil
+		},
+		AnalyzeLine: func(ctx context.Context, req web.LogAnalyzeRequest) (string, error) {
+			return engine.AnalyzeLine(ctx, investigate.LineRequest{
+				Fields: []investigate.KV{
+					{Key: "Analyzer", Value: session.Analyzer},
+					{Key: "Scope", Value: req.Namespace},
+					{Key: "Unit", Value: req.Pod},
+					{Key: "Severity", Value: req.Severity},
+					{Key: "Source", Value: req.Source},
+				},
+				Message: req.Message,
+				Context: req.Context,
+			}, llm, red)
+		},
+		LogQuery: func(_ context.Context, req web.LogQueryRequest) (web.LogQueryResponse, error) {
+			events, total := session.Query(investigate.LogQuery{
+				From: req.From, To: req.To,
+				Severity: req.Severity, Unit: req.Unit, Scope: req.Scope,
+				Code: req.Code, Contains: req.Contains,
+				Limit: req.Limit, Offset: req.Offset,
+			})
+			out := web.LogQueryResponse{Total: total, Truncated: session.Truncated()}
+			for _, e := range events {
+				ev := web.LogQueryEvent{
+					Severity: e.Severity, Scope: e.Scope, Unit: e.Unit,
+					Code: e.Code, Message: e.Message, Raw: e.Raw,
+				}
+				if !e.At.IsZero() {
+					ev.At = e.At.UTC().Format(time.RFC3339)
+				}
+				out.Events = append(out.Events, ev)
+			}
+			return out, nil
+		},
+	}
+}
+
+// applyAnalyzerServeOpts fills the investigation-related ServeOpts for an
+// analyzer plugin. Returns false when the plugin has no session to serve.
+func applyAnalyzerServeOpts(opts *web.ServeOpts, inv investigable, llm plugin.LLMClient, red plugin.Redactor) (bool, error) {
+	session := inv.InvestigationSession()
+	if session == nil {
+		return false, nil
+	}
+	engine, err := investigate.NewEngine(inv.InvestigationProfile())
+	if err != nil {
+		return false, err
+	}
+	h := buildAnalyzerHandlers(session, engine, llm, red)
 	opts.Analyzer = session.Analyzer
 	opts.AnalyzerStats = func() any { return session.Stats }
-	opts.Converse = func(ctx context.Context, req web.ConverseRequest) (*plugin.Conversation, error) {
-		return engine.Converse(ctx, investigate.ConverseReq{
-			ConvoID: req.ConversationID, AnchorID: req.FindingID,
-			Scope: req.Namespace, Message: req.Message,
-		}, investigate.Deps{
-			LLM: llm, Red: red, Store: convoStore,
-			Facts: session, History: history,
-		})
-	}
-	opts.GetConversation = func(ctx context.Context, id string) (*plugin.Conversation, error) {
-		c, err := convoStore.Get(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		return &c, nil
-	}
-	opts.AnalyzeLogLine = func(ctx context.Context, req web.LogAnalyzeRequest) (string, error) {
-		return engine.AnalyzeLine(ctx, investigate.LineRequest{
-			Fields: []investigate.KV{
-				{Key: "Analyzer", Value: session.Analyzer},
-				{Key: "Scope", Value: req.Namespace},
-				{Key: "Unit", Value: req.Pod},
-				{Key: "Severity", Value: req.Severity},
-				{Key: "Source", Value: req.Source},
-			},
-			Message: req.Message,
-			Context: req.Context,
-		}, llm, red)
-	}
-	opts.LogQuery = func(_ context.Context, req web.LogQueryRequest) (web.LogQueryResponse, error) {
-		events, total := session.Query(investigate.LogQuery{
-			From: req.From, To: req.To,
-			Severity: req.Severity, Unit: req.Unit, Scope: req.Scope,
-			Code: req.Code, Contains: req.Contains,
-			Limit: req.Limit, Offset: req.Offset,
-		})
-		out := web.LogQueryResponse{Total: total, Truncated: session.Truncated()}
-		for _, e := range events {
-			ev := web.LogQueryEvent{
-				Severity: e.Severity, Scope: e.Scope, Unit: e.Unit,
-				Code: e.Code, Message: e.Message, Raw: e.Raw,
-			}
-			if !e.At.IsZero() {
-				ev.At = e.At.UTC().Format(time.RFC3339)
-			}
-			out.Events = append(out.Events, ev)
-		}
-		return out, nil
-	}
+	opts.Converse = h.Converse
+	opts.GetConversation = h.GetConversation
+	opts.AnalyzeLogLine = h.AnalyzeLine
+	opts.LogQuery = h.LogQuery
 	return true, nil
 }

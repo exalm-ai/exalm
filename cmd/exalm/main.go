@@ -533,6 +533,20 @@ func runSubcommand(ctx context.Context, p plugin.Plugin, sc plugin.Subcommand, f
 	case cfg.OutputFormat == "json":
 		return output.JSON(os.Stdout, report)
 	case cfg.OutputFormat == "web" || openWeb:
+		// Hub attach: when `exalm serve` is already running, hand this
+		// analyzer session to it instead of binding a second server. Any
+		// failure (no hub, stale file, rejected snapshot) falls through to
+		// the local server below.
+		if inv, ok := p.(investigable); ok {
+			if session := inv.InvestigationSession(); session != nil {
+				if url, err := tryAttachToHub(session); err == nil {
+					fmt.Fprintf(os.Stderr, "  ⬡ Attached to the running Exalm hub: %s\n", url) //nolint:errcheck
+					web.OpenBrowser(url)
+					return output.Markdown(os.Stdout, report)
+				}
+			}
+		}
+
 		serveOpts := web.ServeOpts{Port: 7433, OpenBrowser: true, Provider: cfg.LLMProvider}
 
 		// Derived metric series (modeled values + real change annotations) for

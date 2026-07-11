@@ -489,21 +489,55 @@
   // ── Page: Analyzer dashboard (syslog/httplog/eventlog/iis/logs) ──
   // Rendered when the payload carries data.analyzer; the k8s dashboard page
   // is untouched. Panels + drilldown live in analyzer.js (AnalyzerDash).
-  function pageAnalyzer(v) {
+  function pageAnalyzer(v, desc) {
+    var title = desc ? desc.name : (data.analyzer || '').toUpperCase() + ' analysis';
+    var sub = desc ? (desc.description || '') + ' · click any chart to open the matching log lines'
+      : v.totalFindings + ' findings · click any chart to open the matching log lines';
     var header = '<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">' +
       '<span style="width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#7b5bff,var(--accent));display:flex;align-items:center;justify-content:center;color:#fff;">' + icon('dashboard') + '</span>' +
-      '<div style="flex:1;"><div style="font-size:14px;font-weight:700;">' + esc((data.analyzer || '').toUpperCase()) + ' analysis</div>' +
-      '<div style="font-size:12px;color:var(--muted);">' + v.totalFindings + ' findings · click any chart to open the matching log lines</div></div></div>';
-    return header + '<div id="analyzer-dash-root"></div>';
+      '<div style="flex:1;"><div style="font-size:14px;font-weight:700;">' + esc(title) + '</div>' +
+      '<div style="font-size:12px;color:var(--muted);">' + esc(sub) + '</div></div></div>';
+    // Hub mode: the analyzer page carries its own AI workspace (the k8s
+    // workspace's AI page stays k8s-scoped). Hidden when AI is disabled.
+    var ai = '';
+    if (desc && desc.supportsAI && data.supportsAI !== false) {
+      ai = '<details open style="margin-top:14px;"><summary style="cursor:pointer;font-size:10.5px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--faint);padding:4px 0;">AI Investigation</summary>' +
+        card('<div id="ai-chat-root" style="min-width:0;"></div>', '14px 16px') + '</details>';
+    }
+    return header + '<div id="analyzer-dash-root"></div>' + ai;
   }
 
   // fillAnalyzerDash paints the analyzer panels after every re-render.
+  // Legacy mode reads the payload-embedded analyzer/stats; hub mode fetches
+  // the selected dashboard's stats from its scoped route (cached per id).
+  var hubStatsCache = {};
   function fillAnalyzerDash() {
-    if (!data.analyzer || !window.AnalyzerDash) return;
+    if (!window.AnalyzerDash) return;
     var root = document.getElementById('analyzer-dash-root');
     if (!root) return;
-    root.innerHTML = window.AnalyzerDash.render(data);
-    window.AnalyzerDash.attach();
+    if (data.analyzer) {
+      root.innerHTML = window.AnalyzerDash.render(data);
+      window.AnalyzerDash.attach();
+      return;
+    }
+    var d = state.page === 'dash' ? dashById(state.dash) : null;
+    if (!d || !d.live || d.category !== 'analyzer') return;
+    var cached = hubStatsCache[d.id];
+    if (cached) {
+      root.innerHTML = window.AnalyzerDash.render(cached);
+      window.AnalyzerDash.attach();
+      return;
+    }
+    root.innerHTML = '<div style="padding:30px;color:var(--faint);font-size:12.5px;">Loading ' + esc(d.name) + '…</div>';
+    fetch('/api/dashboards/' + encodeURIComponent(d.id) + '/stats')
+      .then(function (r) { if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
+      .then(function (json) {
+        hubStatsCache[d.id] = json;
+        if (state.page === 'dash' && state.dash === d.id) fillAnalyzerDash();
+      })
+      .catch(function () {
+        root.innerHTML = '<div style="padding:30px;color:var(--faint);font-size:12.5px;">Could not load this dashboard’s data.</div>';
+      });
   }
 
   // ── Page: AI Analysis — two-pane investigation workspace ──
@@ -637,7 +671,7 @@
     var d = dashById(state.dash);
     if (!d) return pageDashboard(v);
     if (d.id === 'k8s') return pageDashboard(v);
-    if (d.id === data.analyzer) return pageAnalyzer(v);
+    if (d.id === data.analyzer || (d.live && d.category === 'analyzer')) return pageAnalyzer(v, d);
     if (d.id === 'incidents') return pageNotLive(d, 'Incident records appear here. Open incidents with <code>exalm incident open</code>.');
     return pageNotLive(d, 'No analysis session is attached. Run <code>exalm ' + esc(d.id) + ' ' + (d.id === 'eventlog' || d.id === 'logs' ? 'summarize' : 'analyze') + ' … --open</code> while this hub is running to attach one.');
   }

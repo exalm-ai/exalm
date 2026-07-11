@@ -172,6 +172,10 @@ func (s *liveServer) enabledDashboards() []DashboardDesc {
 		if !cur.SupportsAI {
 			d.SupportsAI = false
 		}
+		// Hub mode: an analyzer dashboard is live when a session is attached.
+		if s.sessions != nil && d.Category == "analyzer" {
+			_, d.Live = s.sessions.Get(d.ID)
+		}
 		out = append(out, d)
 	}
 	// Safety net: a settings file that disabled every registered dashboard

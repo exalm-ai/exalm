@@ -55,6 +55,17 @@ func (s *liveServer) gateDashboard(w http.ResponseWriter, id string) bool {
 	return true
 }
 
+// dashSession resolves the live session for a dashboard id: the hub's
+// session registry first, then the legacy single-session fields.
+func (s *liveServer) dashSession(id string) (*DashSession, bool) {
+	if s.sessions != nil {
+		if ds, ok := s.sessions.Get(id); ok {
+			return ds, true
+		}
+	}
+	return nil, false
+}
+
 // handleDashStats serves GET /api/dashboards/{id}/stats.
 func (s *liveServer) handleDashStats(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -70,6 +81,11 @@ func (s *liveServer) handleDashStats(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"analyzer": "incidents", "stats": s.incidentsFn()}) //nolint:errcheck
 		return
 	}
+	if ds, ok := s.dashSession(id); ok {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"analyzer": id, "stats": ds.Stats}) //nolint:errcheck
+		return
+	}
 	if id != s.analyzer || s.analyzerStatsFn == nil {
 		http.Error(w, "no session attached to this dashboard", http.StatusServiceUnavailable)
 		return
@@ -82,6 +98,10 @@ func (s *liveServer) handleDashStats(w http.ResponseWriter, r *http.Request) {
 func (s *liveServer) handleDashLogs(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if !s.gateDashboard(w, id) {
+		return
+	}
+	if ds, ok := s.dashSession(id); ok && ds.Handlers.LogQuery != nil {
+		s.serveLogQuery(w, r, ds.Handlers.LogQuery)
 		return
 	}
 	if id != s.analyzer || s.logQueryFn == nil {
@@ -101,8 +121,12 @@ func (s *liveServer) handleDashChat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "AI features are disabled in settings", http.StatusServiceUnavailable)
 		return
 	}
-	// The k8s conversation engine and an analyzer engine share converseFn;
-	// only the dashboard the session belongs to may use it.
+	if ds, ok := s.dashSession(id); ok && ds.Handlers.Converse != nil {
+		s.serveChat(w, r, ds.Handlers.Converse)
+		return
+	}
+	// The k8s conversation engine and a legacy analyzer engine share
+	// converseFn; only the dashboard the session belongs to may use it.
 	if id != s.analyzer && !(id == "k8s" && s.analyzer == "") {
 		http.Error(w, "no session attached to this dashboard", http.StatusServiceUnavailable)
 		return
@@ -118,6 +142,10 @@ func (s *liveServer) handleDashLogAnalyze(w http.ResponseWriter, r *http.Request
 	}
 	if !s.currentSettings().SupportsAI {
 		http.Error(w, "AI features are disabled in settings", http.StatusServiceUnavailable)
+		return
+	}
+	if ds, ok := s.dashSession(id); ok && ds.Handlers.AnalyzeLine != nil {
+		s.serveLogAnalyze(w, r, ds.Handlers.AnalyzeLine)
 		return
 	}
 	if id != s.analyzer && !(id == "k8s" && s.analyzer == "") {

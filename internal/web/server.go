@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/exalm-ai/exalm/internal/changestore"
+	"github.com/exalm-ai/exalm/internal/investigate"
 	"github.com/exalm-ai/exalm/internal/metrics"
 	"github.com/exalm-ai/exalm/internal/settings"
 	"github.com/exalm-ai/exalm/pkg/plugin"
@@ -133,6 +134,22 @@ type ServeOpts struct {
 	// (GET /api/dashboards/incidents/stats). Nil => 503.
 	Incidents func() any
 
+	// Sessions, when non-nil, makes this server a multi-dashboard hub:
+	// analyzer sessions attach at runtime (POST /api/ingest/session) and the
+	// per-dashboard routes resolve against the registry. Nil => legacy
+	// single-dashboard mode.
+	Sessions *SessionRegistry
+	// IngestAuth is the per-run shared secret required in the X-Exalm-Ingest
+	// header. Empty disables the ingest endpoint entirely.
+	IngestAuth string
+	// ProfileLookup resolves an analyzer name to its investigation profile
+	// (closure over the plugin registry, supplied by cmd/exalm).
+	ProfileLookup func(analyzer string) (investigate.Profile, bool)
+	// BuildSessionHandlers constructs the per-session closures (chat, line
+	// analysis, log query) for an ingested session. Supplied by cmd/exalm,
+	// which owns the LLM client, redactor, and stores.
+	BuildSessionHandlers func(session *investigate.LogSession, profile investigate.Profile) (SessionHandlers, error)
+
 	// Metrics, when non-nil, supplies metric series for chart tooltips and
 	// drill-down. Nil => /api/metrics returns an empty series set.
 	Metrics metrics.Provider
@@ -183,9 +200,12 @@ func RequireToken(h http.Handler, token string, publicPaths ...string) http.Hand
 }
 
 // requireToken is the dashboard-specific wrapper: /healthz and /metrics are
-// always public so Kubernetes probes and Prometheus scraping work without auth.
+// always public so Kubernetes probes and Prometheus scraping work without
+// auth, and /api/ingest/session carries its own stronger gate (loopback-only
+// + per-run shared secret from 0600 hub.json) so analyzer --open runs can
+// attach without knowing the dashboard token.
 func requireToken(h http.Handler, token string) http.Handler {
-	return RequireToken(h, token, "/healthz", "/metrics")
+	return RequireToken(h, token, "/healthz", "/metrics", "/api/ingest/session")
 }
 
 // requireCSRF returns an HTTP middleware that rejects mutating requests (POST,
@@ -284,6 +304,11 @@ type liveServer struct {
 	settings        *settings.Store
 	dashboards      []DashboardDesc
 	incidentsFn     func() any
+	sessions        *SessionRegistry
+	ingestAuth      string
+	profileLookupFn func(analyzer string) (investigate.Profile, bool)
+	buildHandlersFn func(session *investigate.LogSession, profile investigate.Profile) (SessionHandlers, error)
+	port            int
 	metrics         metrics.Provider
 	provider        string
 	autoRefresh     bool // true when a live refresh source (ReportUpdates or RefreshFindings) is wired
@@ -364,6 +389,11 @@ func Serve(ctx context.Context, report plugin.Report, opts ServeOpts) error {
 		settings:        opts.Settings,
 		dashboards:      opts.Dashboards,
 		incidentsFn:     opts.Incidents,
+		sessions:        opts.Sessions,
+		ingestAuth:      opts.IngestAuth,
+		profileLookupFn: opts.ProfileLookup,
+		buildHandlersFn: opts.BuildSessionHandlers,
+		port:            opts.Port,
 		metrics:         opts.Metrics,
 		provider:        opts.Provider,
 		autoRefresh:     opts.ReportUpdates != nil || opts.RefreshFindings != nil,
@@ -391,6 +421,7 @@ func Serve(ctx context.Context, report plugin.Report, opts ServeOpts) error {
 	mux.HandleFunc("GET /api/dashboards/{id}/logs", srv.handleDashLogs)
 	mux.HandleFunc("POST /api/dashboards/{id}/chat", srv.handleDashChat)
 	mux.HandleFunc("POST /api/dashboards/{id}/logs/analyze", srv.handleDashLogAnalyze)
+	mux.HandleFunc("/api/ingest/session", srv.handleIngestSession)
 	mux.HandleFunc("/api/metrics", srv.handleMetricsJSON)
 	mux.HandleFunc("/api/chat", srv.handleChat)
 	mux.HandleFunc("/api/chat/", srv.handleGetConversation)
@@ -811,11 +842,17 @@ func toInvestigationResp(inv *plugin.Investigation) investigationResp {
 // Analysis page). Gated by chatSem because, like investigate, it proxies an
 // LLM request.
 func (s *liveServer) handleChat(w http.ResponseWriter, r *http.Request) {
+	s.serveChat(w, r, s.converseFn)
+}
+
+// serveChat runs one conversation turn through the given converse closure —
+// shared by the legacy /api/chat route and the per-dashboard scoped routes.
+func (s *liveServer) serveChat(w http.ResponseWriter, r *http.Request, converse func(ctx context.Context, req ConverseRequest) (*plugin.Conversation, error)) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if s.converseFn == nil {
+	if converse == nil {
 		http.Error(w, "chat not available", http.StatusServiceUnavailable)
 		return
 	}
@@ -839,7 +876,7 @@ func (s *liveServer) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conv, err := s.converseFn(r.Context(), req)
+	conv, err := converse(r.Context(), req)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
@@ -854,11 +891,17 @@ func (s *liveServer) handleChat(w http.ResponseWriter, r *http.Request) {
 // POST /api/logs/analyze. Shares the chat concurrency gate — it proxies an
 // LLM request of the same class.
 func (s *liveServer) handleLogAnalyze(w http.ResponseWriter, r *http.Request) {
+	s.serveLogAnalyze(w, r, s.logAnalyzeFn)
+}
+
+// serveLogAnalyze runs the one-shot line analysis through the given closure —
+// shared by the legacy route and the per-dashboard scoped routes.
+func (s *liveServer) serveLogAnalyze(w http.ResponseWriter, r *http.Request, analyze func(ctx context.Context, req LogAnalyzeRequest) (string, error)) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if s.logAnalyzeFn == nil {
+	if analyze == nil {
 		http.Error(w, "log analysis not available", http.StatusServiceUnavailable)
 		return
 	}
@@ -879,7 +922,7 @@ func (s *liveServer) handleLogAnalyze(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "too many concurrent analysis requests", http.StatusTooManyRequests)
 		return
 	}
-	analysis, err := s.logAnalyzeFn(r.Context(), req)
+	analysis, err := analyze(r.Context(), req)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
@@ -1455,7 +1498,13 @@ func (s *liveServer) handleFixAll(w http.ResponseWriter, r *http.Request) {
 func (s *liveServer) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	uptime := int64(time.Since(s.startTime).Seconds()) //nolint:gosec // G115: uptime in seconds; truncation is intentional
 	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprintf(w, `{"status":"ok","uptime_seconds":%d}`, uptime) //nolint:errcheck // health response; client disconnect is harmless
+	// "hub":true tells analyzer --open runs this server accepts session
+	// ingest, distinguishing an Exalm hub from any other listener on 7433.
+	hub := ""
+	if s.sessions != nil && s.ingestAuth != "" {
+		hub = `,"hub":true`
+	}
+	fmt.Fprintf(w, `{"status":"ok","uptime_seconds":%d%s}`, uptime, hub) //nolint:errcheck // health response; client disconnect is harmless
 }
 
 // handleMetrics returns Prometheus text format metrics.
@@ -1481,6 +1530,10 @@ func (s *liveServer) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprintf(w, "# TYPE go_goroutines gauge\n")                                                      //nolint:errcheck
 	fmt.Fprintf(w, "go_goroutines %d\n", goroutines)                                                    //nolint:errcheck
 }
+
+// OpenBrowser attempts to open url in the system browser. Best-effort only.
+// Exported for the hub attach flow in cmd/exalm.
+func OpenBrowser(url string) { openBrowser(url) }
 
 // openBrowser attempts to open url in the system browser. Best-effort only.
 func openBrowser(url string) {

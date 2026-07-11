@@ -155,6 +155,19 @@ func runServe(ctx context.Context, root *rootFlags, f *serveCLIFlags) error {
 			Dashboards:  dashboardRegistry(false),
 			Incidents:   incidentsStatsFn(),
 		}
+		// Best-effort LLM for ingested-session chat: without a configured
+		// provider the investigation engine falls back to its deterministic
+		// sectioned replies, so the hub still works fully offline.
+		var hubLLM plugin.LLMClient
+		if c, err := llm.NewFromConfig(cfg); err == nil {
+			hubLLM = c
+		}
+		cleanupHub, err := applyHubServeOpts(&noK8sOpts, hubLLM, redact.New(cfg.OptionalRedactions...))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "exalm serve: hub ingest disabled: %v\n", err) //nolint:errcheck
+		} else {
+			defer cleanupHub()
+		}
 		fmt.Fprintf(os.Stderr, "exalm serve: --no-k8s mode — dashboard starting on http://localhost:%d\n", f.port) //nolint:errcheck // startup info to stderr
 		return web.Serve(ctx, plugin.Report{}, noK8sOpts)
 	}
@@ -240,6 +253,12 @@ func runServe(ctx context.Context, root *rootFlags, f *serveCLIFlags) error {
 		Settings:    settings.NewStore(),
 		Dashboards:  dashboardRegistry(true),
 		Incidents:   incidentsStatsFn(),
+	}
+	// Multi-dashboard hub: analyzer --open runs attach their sessions here.
+	if cleanupHub, err := applyHubServeOpts(&serveOpts, llmClient, redactor); err != nil {
+		fmt.Fprintf(os.Stderr, "exalm serve: hub ingest disabled: %v\n", err) //nolint:errcheck
+	} else {
+		defer cleanupHub()
 	}
 	if k8sCh := k8sPlug.WatchReportCh(); k8sCh != nil {
 		mergedCh := make(chan plugin.Report, 1)

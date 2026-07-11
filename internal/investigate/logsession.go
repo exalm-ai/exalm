@@ -27,16 +27,17 @@ const (
 	MaxSessionBytes  = 64 << 20 // 64 MiB of Raw+Message text
 )
 
-// LogEvent is one normalized log entry, whatever the source format.
+// LogEvent is one normalized log entry, whatever the source format. The
+// json tags define the hub-ingest wire shape (see snapshot.go).
 type LogEvent struct {
-	At       time.Time // zero when the line had no parseable timestamp
-	Severity string    // normalized: emerg|alert|crit|err|warn|notice|info|debug, or 2xx..5xx class, or Information|Warning|Error|Critical
-	Scope    string    // host / vhost / site
-	Unit     string    // systemd unit / route / provider / app pool
-	Code     string    // event ID / HTTP status / exit code
-	Message  string
-	Raw      string // original line (bounded by the parser)
-	Source   int    // index into Sources
+	At       time.Time `json:"at,omitempty"`       // zero when the line had no parseable timestamp
+	Severity string    `json:"severity,omitempty"` // normalized: emerg|alert|crit|err|warn|notice|info|debug, or 2xx..5xx class, or Information|Warning|Error|Critical
+	Scope    string    `json:"scope,omitempty"`    // host / vhost / site
+	Unit     string    `json:"unit,omitempty"`     // systemd unit / route / provider / app pool
+	Code     string    `json:"code,omitempty"`     // event ID / HTTP status / exit code
+	Message  string    `json:"message,omitempty"`
+	Raw      string    `json:"raw,omitempty"` // original line (bounded by the parser)
+	Source   int       `json:"source"`        // index into Sources
 }
 
 // SourceDesc identifies where events came from — a local file OR a remote

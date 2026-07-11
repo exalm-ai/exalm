@@ -15,11 +15,16 @@
   var card = W.card, lbl = W.lbl;
   var timelineChart = W.timelineChart, barList = W.barList, counters = W.counters;
 
+  // currentAnalyzer tracks the analyzer whose page was last rendered — the
+  // payload's own analyzer in legacy mode, or whichever live hub dashboard
+  // render() was called with.
+  var currentAnalyzer = (window.__DASH__ && window.__DASH__.analyzer) || '';
+
   // apiBase resolves the analyzer API root: registry mode routes through the
   // per-dashboard prefix; legacy single-analyzer mode keeps /api/analyzer.
   function apiBase() {
     return (window.__DASH__ && window.__DASH__.dashboards && window.__DASH__.dashboards.length)
-      ? '/api/dashboards/' + encodeURIComponent(window.__DASH__.analyzer)
+      ? '/api/dashboards/' + encodeURIComponent(currentAnalyzer)
       : '/api/analyzer';
   }
 
@@ -170,6 +175,7 @@
   function render(data) {
     var builder = PAGES[data.analyzer];
     if (!builder) return '<div style="color:var(--faint);">No dashboard for analyzer ' + esc(data.analyzer) + '.</div>';
+    currentAnalyzer = data.analyzer;
     var truncNote = '';
     return builder(data.stats || {}) + drillPanelHTML() + truncNote;
   }

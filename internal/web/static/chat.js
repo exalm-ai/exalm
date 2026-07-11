@@ -326,27 +326,50 @@
   // ── Inline chat (embedded in the AI Analysis page) ──
   var inlineSession = null;
 
-  function attach() {
-    var root = document.getElementById('ai-chat-root');
-    if (!root) return; // not on the AI page right now
-    if (!inlineSession) {
-      var dash = (window.__DASH__ || {});
-      var analyzer = dash.analyzer || '';
-      var registry = !!(dash.dashboards && dash.dashboards.length);
-      var nsKey = (E.state && E.state.selectedNs) || 'all';
-      // Analyzer dashboards get their own conversation key + (in registry
-      // mode) the per-dashboard scoped chat route; the k8s workspace keeps
-      // the legacy per-namespace key and /api/chat.
-      var key = analyzer ? 'exalm.chat.' + analyzer : 'exalm.chat.ns.' + nsKey;
-      var chatURL = (analyzer && registry) ? '/api/dashboards/' + encodeURIComponent(analyzer) + '/chat' : '/api/chat';
-      inlineSession = new Session(key, {
+  // inlineContext resolves which conversation the inline chat targets:
+  //   - legacy analyzer page → that analyzer (scoped route in registry mode)
+  //   - hub mode with a live analyzer dashboard selected → that dashboard's
+  //     scoped chat route
+  //   - otherwise → the k8s workspace on the legacy /api/chat route
+  var inlineSessions = {};
+  function inlineContext() {
+    var dash = (window.__DASH__ || {});
+    var registry = !!(dash.dashboards && dash.dashboards.length);
+    var analyzer = dash.analyzer || '';
+    if (!analyzer && registry && E.state && E.state.page === 'dash' && E.state.dash) {
+      analyzer = E.state.dash;
+    }
+    if (analyzer && analyzer !== 'k8s') {
+      return {
+        key: 'exalm.chat.' + analyzer,
+        chatURL: registry ? '/api/dashboards/' + encodeURIComponent(analyzer) + '/chat' : '/api/chat'
+      };
+    }
+    var nsKey = (E.state && E.state.selectedNs) || 'all';
+    return { key: 'exalm.chat.ns.' + nsKey, chatURL: '/api/chat' };
+  }
+
+  function currentInlineSession() {
+    var ctx = inlineContext();
+    var session = inlineSessions[ctx.key];
+    if (!session) {
+      session = new Session(ctx.key, {
         findingId: '',
-        chatURL: chatURL,
+        chatURL: ctx.chatURL,
         getNamespace: function () { return (E.state && E.state.selectedNs && E.state.selectedNs !== 'all') ? E.state.selectedNs : ''; }
       });
-      inlineSession.onChange = paintInline;
-      inlineSession.hydrate();
+      session.onChange = function () { paintInline(); };
+      inlineSessions[ctx.key] = session;
+      session.hydrate();
     }
+    inlineSession = session;
+    return session;
+  }
+
+  function attach() {
+    var root = document.getElementById('ai-chat-root');
+    if (!root) return; // no chat mount on this page
+    currentInlineSession();
     paintInline(root);
     drainPendingAsk();
   }
