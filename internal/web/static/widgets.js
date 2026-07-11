@@ -64,7 +64,7 @@
     return items.map(function (it) {
       var w = Math.max(2, Math.round((it.count / max) * 100));
       var color = colorFor ? colorFor(it.name) : 'var(--accent)';
-      return '<div class="ex-an-drill" data-drill="' + esc(dim + '=' + encodeURIComponent(it.name)) + '" style="display:flex;align-items:center;gap:9px;padding:3px 0;cursor:pointer;">' +
+      return '<div class="ex-an-drill" data-drill="' + esc(dim + '=' + encodeURIComponent(it.name)) + '" title="' + esc(it.name) + '" style="display:flex;align-items:center;gap:9px;padding:3px 0;cursor:pointer;">' +
         '<span style="flex:0 0 34%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;color:var(--body);" title="' + esc(it.name) + '">' + esc(it.name) + '</span>' +
         '<span style="flex:1;height:8px;background:var(--track);border-radius:4px;overflow:hidden;"><span style="display:block;width:' + w + '%;height:100%;background:' + color + ';"></span></span>' +
         '<b style="flex:0 0 40px;text-align:right;font-size:11.5px;color:var(--fg);">' + it.count + '</b></div>';

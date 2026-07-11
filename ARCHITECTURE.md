@@ -217,6 +217,48 @@ credential material.
 
 ---
 
+## Dashboard platform
+
+The web UI is a plugin-registered dashboard platform, not a fixed page set.
+
+**Registry** (`internal/web/dashboards.go`): every dashboard is a `DashboardDesc`
+(id, name, icon, category, AI/timeline/remediation capability flags, widget list).
+Platform built-ins (Kubernetes, DORA, Timeline, Incidents) plus one descriptor per
+log-analyzer plugin, derived from the plugin registry at serve time — adding an analyzer
+plugin adds its dashboard with zero web-layer changes. `GET /api/dashboards` serves the
+list; the SPA builds its navigation from it (a payload without the registry falls back
+to the legacy single-dashboard nav, so `--open` without a hub is unchanged).
+
+**Settings** (`internal/settings`, `~/.exalm/settings.json`): per-dashboard
+enable/disable (+ Enable All) and a global AI-features toggle, persisted atomically and
+edited from the dashboard's Settings page (`GET/PUT /api/settings`). Disabled dashboards
+disappear from navigation and their scoped routes 404; a settings file that disables
+everything degrades to enable-all rather than bricking the UI.
+
+**Scoped routes**: `/api/dashboards/{id}/{stats,logs,chat,logs/analyze}` dispatch per
+dashboard; the pre-platform aliases (`/api/analyzer/*`, `/api/chat`) remain
+byte-compatible.
+
+**Hub** (`internal/web/{sessions,ingest}.go`, `cmd/exalm/serve_hub.go`): `exalm serve`
+hosts every dashboard in one process. It writes a per-run discovery record
+(`~/.exalm/hub.json`, 0600: port + random secret + pid, removed on shutdown); analyzer
+`--open` runs probe `/healthz` for `"hub":true` and POST their parsed corpus as an
+explicit `SessionSnapshot` to `/api/ingest/session`. The ingest endpoint is
+loopback-only, requires the secret in the `X-Exalm-Ingest` header (constant-time
+compare; the custom header doubles as CSRF protection), and caps the body. The hub
+reconstructs a full investigation engine from the plugin registry's profile, so chat,
+drilldown, and stats on ingested sessions run the same deterministic pipeline.
+`RemoteParams.Password` is `json:"-"`, so credentials never cross the wire — ingested
+sessions run **without** remote SSH diagnostics by construction. Any attach failure
+falls back to the analyzer's own local server.
+
+**Frontend** (`internal/web/static/`): `widgets.js` is the single chart library
+(timelines, bar lists, counters, donut, tooltips); every drillable chart opens a menu —
+*Show related logs* (corpus drilldown) or *✦ Investigate* (seeds the AI chat with the
+clicked slice). Chat sessions are keyed per dashboard.
+
+---
+
 ## SSH client
 
 `internal/ssh` provides the SSH transport for all remote log plugins.

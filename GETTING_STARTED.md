@@ -320,18 +320,22 @@ deployment records. All data is redacted before it is sent.
 
 ## Step 9: Web dashboard
 
-The dashboard shows findings, AI investigations, DORA metrics, and a cross-signal
-timeline in a browser.
+`exalm serve` is a multi-dashboard hub: one browser tab for Kubernetes findings, AI
+investigations, DORA metrics, the cross-signal timeline, incidents, and a dashboard
+per log analyzer — navigation builds itself from your enabled plugins.
 
 ```sh
 # Always set a token when running the dashboard
 export EXALM_TOKEN=$(openssl rand -hex 32)
 
-# Run an analysis and start the dashboard
-exalm k8s analyze && exalm serve --token $EXALM_TOKEN
+# Start the hub
+exalm serve --token $EXALM_TOKEN
 ```
 
-Open `http://localhost:7433`.
+Open `http://localhost:7433`. While the hub runs, any analysis started with `--open`
+(Step 6) **attaches** its session to it — the analyzer's dashboard lights up in the
+hub navigation instead of opening a second server. Use the **Settings** page to
+enable/disable dashboards and AI features; choices persist at `~/.exalm/settings.json`.
 
 **Dashboard routes:**
 

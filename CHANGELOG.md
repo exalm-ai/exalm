@@ -10,6 +10,24 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Modular dashboard platform** — the web UI builds itself from a dashboard registry:
+  platform dashboards (Kubernetes, DORA, Timeline, Incidents) plus one per analyzer
+  plugin, grouped navigation, and per-dashboard widgets served by scoped routes
+  (`/api/dashboards/{id}/…`). Legacy routes and the single-analyzer `--open` flow are
+  unchanged.
+- **Dashboard settings** — a read-write Settings page persisted at
+  `~/.exalm/settings.json` (`GET/PUT /api/settings`): enable/disable each dashboard,
+  Enable All, and a global AI-features toggle. Disabled dashboards vanish from
+  navigation and their routes 404.
+- **Multi-dashboard hub** — `exalm serve` hosts every dashboard in one process.
+  Analyzer runs with `--open` attach their parsed session to the running hub
+  (loopback-only ingest guarded by a per-run secret at `~/.exalm/hub.json`) instead of
+  starting a second server; chat, drilldown, and stats on attached sessions run the
+  full investigation pipeline. Ingested sessions never carry SSH credentials, so
+  remote diagnostics are disabled for them by construction.
+- **Unified widget library** — one shared chart library (`widgets.js`) powers every
+  dashboard; each chart offers "Show related logs" and "✦ Investigate" (seeds the AI
+  chat with the clicked slice).
 - **Generic Investigation Framework** (`internal/investigate`) — the AI Operations Copilot
   extracted from the Kubernetes plugin into a reusable engine: deterministic per-turn
   investigation plans (symptom catalog + question intents), collectors with a

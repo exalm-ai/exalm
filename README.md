@@ -219,22 +219,38 @@ that's always the deterministic planner above.
 
 ## Web dashboard
 
+`exalm serve` is a multi-dashboard hub: one process hosts every enabled dashboard —
+Kubernetes findings, DORA, the cross-signal timeline, incidents, and a dashboard per
+log analyzer. Navigation builds itself from the enabled plugins, Grafana-style.
+
 ```sh
-# Start dashboard after an analysis
-exalm k8s analyze && exalm serve --token $EXALM_TOKEN
+# Start the hub
+exalm serve --token $EXALM_TOKEN
+
+# While it runs, any analysis with --open ATTACHES to it instead of
+# starting a second server — its dashboard lights up in the hub nav.
+exalm syslog analyze --host db-01 --open
+exalm httplog analyze --file /var/log/nginx/access.log --open
 ```
 
-Open `http://localhost:7433`. The dashboard includes:
+Open `http://localhost:7433`. The hub includes:
 
-- **Findings view** — severity-filtered findings with remediation steps
-- **AI investigation** — conversational root cause analysis (see above), on every analyzer
+- **Per-analyzer dashboards** — widgets adapted to each source (severity timelines,
+  status codes, top units/URLs/clients, auth/OOM/reboot signals); every chart drills
+  into the matching log lines or seeds an AI investigation
+- **AI investigation** — conversational root cause analysis on every dashboard
+- **Findings view** — severity-filtered k8s findings with remediation steps
 - **DORA dashboard** — four-key metrics with deployment history
 - **Cross-signal timeline** — k8s findings, IaC changes, and incidents on a shared time axis
+- **Settings** — enable/disable dashboards and AI features, persisted at `~/.exalm/settings.json`
 - **`/metrics`** — Prometheus endpoint
 - **`/healthz`** — Kubernetes liveness probe endpoint
 
-The dashboard binds to `localhost` by default. Pass `--token` or set `EXALM_TOKEN` to
-require Bearer token authentication. Do not expose the dashboard without TLS termination.
+Attached sessions never carry SSH credentials — the hub can't run remote diagnostics
+on them (corpus-only investigation); run the analyzer standalone when you want live
+remote checks. The dashboard binds to `localhost` by default. Pass `--token` or set
+`EXALM_TOKEN` to require Bearer token authentication. Do not expose the dashboard
+without TLS termination.
 
 ---
 
