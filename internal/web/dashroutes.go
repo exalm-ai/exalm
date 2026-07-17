@@ -215,11 +215,26 @@ func (s *liveServer) handleIncidentAction(w http.ResponseWriter, r *http.Request
 func (s *liveServer) serveLogQuery(w http.ResponseWriter, r *http.Request, fn func(ctx context.Context, req LogQueryRequest) (LogQueryResponse, error)) {
 	q := r.URL.Query()
 	req := LogQueryRequest{
-		Severity: q.Get("severity"),
-		Unit:     q.Get("unit"),
-		Scope:    q.Get("scope"),
-		Code:     q.Get("code"),
-		Contains: q.Get("contains"),
+		Severity:  q.Get("severity"),
+		Unit:      q.Get("unit"),
+		Scope:     q.Get("scope"),
+		Code:      q.Get("code"),
+		Contains:  q.Get("contains"),
+		AroundIdx: -1,
+	}
+	// around accepts a corpus index (preferred, exact) or an RFC3339
+	// timestamp (fallback when indices were invalidated by a re-ingest).
+	if v := q.Get("around"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			req.AroundIdx = n
+		} else if ts, err := time.Parse(time.RFC3339, v); err == nil {
+			req.AroundTime = ts
+		}
+	}
+	if v := q.Get("context"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			req.Context = n
+		}
 	}
 	if v := q.Get("from"); v != "" {
 		if ts, err := time.Parse(time.RFC3339, v); err == nil {

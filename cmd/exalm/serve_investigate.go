@@ -191,26 +191,46 @@ func buildAnalyzerHandlers(session *investigate.LogSession, engine *investigate.
 			}, llm, red)
 		},
 		LogQuery: func(_ context.Context, req web.LogQueryRequest) (web.LogQueryResponse, error) {
+			// Context mode: surrounding events for one anchor, no filters.
+			if req.Context > 0 {
+				events := session.Around(req.AroundIdx, req.AroundTime, req.Context)
+				return web.LogQueryResponse{
+					Events:    toWireEvents(events),
+					Total:     len(events),
+					Truncated: session.Truncated(),
+				}, nil
+			}
 			events, total := session.Query(investigate.LogQuery{
 				From: req.From, To: req.To,
 				Severity: req.Severity, Unit: req.Unit, Scope: req.Scope,
 				Code: req.Code, Contains: req.Contains,
 				Limit: req.Limit, Offset: req.Offset,
 			})
-			out := web.LogQueryResponse{Total: total, Truncated: session.Truncated()}
-			for _, e := range events {
-				ev := web.LogQueryEvent{
-					Severity: e.Severity, Scope: e.Scope, Unit: e.Unit,
-					Code: e.Code, Message: e.Message, Raw: e.Raw,
-				}
-				if !e.At.IsZero() {
-					ev.At = e.At.UTC().Format(time.RFC3339)
-				}
-				out.Events = append(out.Events, ev)
-			}
-			return out, nil
+			return web.LogQueryResponse{
+				Events:    toWireEvents(events),
+				Total:     total,
+				Truncated: session.Truncated(),
+			}, nil
 		},
 	}
+}
+
+// toWireEvents maps corpus events to the front-end shape, stamping the
+// corpus Index so the UI can anchor follow-up context queries. Shared by
+// the filter and context branches of the LogQuery handler.
+func toWireEvents(events []investigate.LogEvent) []web.LogQueryEvent {
+	out := make([]web.LogQueryEvent, 0, len(events))
+	for _, e := range events {
+		ev := web.LogQueryEvent{
+			Severity: e.Severity, Scope: e.Scope, Unit: e.Unit,
+			Code: e.Code, Message: e.Message, Raw: e.Raw, Idx: e.Index,
+		}
+		if !e.At.IsZero() {
+			ev.At = e.At.UTC().Format(time.RFC3339)
+		}
+		out = append(out, ev)
+	}
+	return out
 }
 
 // applyAnalyzerServeOpts fills the investigation-related ServeOpts for an

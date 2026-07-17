@@ -38,6 +38,10 @@ type LogEvent struct {
 	Message  string    `json:"message,omitempty"`
 	Raw      string    `json:"raw,omitempty"` // original line (bounded by the parser)
 	Source   int       `json:"source"`        // index into Sources
+	// Index is the event's position in the corpus at query time — the anchor
+	// for "show surrounding context" (Around). json-ignored so the hub-ingest
+	// wire shape is untouched; stamped by Query/Around, not by Append.
+	Index int `json:"-"`
 }
 
 // SourceDesc identifies where events came from — a local file OR a remote
@@ -147,7 +151,7 @@ func (s *LogSession) Query(q LogQuery) ([]LogEvent, int) {
 	contains := strings.ToLower(q.Contains)
 	var out []LogEvent
 	total := 0
-	for _, e := range s.events {
+	for i, e := range s.events {
 		if !matchesQuery(e, q, contains) {
 			continue
 		}
@@ -156,10 +160,64 @@ func (s *LogSession) Query(q LogQuery) ([]LogEvent, int) {
 			continue
 		}
 		if len(out) < limit {
+			e.Index = i
 			out = append(out, e)
 		}
 	}
 	return out, total
+}
+
+// maxAroundContext caps the context window each side of the anchor.
+const maxAroundContext = 200
+
+// Around returns up to n events before and n after the anchor (anchor
+// included), in corpus order — the "show surrounding context" primitive
+// behind the log explorer. The anchor is the corpus index idx when idx >= 0;
+// otherwise the first event whose timestamp is >= ts. Returns nil when no
+// anchor resolves (idx out of range and no timestamped event matches).
+//
+// Corpus indices are only stable for the lifetime of one session snapshot:
+// Append's drop-oldest cap and a hub re-ingest (which replaces the whole
+// session) both invalidate previously served indices — the timestamp form
+// is the caller's fallback.
+func (s *LogSession) Around(idx int, ts time.Time, n int) []LogEvent {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if n <= 0 {
+		n = 30
+	}
+	if n > maxAroundContext {
+		n = maxAroundContext
+	}
+	anchor := -1
+	switch {
+	case idx >= 0 && idx < len(s.events):
+		anchor = idx
+	case idx < 0 && !ts.IsZero():
+		for i, e := range s.events {
+			if !e.At.IsZero() && !e.At.Before(ts) {
+				anchor = i
+				break
+			}
+		}
+	}
+	if anchor < 0 {
+		return nil
+	}
+	lo, hi := anchor-n, anchor+n+1
+	if lo < 0 {
+		lo = 0
+	}
+	if hi > len(s.events) {
+		hi = len(s.events)
+	}
+	out := make([]LogEvent, 0, hi-lo)
+	for i := lo; i < hi; i++ {
+		e := s.events[i]
+		e.Index = i
+		out = append(out, e)
+	}
+	return out
 }
 
 func matchesQuery(e LogEvent, q LogQuery, containsLower string) bool {

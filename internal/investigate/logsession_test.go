@@ -50,6 +50,57 @@ func TestLogSession_QueryFiltersAndPagination(t *testing.T) {
 	}
 }
 
+func TestLogSession_QueryStampsCorpusIndex(t *testing.T) {
+	s := sessionFixture()
+	got, _ := s.Query(LogQuery{Scope: "web-01", Offset: 1})
+	if len(got) != 2 || got[0].Index != 1 || got[1].Index != 2 {
+		t.Errorf("indices should be corpus positions, got %+v", got)
+	}
+}
+
+func TestLogSession_Around(t *testing.T) {
+	s := sessionFixture()
+	base := time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC)
+
+	// Index anchor: 1 each side of event 2, anchor included, indices stamped.
+	got := s.Around(2, time.Time{}, 1)
+	if len(got) != 3 || got[0].Index != 1 || got[1].Index != 2 || got[2].Index != 3 {
+		t.Errorf("index anchor: %+v", got)
+	}
+
+	// Window clamps at the corpus edges.
+	got = s.Around(0, time.Time{}, 5)
+	if len(got) != 4 || got[0].Index != 0 {
+		t.Errorf("edge clamp: len=%d %+v", len(got), got)
+	}
+
+	// Time anchor: first event at or after ts.
+	got = s.Around(-1, base.Add(90*time.Second), 1)
+	if len(got) != 3 || got[1].Index != 2 {
+		t.Errorf("time anchor should land on the 12:02 event, got %+v", got)
+	}
+
+	// No anchor: index out of range with zero time.
+	if got = s.Around(99, time.Time{}, 1); got != nil {
+		t.Errorf("out-of-range idx should yield nil, got %+v", got)
+	}
+	// No anchor: time past every event.
+	if got = s.Around(-1, base.Add(time.Hour), 1); got != nil {
+		t.Errorf("future ts should yield nil, got %+v", got)
+	}
+
+	// Untimestamped corpus + time anchor cannot resolve.
+	u := NewLogSession("logs")
+	u.Append(LogEvent{Raw: "a"}, LogEvent{Raw: "b"})
+	if got = u.Around(-1, base, 1); got != nil {
+		t.Errorf("untimestamped corpus with ts anchor should yield nil, got %+v", got)
+	}
+	// …but an index anchor still works there.
+	if got = u.Around(1, time.Time{}, 1); len(got) != 2 || got[1].Index != 1 {
+		t.Errorf("untimestamped corpus with idx anchor: %+v", got)
+	}
+}
+
 func TestLogSession_WindowAndVocabularyAndRange(t *testing.T) {
 	s := sessionFixture()
 	base := time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC)

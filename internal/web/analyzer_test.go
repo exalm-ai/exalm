@@ -70,9 +70,45 @@ func TestHandleAnalyzerLogs(t *testing.T) {
 		got.Limit != 50 || got.Offset != 10 || got.From.IsZero() {
 		t.Errorf("decoded query: %+v", got)
 	}
+	if got.AroundIdx != -1 || got.Context != 0 {
+		t.Errorf("context params must default to unset (idx -1, context 0): %+v", got)
+	}
 	var resp LogQueryResponse
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil || resp.Total != 1 || len(resp.Events) != 1 {
 		t.Errorf("response: %+v err=%v", resp, err)
+	}
+}
+
+func TestServeLogQuery_AroundContextParams(t *testing.T) {
+	srv := newTestServer(plugin.Report{Title: "t"})
+	var got LogQueryRequest
+	srv.logQueryFn = func(_ context.Context, req LogQueryRequest) (LogQueryResponse, error) {
+		got = req
+		return LogQueryResponse{}, nil
+	}
+
+	cases := []struct {
+		name, query string
+		wantIdx     int
+		wantTimeSet bool
+		wantContext int
+	}{
+		{"index anchor", "around=17&context=30", 17, false, 30},
+		{"timestamp anchor", "around=2026-07-08T12:02:00Z&context=5", -1, true, 5},
+		{"garbage anchor ignored", "around=banana&context=5", -1, false, 5},
+		{"negative context ignored", "around=17&context=-2", 17, false, 0},
+		{"context without anchor still parses", "context=10", -1, false, 10},
+	}
+	for _, tc := range cases {
+		rr := httptest.NewRecorder()
+		srv.handleAnalyzerLogs(rr, httptest.NewRequest(http.MethodGet, "/api/analyzer/logs?"+tc.query, nil))
+		if rr.Code != http.StatusOK {
+			t.Fatalf("%s: expected 200, got %d", tc.name, rr.Code)
+		}
+		if got.AroundIdx != tc.wantIdx || got.AroundTime.IsZero() == tc.wantTimeSet || got.Context != tc.wantContext {
+			t.Errorf("%s: decoded %+v (wantIdx=%d wantTimeSet=%v wantContext=%d)",
+				tc.name, got, tc.wantIdx, tc.wantTimeSet, tc.wantContext)
+		}
 	}
 }
 
