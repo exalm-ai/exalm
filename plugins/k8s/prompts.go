@@ -1,5 +1,7 @@
 package k8s
 
+import "github.com/exalm-ai/exalm/internal/investigate"
+
 // systemPrompt steers the LLM toward structured, action-oriented k8s diagnostics.
 //
 // Section headers are UPPERCASE with ## so the renderer can locate and colour
@@ -78,14 +80,6 @@ Rules:
 - Ground every claim in the provided evidence; if evidence is thin, say so and lower the confidence implicitly.
 - Keep the total response under 220 words.`
 
-// conversationPrompt steers the LLM for a multi-turn investigation chat. It
-// generalizes investigationPrompt across many turns: same redact-before-call,
-// same "ground every claim in evidence" discipline, but now also expected to
-// (a) use the conversation history for continuity, (b) ask exactly one
-// clarifying question when the focus resource is ambiguous, (c) always
-// distinguish a temporary mitigation from a root-cause fix when proposing
-// either, and (d) switch to a longer, structured RCA/postmortem template only
-// when the user explicitly asks for one.
 // logLineAnalysisPrompt steers the LLM for single-log-entry analysis (the
 // "✦ Analyze line" action in the log viewer). Same trust rules as every
 // other prompt: the input is redacted before the call, and the model must
@@ -110,37 +104,16 @@ Rules:
 - Never state or imply a Secret's value.
 - Be specific and technical; no filler. Under 450 words.`
 
-const conversationPrompt = `You are a senior site reliability engineer having a conversation with an operator about a Kubernetes cluster.
-You receive the full conversation so far, then the latest QUESTION plus the INVESTIGATION PLAN EXECUTED, labeled EVIDENCE, deterministically-ranked HYPOTHESES, a computed CONFIDENCE score, and any KNOWN FIXES / PREVENTION for it.
-
-Citations — the core discipline:
-- Every factual claim MUST cite the evidence label(s) that support it, inline, like: "the container was OOMKilled [E2] shortly after a deploy [E4]".
-- A claim you cannot back with a label must be explicitly marked "(unverified)".
-- Never invent evidence, labels, pods, logs, events, metrics, or changes not present in the input.
-
-Default mode — concise, conversational SRE answer (most turns):
-Structure the answer with these bold section headers, skipping any that don't apply:
-**Root cause** — the top-ranked hypothesis, cited. State the given confidence score and, briefly, why it is what it is.
-**Alternative hypotheses** — the other ranked hypotheses, one line each, with the evidence for AND against them. Do not re-rank them.
-**Immediate mitigation** — what buys time now (label it clearly as temporary).
-**Root-cause fix** — what actually resolves it.
-**Prevention** — what keeps it from happening again.
-- If the focus resource is ambiguous or unstated, ask exactly ONE clarifying question instead of guessing.
-- Keep it under 300 words.
-
-RCA/postmortem mode — only when the question explicitly asks for an RCA, postmortem, or incident report:
-Use this structure instead, up to 600 words, still citing evidence labels:
-## SUMMARY
-## IMPACT
-## ROOT CAUSE
-## TIMELINE
-## RESOLUTION
-## PREVENTION
-
-Rules:
-- Respect the supplied CONFIDENCE score and HYPOTHESES ranking — explain them, do not replace them with your own.
-- Treat [REDACTED:...] markers as opaque — never speculate about original values.
-- If evidence is thin or a check came back "unavailable", say so plainly rather than filling the gap with a guess.
-- Evidence marked (cached) was collected earlier in this conversation — trust it but note its age if freshness matters to the question.
-- Never state or imply a Secret's value — only its existence, type, or age, exactly as given.
-- A DNS-related answer must be labeled as a heuristic/approximation if the evidence says so; never claim it as a confirmed DNS resolution test.`
+// k8sConversationPrompt steers the LLM for the multi-turn investigation chat.
+// Built from the shared framework skeleton (investigate.ConversationPromptFor)
+// like every other domain, so the citation/scope/redaction/RCA discipline
+// stays framework-owned and identical everywhere — k8s previously hand-rolled
+// this prompt, and the copy silently missed shared-template improvements.
+// Only genuinely k8s-specific rules are appended here. Per-turn answer-mode
+// routing (direct answers for fact-shaped questions, out-of-scope redirects)
+// is handled deterministically by the engine (internal/investigate/
+// questionmode.go), not by prompt wording.
+var k8sConversationPrompt = investigate.ConversationPromptFor(
+	"a senior site reliability engineer having a conversation with an operator about a Kubernetes cluster",
+	`- Never state or imply a Secret's value — only its existence, type, or age, exactly as given.
+- A DNS-related answer must be labeled as a heuristic/approximation if the evidence says so; never claim it as a confirmed DNS resolution test.`)

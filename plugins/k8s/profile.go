@@ -176,7 +176,7 @@ func k8sProfile() investigate.Profile {
 		Prevention:      preventionCatalog,
 		TTLs:            collectorTTL,
 
-		ConversationPrompt: conversationPrompt,
+		ConversationPrompt: k8sConversationPrompt,
 		LogLinePrompt:      logLineAnalysisPrompt,
 
 		ResolveFocus: func(prev, anchorID, message string, f investigate.Facts) string {

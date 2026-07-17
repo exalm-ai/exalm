@@ -36,7 +36,13 @@ type WorkloadDetail struct {
 	StaleGeneration bool     // observedGeneration < generation (controller lagging)
 	HasMemoryLimits bool
 	HasCPULimits    bool
-	Age             string
+	// MemoryLimitDetail/CPULimitDetail carry the actual configured values per
+	// container, e.g. "app=512Mi; sidecar=none" — HasMemoryLimits/HasCPULimits
+	// only say whether a limit exists, not what it's set to, which left the
+	// investigation chat unable to answer "what is the memory limit" questions.
+	MemoryLimitDetail string
+	CPULimitDetail    string
+	Age               string
 }
 
 // OwnerLink is one hop of the ownership chain.
@@ -191,13 +197,20 @@ func cronJobDetail(cj *batchv1.CronJob, red plugin.Redactor) *WorkloadDetail {
 func detailFromPodSpec(kind, name string, spec corev1.PodSpec, red plugin.Redactor) *WorkloadDetail {
 	w := &WorkloadDetail{Kind: kind, Name: name, HasMemoryLimits: true, HasCPULimits: true}
 	var probes []string
+	var memParts, cpuParts []string
 	for _, c := range spec.Containers {
 		w.Images = append(w.Images, redactStr(red, c.Image))
-		if c.Resources.Limits.Memory().IsZero() {
+		if mem := c.Resources.Limits.Memory(); mem.IsZero() {
 			w.HasMemoryLimits = false
+			memParts = append(memParts, c.Name+"=none")
+		} else {
+			memParts = append(memParts, c.Name+"="+mem.String())
 		}
-		if c.Resources.Limits.Cpu().IsZero() {
+		if cpu := c.Resources.Limits.Cpu(); cpu.IsZero() {
 			w.HasCPULimits = false
+			cpuParts = append(cpuParts, c.Name+"=none")
+		} else {
+			cpuParts = append(cpuParts, c.Name+"="+cpu.String())
 		}
 		if c.ReadinessProbe != nil {
 			probes = append(probes, fmt.Sprintf("%s readiness (initialDelay=%ds)", c.Name, c.ReadinessProbe.InitialDelaySeconds))
@@ -206,6 +219,8 @@ func detailFromPodSpec(kind, name string, spec corev1.PodSpec, red plugin.Redact
 			probes = append(probes, fmt.Sprintf("%s liveness (initialDelay=%ds)", c.Name, c.LivenessProbe.InitialDelaySeconds))
 		}
 	}
+	w.MemoryLimitDetail = strings.Join(memParts, "; ")
+	w.CPULimitDetail = strings.Join(cpuParts, "; ")
 	if len(probes) == 0 {
 		w.ProbeSummary = "no readiness or liveness probes configured"
 	} else {
@@ -247,14 +262,35 @@ func gatherOwnerChain(ctx context.Context, cs kubernetes.Interface, red plugin.R
 	})
 	if w := chain.Workload; w != nil {
 		lastEdge := chain.Links[len(chain.Links)-1].Edge
-		evid = append(evid, plugin.EvidenceItem{
-			Kind: "config", Source: strings.ToLower(w.Kind) + "/" + w.Name, Edge: lastEdge,
-			Excerpt: fmt.Sprintf("ready %d/%d · strategy=%s · images=%s · memLimits=%t cpuLimits=%t · probes: %s%s%s",
-				w.Ready, w.Desired, w.Strategy, strings.Join(w.Images, ","), w.HasMemoryLimits, w.HasCPULimits, w.ProbeSummary,
-				map[bool]string{true: " · PAUSED/SUSPENDED", false: ""}[w.Paused],
-				map[bool]string{true: " · controller lagging (stale generation)", false: ""}[w.StaleGeneration]),
-			Anchor: "kubectl describe " + strings.ToLower(w.Kind) + " " + w.Name + " -n " + ns,
-		})
+		src := strings.ToLower(w.Kind) + "/" + w.Name
+		anchor := "kubectl describe " + strings.ToLower(w.Kind) + " " + w.Name + " -n " + ns
+		// One atomic evidence item per fact family (rollout status, resource
+		// limits, probes) instead of one dense compound line: small local
+		// models misread multi-fact excerpts when answering yes/no questions
+		// about a single fact, and atomic items also cite more precisely.
+		evid = append(evid,
+			plugin.EvidenceItem{
+				Kind: "config", Source: src, Edge: lastEdge,
+				Excerpt: fmt.Sprintf("ready %d/%d · strategy=%s · images=%s%s%s",
+					w.Ready, w.Desired, w.Strategy, strings.Join(w.Images, ","),
+					map[bool]string{true: " · PAUSED/SUSPENDED", false: ""}[w.Paused],
+					map[bool]string{true: " · controller lagging (stale generation)", false: ""}[w.StaleGeneration]),
+				Anchor: anchor,
+			},
+			plugin.EvidenceItem{
+				Kind: "config", Source: src, Edge: lastEdge,
+				// memLimits=%t stays verbatim: symptoms.go's confidence and
+				// hypothesis matchers regex-match the "memLimits=false" literal.
+				Excerpt: fmt.Sprintf("resource limits: memLimits=%t cpuLimits=%t · memory limit: %s · cpu limit: %s",
+					w.HasMemoryLimits, w.HasCPULimits, w.MemoryLimitDetail, w.CPULimitDetail),
+				Anchor: anchor,
+			},
+			plugin.EvidenceItem{
+				Kind: "config", Source: src, Edge: lastEdge,
+				Excerpt: "probes: " + w.ProbeSummary,
+				Anchor:  anchor,
+			},
+		)
 		for _, c := range w.Conditions {
 			if strings.Contains(c, "=False") || strings.Contains(c, "Failed") {
 				evid = append(evid, plugin.EvidenceItem{Kind: "event", Source: strings.ToLower(w.Kind) + "/" + w.Name, Edge: lastEdge, Excerpt: "condition: " + c})

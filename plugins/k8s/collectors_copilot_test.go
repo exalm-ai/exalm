@@ -76,6 +76,91 @@ func TestOwnerChainFor_PodToDeployment(t *testing.T) {
 	}
 }
 
+// TestOwnerChainFor_ResourceLimitValues guards against regressing to the
+// booleans-only behavior: the chat couldn't answer "what is the memory
+// limit?" because no evidence path retained the actual resource.Quantity,
+// only whether a limit existed at all. MemoryLimitDetail/CPULimitDetail (and
+// the gatherOwnerChain excerpt built from them) must carry the real values.
+func TestOwnerChainFor_ResourceLimitValues(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "payment-api-7d8-xkp", Namespace: "prod",
+			OwnerReferences: []metav1.OwnerReference{{Kind: "ReplicaSet", Name: "payment-api-7d8", Controller: boolPtr(true)}},
+		},
+	}
+	rs := &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "payment-api-7d8", Namespace: "prod",
+			OwnerReferences: []metav1.OwnerReference{{Kind: "Deployment", Name: "payment-api", Controller: boolPtr(true)}},
+		},
+	}
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "payment-api", Namespace: "prod"},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: int32Ptr(3),
+			Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{
+				{
+					Name: "app", Image: "registry.example.com/payment-api:v2",
+					Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{
+						corev1.ResourceMemory: resource.MustParse("512Mi"),
+						corev1.ResourceCPU:    resource.MustParse("500m"),
+					}},
+				},
+				{Name: "sidecar", Image: "registry.example.com/envoy:v1"},
+			}}},
+		},
+		Status: appsv1.DeploymentStatus{ReadyReplicas: 3},
+	}
+	cs := fake.NewSimpleClientset(pod, rs, dep)
+
+	chain, err := ownerChainFor(context.Background(), cs, nil, "prod", "payment-api-7d8-xkp")
+	if err != nil {
+		t.Fatalf("ownerChainFor: %v", err)
+	}
+	if chain.Workload == nil {
+		t.Fatal("expected workload detail")
+	}
+	// The sidecar container has no limits, so the pod-level booleans are
+	// correctly false (aggregate: any container missing a limit → false) —
+	// that pre-existing semantic is unchanged. What's new is that the actual
+	// per-container values now survive alongside the boolean.
+	if chain.Workload.HasMemoryLimits || chain.Workload.HasCPULimits {
+		t.Errorf("sidecar has no limits, so aggregate booleans should be false: %+v", chain.Workload)
+	}
+	if chain.Workload.MemoryLimitDetail != "app=512Mi; sidecar=none" {
+		t.Errorf("MemoryLimitDetail: got %q", chain.Workload.MemoryLimitDetail)
+	}
+	if chain.Workload.CPULimitDetail != "app=500m; sidecar=none" {
+		t.Errorf("CPULimitDetail: got %q", chain.Workload.CPULimitDetail)
+	}
+
+	_, evid := gatherOwnerChain(context.Background(), cs, nil, "prod", "payment-api-7d8-xkp")
+	var limitsExcerpt string
+	for _, e := range evid {
+		if e.Kind == "config" && strings.Contains(e.Excerpt, "resource limits:") {
+			limitsExcerpt = e.Excerpt
+		}
+	}
+	if limitsExcerpt == "" {
+		t.Fatalf("no atomic resource-limits evidence item, got %+v", evid)
+	}
+	if !strings.Contains(limitsExcerpt, "memLimits=false cpuLimits=false") {
+		t.Errorf("limits item should preserve the boolean substring symptoms.go matches on: %q", limitsExcerpt)
+	}
+	if !strings.Contains(limitsExcerpt, "memory limit: app=512Mi; sidecar=none") || !strings.Contains(limitsExcerpt, "cpu limit: app=500m; sidecar=none") {
+		t.Errorf("limits item should carry actual limit values for the chat to cite: %q", limitsExcerpt)
+	}
+	var probesExcerpt string
+	for _, e := range evid {
+		if strings.HasPrefix(e.Excerpt, "probes: ") {
+			probesExcerpt = e.Excerpt
+		}
+	}
+	if probesExcerpt != "probes: no readiness or liveness probes configured" {
+		t.Errorf("probes should be their own atomic evidence item: %q", probesExcerpt)
+	}
+}
+
 func TestOwnerChainFor_BarePod(t *testing.T) {
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "solo", Namespace: "prod"}}
 	cs := fake.NewSimpleClientset(pod)
