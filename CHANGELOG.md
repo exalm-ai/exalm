@@ -9,7 +9,112 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- **Deterministic answer-mode routing for the investigation chat** (`internal/investigate/questionmode.go`,
+  `internal/investigate/engine.go`) — live testing against phi4-mini:3.8b on a real cluster showed that
+  prompt-level mode instructions alone are not enough: the model kept restating the root-cause template
+  when asked "what is the current memory limit?". Consistent with the engine's deterministic-first design,
+  the question SHAPE is now classified in code (fact-shaped prefixes like "what is/how many/is there…" vs
+  open-ended markers like "why/RCA/investigate"), and fact-shaped questions get a per-turn `ANSWER MODE:
+  direct` directive injected into the enriched turn right next to the QUESTION — with the scope check as
+  step 1 (unrelated questions get a fixed redirect reply; a trailing "if unrelated…" clause was measurably
+  ignored, answered with fabricated citations). Polite phrasings ("Can you tell me…", "please show…")
+  classify like their bare forms; action requests ("can you fix it?") stay on the default path. Also pins
+  conversation-synthesis `Temperature` to 0.2 — previously unset, so Ollama's 0.8 default made the same
+  question flip between direct answers and template restatements across runs — and raises `MaxTokens` to
+  2048, because Ollama counts a reasoning model's thinking trace against the completion budget and
+  qwen-class models were burning all 900 tokens thinking, returning empty content. Verified end-to-end on
+  the live cluster: "what is the current memory limit ?" → "5000Mi [E11]", "what is the best pizza
+  topping?" → scope redirect, open "why is X failing?" → full template, across phi4-mini:3.8b and
+  qwen3.5:4b (qwen also reads yes/no evidence accurately where phi4-mini hallucinates negations —
+  prefer qwen for the chat).
+- **Atomic owner-chain evidence items** (`plugins/k8s/ownerchain.go`) — the workload config evidence was
+  one dense compound line (status + limits + probes + pause flags); small local models misread it on
+  yes/no questions (phi4-mini answered "does not have liveness probes" against evidence that listed them).
+  It is now three atomic items — rollout status, resource limits, probes — which small models read and
+  cite far more accurately. The `memLimits=%t` literal stays verbatim in the limits item for
+  `symptoms.go`'s confidence/hypothesis regexes.
+- **Investigation chat scope discipline, all 7 analyzer domains** (`internal/investigate/prompts.go`,
+  `plugins/k8s/prompts.go`) — generalizes the memory-limit fix below: the chat should be able to
+  answer any question related to the failure, not only the questions its fixed reply template
+  anticipates, and should say so plainly when a question isn't related instead of forcing an
+  answer out of unrelated evidence. `ConversationPromptFor` — the one function that builds the
+  conversation prompt for httplog, syslog, eventlog, iis, logs, and cloudtrail (and any future
+  cloud plugin built the same way) — gained a "Scope discipline" instruction: answer whatever the
+  question actually asks (a value, a related resource, a timeline detail, a connection between
+  two things) directly and concisely with citations, reserving the full root-cause template for
+  genuinely open-ended questions; and when a question has no plausible connection to the focus
+  resource or its evidence, say so and ask what the operator meant rather than stretching
+  unrelated evidence to answer it. Out-of-scope questions get a fixed, copyable redirect reply —
+  the same sentence the per-turn directive uses, because small models follow exact-match cues.
+  k8s previously hand-rolled its conversation prompt (the only domain that did, against the
+  Profile contract's documented guidance) and had silently missed shared-template improvements
+  twice this session; `k8sProfile()` now builds it via `investigate.ConversationPromptFor` like
+  every other domain, keeping only the genuinely k8s-specific rules (Secret values, DNS
+  heuristics) as appended domain rules.
+
+### Fixed
+- **LLM-bound dashboard routes killed at 30s** (`internal/web/server.go`) — the server-wide
+  `WriteTimeout: 30s` (Slowloris protection) also applied to chat, log-line analysis, and deep
+  investigation, killing the connection mid-inference whenever a local model took longer ("empty
+  reply from server"; `docs/deployment.md` used to advise rebuilding with a patched timeout). Those
+  three handlers now extend their own write deadline to 10 minutes via `http.NewResponseController`;
+  the 30s guard still protects every other route.
+- **Fallback banner misdiagnosed a failed LLM call as missing configuration**
+  (`internal/investigate/engine.go`) — when the one LLM call per turn errored or returned empty
+  (reasoning models can burn the whole token budget "thinking"), the deterministic fallback opened
+  with "No LLM is configured". The banner now states the actual reason.
+- **k8s chat couldn't answer "what is the memory limit?"** (`plugins/k8s/ownerchain.go`,
+  `plugins/k8s/prompts.go`) — every collector that touched a container's resource limits
+  (`detailFromPodSpec` in owner-chain, plus the analyzers/quota checks) immediately collapsed
+  the actual `resource.Quantity` to a `HasMemoryLimits`/`HasCPULimits` boolean before it ever
+  reached an evidence item, so no evidence the LLM sees ever contains the configured value —
+  only whether one exists. Asked a narrow factual question the model couldn't answer from
+  evidence, it fell back to repeating the templated root-cause summary instead of saying so.
+  `WorkloadDetail` now also carries `MemoryLimitDetail`/`CPULimitDetail` (actual per-container
+  values, e.g. `app=512Mi; sidecar=none`), appended to the owner-chain evidence excerpt without
+  touching the existing `memLimits=%t cpuLimits=%t` substring that `symptoms.go`'s confidence
+  scoring regexes match on (the answer-side behavior — direct cited answers instead of the
+  template — is the deterministic answer-mode routing described under Changed).
+- **`exalm serve` k8s AI chat** (`cmd/exalm/serve.go`) — the serve path never wired the
+  conversational investigation handlers (`Converse`, `GetConversation`, `AnalyzeLogLine`,
+  `Investigate`, `LogFetch`, `PodInfo`), so the k8s dashboard's chat always answered
+  503 "Chat is unavailable" even with a working LLM and cluster connection. Only the
+  `k8s analyze/watch --open` path had them. `serve` now wires the same closures,
+  including incident history for recurrence matching.
+
 ### Added
+- **Clickable finding summaries** (`internal/web/static/{widgets,dashboard}.js`) — the k8s dashboard's
+  top stat cards (Total findings / Errors / Critical / Warnings) and the severity-distribution donut
+  legend now jump straight to the Log Explorer pre-filtered to that severity, reusing the Explorer's
+  existing filter state instead of adding a parallel mechanism. "Namespaces" stays a plain display —
+  it's a distinct-value count, not a findings bucket, and the namespace bars widget right below it
+  already offers per-namespace drill-through. The Incidents dashboard's Open/Mitigated/Closed/Total
+  tiles now filter the incident list the same way (click again, or click Total, to clear). Fixed a
+  related correctness gap in the shared `counters()` widget along the way: a counter with no real
+  `drill` query (e.g. httplog's "Slow requests", "Top URI count") no longer renders as clickable —
+  previously it silently returned an *unfiltered* "related logs" result if clicked, since the drill
+  menu never checked for an empty query.
+- **AWS CloudTrail plugin** (`plugins/cloudtrail`) — a new investigable log analyzer following the
+  `investigate.Profile` contract exactly (no engine or web-layer changes needed): `exalm cloudtrail
+  analyze` reads newline-delimited CloudTrail records (`jq -c '.Records[]' trail.json` to convert a
+  raw S3 export) and flags root-account usage, access-denied spikes, console-login brute forcing,
+  resource deletions, and IAM privilege-escalation calls. Ships with its own dashboard (event
+  timeline, top event names/principals/source IPs, a signals counter) and a worked example at
+  `examples/cloudtrail/suspicious-activity.ndjson`. Demonstrates the framework's stated design goal
+  for future cloud plugins (Azure, VMware, …): a `Profile` is all a new domain needs to supply.
+- **Widget data-source extension** (`plugins/httplog`) — a new `topUserAgents` widget surfaces the
+  user-agent strings the parser already captured but never exposed, re-derived from the raw log
+  line at stats-build time (the same pattern `TopClients` already used). Distinguishes health-check
+  and bot traffic from real users; drills straight to the matching log lines.
+- **Incidents dashboard v2** (`internal/web/dashroutes.go`, `internal/web/static/dashboard.js`) —
+  the Incidents dashboard grows from read-only to a working lifecycle workspace: open new
+  incidents (title, severity, namespace, service) and close/reopen existing ones directly
+  from the UI via `POST /api/dashboards/incidents/action`, backed by shared validation logic
+  (`plugins/incident/actions.go`) now used by both the CLI and the web layer. Each incident
+  also gets cross-links to every currently-attached analyzer dashboard so an operator can jump
+  straight from an incident record to the log data behind it. Incident records gained
+  `namespace`/`service` scope fields (`exalm incident open --namespace --service`).
 - **Modular dashboard platform** — the web UI builds itself from a dashboard registry:
   platform dashboards (Kubernetes, DORA, Timeline, Incidents) plus one per analyzer
   plugin, grouped navigation, and per-dashboard widgets served by scoped routes

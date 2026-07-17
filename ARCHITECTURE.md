@@ -181,22 +181,33 @@ construct either. This is the architectural guarantee that all LLM calls pass th
 ## Investigation framework
 
 `internal/investigate` is the generic AI investigation engine shared by every analyzer
-(Kubernetes is the reference implementation; syslog, httplog, eventlog, iis, and logs plug in
-the same way). Each conversation turn runs one deterministic pipeline:
+(Kubernetes is the reference implementation; syslog, httplog, eventlog, iis, logs, and cloudtrail
+plug in the same way). Each conversation turn runs one deterministic pipeline:
 
 ```
 focus resolution → intent classification (regex) → symptom-driven plan
 → collector execution (per-conversation cache, E1..En citation labels)
 → hypothesis ranking → evidence-quality confidence → prevention
-→ ONE redacted LLM call → persisted transcript (convo store)
+→ answer-mode routing (fact-shaped vs open-ended question, in code)
+→ ONE redacted LLM call (temperature pinned) → persisted transcript (convo store)
 ```
+
+Answer-mode routing (`questionmode.go`) is deterministic like the rest of the pipeline:
+fact-shaped questions ("what is the memory limit?", "is there…", "how many…") get a per-turn
+`ANSWER MODE: direct` directive injected next to the question — scope check first (unrelated
+questions get a fixed redirect), then a cited 1-3 sentence answer with the reply template
+suppressed. Open-ended questions ("why is X failing?") keep the full sectioned answer. The
+directive lives in the enriched turn rather than the system prompt because small local models
+follow adjacent instructions but ignore distant mode descriptions once the conversation history
+is full of template-shaped replies (verified live against phi4-mini:3.8b).
 
 A domain supplies a `Profile`: its symptom catalog (what an experienced operator checks first
 per failure mode, with candidate causes), resource-graph edges, question-intent patterns,
 collectors, confidence rules, prevention catalog, cache TTLs, and prompt wording (built from
 shared skeletons that keep the citation/redaction/RCA discipline identical everywhere). The
-engine owns everything else. Adding a future analyzer (AWS, PostgreSQL, Docker, …) means
-writing a Profile — no engine, web, or UI code.
+engine owns everything else. Adding a future analyzer (Azure, VMware, PostgreSQL, Docker, …) means
+writing a Profile — no engine, web, or UI code. `plugins/cloudtrail` is the second worked example
+after Kubernetes, built entirely from `Profile` fields with zero engine changes.
 
 **Trust model, enforced in the engine:** exactly one redacted `llm.Complete()` per turn; the
 LLM never chooses collectors or commands (plans come solely from the symptom/intent tables);

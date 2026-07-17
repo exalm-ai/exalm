@@ -119,6 +119,7 @@ kubectl logs -l app=api --since=1h | exalm logs summarize
 | Command | What it does |
 |---|---|
 | `exalm aws cost` | AWS Cost Explorer anomaly detection and spend analysis |
+| `exalm cloudtrail analyze` | AWS CloudTrail activity — root usage, denials, deletions, privilege escalation |
 | `exalm tf review` | Terraform plan JSON security and risk analysis |
 | `exalm webhook terraform` | Receive Terraform Cloud apply webhooks → auto-populate DORA |
 
