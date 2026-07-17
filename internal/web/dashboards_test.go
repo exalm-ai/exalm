@@ -36,6 +36,33 @@ func TestAnalyzerDashboards_SortedAndKnownOnly(t *testing.T) {
 	}
 }
 
+func TestSupportsExplorer_PerDashboard(t *testing.T) {
+	want := map[string]bool{
+		"k8s": true, "dora": false, "timeline": false, "incidents": false,
+		"httplog": true, "syslog": true,
+	}
+	for _, d := range testRegistry() {
+		if d.SupportsExplorer != want[d.ID] {
+			t.Errorf("%s: SupportsExplorer=%v, want %v", d.ID, d.SupportsExplorer, want[d.ID])
+		}
+	}
+
+	// The flag must survive the JSON contract: present for explorer-capable
+	// dashboards, omitted (falsy in JS) for the rest.
+	s := &liveServer{dashboards: testRegistry()}
+	rec := httptest.NewRecorder()
+	s.handleDashboardsJSON(rec, httptest.NewRequest("GET", "/api/dashboards", nil))
+	var resp struct{ Dashboards []DashboardDesc }
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range resp.Dashboards {
+		if d.SupportsExplorer != want[d.ID] {
+			t.Errorf("after JSON round-trip, %s: SupportsExplorer=%v, want %v", d.ID, d.SupportsExplorer, want[d.ID])
+		}
+	}
+}
+
 func TestHandleDashboardsJSON_SettingsFiltering(t *testing.T) {
 	settings.SettingsDir = t.TempDir()
 	t.Cleanup(func() { settings.SettingsDir = "" })

@@ -40,6 +40,11 @@ type DashboardDesc struct {
 	SupportsAI          bool   `json:"supportsAI"`
 	SupportsTimeline    bool   `json:"supportsTimeline"`
 	SupportsRemediation bool   `json:"supportsRemediation"`
+	// SupportsExplorer reports whether the dashboard has a log/finding
+	// explorer surface: the k8s findings explorer, or the shared corpus
+	// log explorer for analyzer dashboards. Unlike SupportsAI it is not
+	// zeroed by settings — it is a data view, not an AI feature.
+	SupportsExplorer bool `json:"supportsExplorer,omitempty"`
 	// Standalone dashboards render as navigation links to their own page
 	// (/dora, /timeline) instead of an in-SPA view.
 	Standalone bool `json:"standalone,omitempty"`
@@ -57,7 +62,8 @@ func builtinDashboards(hasK8s bool) []DashboardDesc {
 			ID: "k8s", Name: "Kubernetes", Icon: "dashboard", Category: "platform",
 			Description: "Cluster findings, health, and AI investigation",
 			SupportsAI:  true, SupportsTimeline: true, SupportsRemediation: true,
-			Live: true,
+			SupportsExplorer: true,
+			Live:             true,
 		})
 	}
 	out = append(out,
@@ -144,7 +150,7 @@ func analyzerDashboard(id string) (DashboardDesc, bool) {
 	return DashboardDesc{
 		ID: id, Name: meta[0], Icon: "explorer", Category: "analyzer",
 		Description: meta[1],
-		SupportsAI:  true, SupportsTimeline: true,
+		SupportsAI:  true, SupportsTimeline: true, SupportsExplorer: true,
 		Widgets: widgets,
 	}, true
 }

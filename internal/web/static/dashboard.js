@@ -397,10 +397,17 @@
         return navBtn(active, 'nav-dash', 'data-dash="' + esc(d.id) + '"', d.icon, d.name, !d.live);
       }).join('');
     });
-    var util = [['explorer', 'Log Explorer'], ['ai', 'AI Analysis'], ['alerts', 'Alerts'], ['settings', 'Settings']];
     // Explorer / AI / Alerts read the k8s findings payload; hide them when
-    // the k8s dashboard isn't in the registry (e.g. serve --no-k8s).
-    if (!dashById('k8s')) util = [['settings', 'Settings']];
+    // the k8s dashboard isn't in the registry (e.g. serve --no-k8s). The
+    // Explorer entry is additionally capability-gated on the registry's
+    // supportsExplorer flag rather than assumed.
+    var k8sDash = dashById('k8s');
+    var util = [['settings', 'Settings']];
+    if (k8sDash) {
+      util = [];
+      if (k8sDash.supportsExplorer) util.push(['explorer', 'Log Explorer']);
+      util.push(['ai', 'AI Analysis'], ['alerts', 'Alerts'], ['settings', 'Settings']);
+    }
     html += navGroupLabel('Workspace');
     html += util.map(function (it) {
       return navBtn(state.page === it[0], 'nav', 'data-page="' + it[0] + '"', it[0], it[1], false);
