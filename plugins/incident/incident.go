@@ -74,37 +74,29 @@ func (p *Plugin) Subcommands() []plugin.Subcommand {
 	}
 }
 
-// open creates a new incident record from --title and optional --severity flags.
+// open creates a new incident record from --title and the optional
+// --severity, --namespace, --service, and --from-deploy flags.
 func (p *Plugin) open(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) {
-	title := strings.TrimSpace(args.Flags["title"])
-	if title == "" {
-		return plugin.Report{}, fmt.Errorf("incident open: --title is required")
-	}
-
-	severity := plugin.Severity(strings.TrimSpace(args.Flags["severity"]))
-	if severity == "" {
-		severity = plugin.SeverityMedium
-	}
-
-	relatedDeploy := strings.TrimSpace(args.Flags["from-deploy"])
-
-	now := time.Now().UTC()
-	inc := Incident{
-		ID:                  newIncidentID(now),
-		Title:               title,
-		Status:              IncidentOpen,
-		Severity:            severity,
-		OpenedAt:            now,
-		RelatedDeploymentID: relatedDeploy,
-	}
-
-	if err := p.store.Create(ctx, inc); err != nil {
+	inc, err := Open(ctx, p.store, OpenRequest{
+		Title:               args.Flags["title"],
+		Severity:            plugin.Severity(strings.TrimSpace(args.Flags["severity"])),
+		Namespace:           args.Flags["namespace"],
+		Service:             args.Flags["service"],
+		RelatedDeploymentID: args.Flags["from-deploy"],
+	})
+	if err != nil {
 		return plugin.Report{}, fmt.Errorf("incident open: %w", err)
 	}
 
 	detail := fmt.Sprintf("ID: %s | Status: %s | Severity: %s | Opened: %s", inc.ID, inc.Status, inc.Severity, inc.OpenedAt.Format(time.RFC3339))
-	if relatedDeploy != "" {
-		detail += " | Deploy: " + relatedDeploy
+	if inc.Service != "" {
+		detail += " | Service: " + inc.Service
+	}
+	if inc.Namespace != "" {
+		detail += " | Namespace: " + inc.Namespace
+	}
+	if inc.RelatedDeploymentID != "" {
+		detail += " | Deploy: " + inc.RelatedDeploymentID
 	}
 
 	return plugin.Report{
@@ -112,7 +104,7 @@ func (p *Plugin) open(ctx context.Context, args plugin.RunArgs) (plugin.Report, 
 		Summary: fmt.Sprintf("Incident %s opened", inc.ID),
 		Findings: []plugin.Finding{
 			{
-				Severity: severity,
+				Severity: inc.Severity,
 				Category: "Incident",
 				Title:    inc.Title,
 				Detail:   detail,
@@ -180,20 +172,12 @@ func (p *Plugin) close(ctx context.Context, args plugin.RunArgs) (plugin.Report,
 		return plugin.Report{}, fmt.Errorf("incident close: --incident-id is required")
 	}
 
-	inc, err := p.store.Get(ctx, id)
+	inc, err := Close(ctx, p.store, id)
 	if err != nil {
 		return plugin.Report{}, fmt.Errorf("incident close: %w", err)
 	}
 
-	now := time.Now().UTC()
-	inc.Status = IncidentClosed
-	inc.ClosedAt = &now
-
-	if err := p.store.Update(ctx, inc); err != nil {
-		return plugin.Report{}, fmt.Errorf("incident close: %w", err)
-	}
-
-	mttr := now.Sub(inc.OpenedAt)
+	mttr := inc.ClosedAt.Sub(inc.OpenedAt)
 	return plugin.Report{
 		Title:   "Incident closed",
 		Summary: fmt.Sprintf("Incident %s closed. MTTR: %s", inc.ID, formatDuration(mttr)),
@@ -202,7 +186,7 @@ func (p *Plugin) close(ctx context.Context, args plugin.RunArgs) (plugin.Report,
 				Severity: plugin.SeverityInfo,
 				Category: "Incident",
 				Title:    fmt.Sprintf("%s resolved", inc.ID),
-				Detail:   fmt.Sprintf("Closed at %s. MTTR: %s.", now.Format(time.RFC3339), formatDuration(mttr)),
+				Detail:   fmt.Sprintf("Closed at %s. MTTR: %s.", inc.ClosedAt.Format(time.RFC3339), formatDuration(mttr)),
 			},
 		},
 	}, nil
