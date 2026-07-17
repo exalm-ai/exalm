@@ -231,6 +231,13 @@ func buildLLMMessages(conv plugin.Conversation, tc turnContext) []plugin.Message
 func buildEnrichedTurn(tc turnContext) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "QUESTION: %s\n", tc.Question)
+	// Deterministic answer-mode routing (questionmode.go): fact-shaped
+	// questions get a per-turn directive here, next to the question, because
+	// small local models ignore the equivalent mode description in the
+	// system prompt once the history is full of template-shaped replies.
+	if d := answerModeDirective(tc.Question); d != "" {
+		b.WriteString(d)
+	}
 	if tc.Focus != "" {
 		fmt.Fprintf(&b, "FOCUS RESOURCE: %s\n", tc.Focus)
 	}
@@ -307,7 +314,7 @@ func buildEnrichedTurn(tc turnContext) string {
 // call fails.
 func (e *Engine) synthesizeReply(ctx context.Context, messages []plugin.Message, tc turnContext, llm plugin.LLMClient, red plugin.Redactor) string {
 	if llm == nil {
-		return deterministicReply(tc)
+		return deterministicReply(tc, "No LLM is configured")
 	}
 	redacted := make([]plugin.Message, len(messages))
 	for i, m := range messages {
@@ -317,9 +324,18 @@ func (e *Engine) synthesizeReply(ctx context.Context, messages []plugin.Message,
 		}
 		redacted[i] = plugin.Message{Role: m.Role, Content: content}
 	}
-	resp, err := llm.Complete(ctx, plugin.CompleteRequest{System: e.profile.ConversationPrompt, MaxTokens: 900, Messages: redacted})
+	// Temperature pinned low: this call narrates deterministic findings, and
+	// leaving it unset means provider defaults (Ollama: 0.8) — high enough
+	// that small local models drift back into the reply template on some runs
+	// and not others for the same question. MaxTokens 2048 (not the answer's
+	// ~900-token ceiling) because Ollama counts a reasoning model's thinking
+	// trace against the same budget — qwen-class models were burning all 900
+	// on thinking and returning empty content, which reads as a failed call.
+	resp, err := llm.Complete(ctx, plugin.CompleteRequest{System: e.profile.ConversationPrompt, MaxTokens: 2048, Temperature: 0.2, Messages: redacted})
 	if err != nil || strings.TrimSpace(resp.Content) == "" {
-		return deterministicReply(tc)
+		// Reasoning models can burn the whole token budget "thinking" and
+		// return empty content; the banner must not claim no LLM exists.
+		return deterministicReply(tc, "The LLM call failed or returned an empty reply")
 	}
 	return strings.TrimSpace(resp.Content)
 }
@@ -327,13 +343,15 @@ func (e *Engine) synthesizeReply(ctx context.Context, messages []plugin.Message,
 // deterministicReply is the no-LLM fallback: it renders the same sections
 // the LLM would — root cause from the top hypothesis, alternatives, fixes,
 // prevention — from the deterministic engines alone, so the copilot degrades
-// honestly instead of going silent.
-func deterministicReply(tc turnContext) string {
+// honestly instead of going silent. reason states WHY the fallback ran ("No
+// LLM is configured" vs a failed call) so the banner never misdiagnoses a
+// working-but-flaky provider as missing configuration.
+func deterministicReply(tc turnContext, reason string) string {
 	if len(tc.Evidence) == 0 && len(tc.Hypotheses) == 0 {
 		return "No information available yet — ask about a specific resource, or run an analysis first so the copilot has data to investigate."
 	}
 	var b strings.Builder
-	b.WriteString("_No LLM is configured — this summary is assembled deterministically from the gathered evidence._\n\n")
+	b.WriteString("_" + reason + " — this summary is assembled deterministically from the gathered evidence._\n\n")
 	if len(tc.Hypotheses) > 0 {
 		top := tc.Hypotheses[0]
 		fmt.Fprintf(&b, "**Root cause** (most likely): %s %s", top.Title, citationList(top.EvidenceFor))

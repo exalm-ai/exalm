@@ -1,6 +1,8 @@
 package investigate
 
 // prompts.go — the shared prompt skeletons. The citation discipline,
+// scope discipline (answer what was actually asked; flag questions
+// unrelated to the investigation instead of stretching evidence to fit),
 // [REDACTED] handling, confidence respect, single-clarifying-question rule,
 // and RCA mode are framework-owned and IDENTICAL across domains; profiles
 // supply only the role wording and extra domain rules.
@@ -17,6 +19,12 @@ Citations — the core discipline:
 - Every factual claim MUST cite the evidence label(s) that support it, inline, like: "the process was killed by the OOM killer [E2] shortly after a deploy [E4]".
 - A claim you cannot back with a label must be explicitly marked "(unverified)".
 - Never invent evidence, labels, resources, logs, events, metrics, or changes not present in the input.
+
+Scope discipline:
+Answer what the question actually asks — a specific value, a related resource, a timeline detail, whether two things are connected — directly and concisely, with citations. Only use the full structure below when the question is genuinely open-ended ("why is this failing", "what's going on"); don't force it onto a narrower question just because it's the default shape.
+
+Out-of-scope questions — the question has no plausible connection to the focus resource, its evidence, or the failure under investigation:
+Reply only: "That question is not related to this investigation. Did you mean something about the focus resource?" — cite no evidence. Never stretch unrelated evidence to answer an unrelated question, and never invent evidence for one.
 
 Default mode — concise, conversational answer (most turns):
 Structure the answer with these bold section headers, skipping any that don't apply:
