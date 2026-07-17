@@ -25,7 +25,7 @@ func openTestDB(t *testing.T) *sql.DB {
 
 func TestOpen_CreatesAllTables(t *testing.T) {
 	db := openTestDB(t)
-	for _, tbl := range []string{"deployments", "incidents", "schema_migrations"} {
+	for _, tbl := range []string{"deployments", "incidents", "settings", "schema_migrations"} {
 		var count int
 		row := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, tbl)
 		if err := row.Scan(&count); err != nil || count != 1 {
@@ -216,5 +216,71 @@ func TestMigrateIncidents_Idempotent(t *testing.T) {
 	}
 	if n2 != 0 {
 		t.Errorf("second migration should import 0 (already done), got %d", n2)
+	}
+}
+
+// ─── settings migration tests ────────────────────────────────────────────────
+
+func TestMigrateSettings_MissingFile(t *testing.T) {
+	db := openTestDB(t)
+	ok, err := store.MigrateSettings(db, filepath.Join(t.TempDir(), "no-such.json"))
+	if err != nil {
+		t.Fatalf("missing file should not error: %v", err)
+	}
+	if ok {
+		t.Error("nothing to import, expected false")
+	}
+}
+
+func TestMigrateSettings_ValidFileImportedOnce(t *testing.T) {
+	doc := `{"dashboards":{"enableAll":false,"enabled":{"dora":false}},"supportsAI":true,"version":1}`
+	path := filepath.Join(t.TempDir(), "settings.json")
+	os.WriteFile(path, []byte(doc), 0o600) //nolint:errcheck
+
+	db := openTestDB(t)
+	ok, err := store.MigrateSettings(db, path)
+	if err != nil || !ok {
+		t.Fatalf("MigrateSettings: ok=%v err=%v", ok, err)
+	}
+	var data string
+	if err := db.QueryRow(`SELECT data FROM settings WHERE id = 1`).Scan(&data); err != nil {
+		t.Fatalf("settings row: %v", err)
+	}
+	if data != doc {
+		t.Errorf("row should hold the file verbatim:\n got %q\nwant %q", data, doc)
+	}
+
+	// Second run must be a no-op even though the file still exists.
+	ok2, err := store.MigrateSettings(db, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok2 {
+		t.Error("second migration should be a no-op")
+	}
+}
+
+func TestMigrateSettings_CorruptRecordedNotRetried(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	os.WriteFile(path, []byte(`{not json`), 0o600) //nolint:errcheck
+
+	db := openTestDB(t)
+	ok, err := store.MigrateSettings(db, path)
+	if err != nil {
+		t.Fatalf("corrupt file should not error: %v", err)
+	}
+	if ok {
+		t.Error("corrupt file must not import")
+	}
+	var rows int
+	db.QueryRow(`SELECT COUNT(*) FROM settings`).Scan(&rows) //nolint:errcheck
+	if rows != 0 {
+		t.Errorf("no row expected for corrupt file, got %d", rows)
+	}
+	// The migration is recorded regardless, so it never retries.
+	var recorded int
+	db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE name = 'settings_json_v1'`).Scan(&recorded) //nolint:errcheck
+	if recorded != 1 {
+		t.Errorf("corrupt migration must still be recorded, got %d", recorded)
 	}
 }

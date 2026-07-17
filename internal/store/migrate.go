@@ -169,6 +169,57 @@ func MigrateIncidents(db *sql.DB, incidentDir string) (int, error) {
 	return imported, nil
 }
 
+// maxSettingsFileBytes caps the settings.json read during migration — the
+// document is a small preference map; anything bigger is not ours to import.
+const maxSettingsFileBytes = 64 << 10 // 64 KB
+
+// MigrateSettings imports the legacy ~/.exalm/settings.json document into the
+// settings table. Runs once (key "settings_json_v1"); a missing file is not
+// an error, and a corrupt or oversized file is skipped but still recorded as
+// migrated — otherwise it would retry forever on every start. The file is
+// left in place (matches MigrateDeployments). Returns whether a document was
+// imported.
+func MigrateSettings(db *sql.DB, jsonPath string) (bool, error) {
+	const key = "settings_json_v1"
+	migrated, err := alreadyMigrated(db, key)
+	if err != nil || migrated {
+		return false, err
+	}
+
+	f, err := os.Open(jsonPath) //nolint:gosec // G304: path is an internal data file, not user-controlled
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("migrate settings: open %s: %w", jsonPath, err)
+	}
+	data, readErr := io.ReadAll(io.LimitReader(f, maxSettingsFileBytes))
+	f.Close() //nolint:errcheck
+
+	tx, err := db.Begin()
+	if err != nil {
+		return false, fmt.Errorf("migrate settings: begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	imported := false
+	// Store the raw document verbatim — internal/store stays dependency-free
+	// of internal/settings, exactly like the other migrations.
+	if readErr == nil && json.Valid(data) {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO settings(id,data) VALUES(1,?)`, string(data)); err == nil {
+			imported = true
+		}
+	}
+
+	if err := recordMigration(tx, key); err != nil {
+		return imported, err
+	}
+	if err := tx.Commit(); err != nil {
+		return imported, fmt.Errorf("migrate settings: commit: %w", err)
+	}
+	return imported, nil
+}
+
 // alreadyMigrated reports whether the named migration has already been applied.
 // Returns (false, err) if the check itself fails so the caller can decide
 // whether to proceed or abort.

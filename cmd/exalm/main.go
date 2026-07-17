@@ -30,6 +30,7 @@ import (
 	"github.com/exalm-ai/exalm/internal/preflight"
 	"github.com/exalm-ai/exalm/internal/redact"
 	"github.com/exalm-ai/exalm/internal/registry"
+	settingspkg "github.com/exalm-ai/exalm/internal/settings"
 	exalmstore "github.com/exalm-ai/exalm/internal/store"
 	"github.com/exalm-ai/exalm/internal/version"
 	"github.com/exalm-ai/exalm/internal/web"
@@ -95,6 +96,7 @@ func initStore() *sql.DB {
 	doraplugin.SetDeployDB(db)
 	incidentplugin.SetIncidentDB(db)
 	convopkg.SetConvoDB(db)
+	settingspkg.SetSettingsDB(db)
 	globalDB = db
 
 	// Best-effort one-time migration from legacy file stores.
@@ -103,6 +105,7 @@ func initStore() *sql.DB {
 	if err == nil {
 		exalmstore.MigrateDeployments(db, filepath.Join(home, ".exalm", "deployments.jsonl")) //nolint:errcheck
 		exalmstore.MigrateIncidents(db, filepath.Join(home, ".exalm", "incidents"))           //nolint:errcheck
+		exalmstore.MigrateSettings(db, filepath.Join(home, ".exalm", "settings.json"))        //nolint:errcheck
 	}
 	return db
 }

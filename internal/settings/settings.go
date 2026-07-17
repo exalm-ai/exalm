@@ -94,9 +94,13 @@ func path() (string, error) {
 
 // Get loads the persisted settings. A missing file returns Default() with
 // no error; a corrupt file returns an error (never a half-parsed document).
+// When SetSettingsDB was called, SQLite is the backend instead of the file.
 func (st *Store) Get() (Settings, error) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
+	if db := settingsDB.Load(); db != nil {
+		return sqliteGet(db)
+	}
 	p, err := path()
 	if err != nil {
 		return Settings{}, err
@@ -119,9 +123,13 @@ func (st *Store) Get() (Settings, error) {
 }
 
 // Put persists the settings atomically (temp file + rename).
+// When SetSettingsDB was called, SQLite is the backend instead of the file.
 func (st *Store) Put(s Settings) error {
 	st.mu.Lock()
 	defer st.mu.Unlock()
+	if db := settingsDB.Load(); db != nil {
+		return sqlitePut(db, s)
+	}
 	dir, err := baseDir()
 	if err != nil {
 		return err

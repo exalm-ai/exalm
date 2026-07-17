@@ -105,6 +105,15 @@ func applySchema(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_convo_finding ON conversations(finding_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_convo_updated ON conversations(updated_at)`,
 
+		// Settings: the single user-preference document (dashboard visibility,
+		// AI toggle). One row, whole-document JSON in 'data' — the API contract
+		// is whole-doc GET/PUT, so a key/value split would add nothing.
+		`CREATE TABLE IF NOT EXISTS settings (
+			id         INTEGER PRIMARY KEY CHECK (id = 1),
+			data       TEXT NOT NULL DEFAULT '{}',
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+
 		// Schema migrations: prevents duplicate migration runs across restarts.
 		`CREATE TABLE IF NOT EXISTS schema_migrations (
 			name       TEXT PRIMARY KEY,
