@@ -9,6 +9,18 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Sortable Log Explorer columns** (`internal/web/static/dashboard.js`) — Severity, Namespace/Pod,
+  Message, and Category headers are now clickable: click to sort by that column (with a sensible
+  default direction per column — severity starts high-to-low, text columns start A-to-Z), click
+  again to flip direction. An arrow on the active header shows the current direction. Severity
+  compares by rank (critical > high > medium > low), other columns compare case-insensitively as
+  text; ties keep the original order (stable sort). No "sort by latest" option yet — findings have
+  no real detection timestamp today (the `Age` field is a hardcoded placeholder, `"—"`); sorting by
+  it would silently fake recency rather than show it. Flagging as a possible follow-up if genuine
+  chronological sort is wanted — it needs a real timestamp threaded from the k8s plugin through
+  `dashFinding`, not just a front-end change.
+
 ### Changed
 - **Deterministic answer-mode routing for the investigation chat** (`internal/investigate/questionmode.go`,
   `internal/investigate/engine.go`) — live testing against phi4-mini:3.8b on a real cluster showed that

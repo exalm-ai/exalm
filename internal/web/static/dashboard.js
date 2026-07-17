@@ -11,6 +11,11 @@
   var PAGE_KEY = 'exalm.page';
   var GROUP_ORDER = ['Other', 'Pods', 'Resources', 'Security', 'Services', 'Workloads'];
   var PAGES = ['dashboard', 'explorer', 'ai', 'alerts', 'settings'];
+  // Explorer table sort. SEV_RANK gives severity a total order for numeric
+  // comparison; SORT_DEFAULT_DIR picks a sensible first direction per column
+  // (severity starts high-to-low, text columns start A-to-Z).
+  var SEV_RANK = { critical: 4, high: 3, medium: 2, low: 1, other: 0 };
+  var SORT_DEFAULT_DIR = { sev: 'desc', ns: 'asc', title: 'asc', group: 'asc' };
   // Text inputs that should keep focus + caret position across a re-render
   // (render() rebuilds app.innerHTML from scratch on every state change).
   var REFOCUS_TEXT_IDS = ['finding-search', 'incident-title', 'incident-namespace', 'incident-service'];
@@ -68,6 +73,7 @@
   var state = {
     theme: savedTheme, page: savedPage, query: '', filter: 'all', range: '24h',
     freqScope: 'cluster', selectedNs: 'all', nsMenuOpen: false,
+    sort: { by: 'sev', dir: 'desc' },
     openGroups: { Pods: true, Resources: true }, openFinding: null,
     fixed: {}, fixing: {},
     dash: savedDash, // selected dashboard id (registry mode); resolved lazily
@@ -94,6 +100,22 @@
       other: { label: 'OTHER', c: 'var(--low)', soft: 'var(--lowSoft)', line: 'var(--lowLine)' }
     };
     return map[sev] || map.other;
+  }
+
+  // sortRows returns a NEW array (never mutates the input) ordered by
+  // sortState.by/dir. 'sev' compares SEV_RANK numerically; every other key
+  // compares the field as a case-insensitive string. Ties fall back to the
+  // original (group) order for a stable sort.
+  function sortRows(rows, sortState) {
+    var by = (sortState && sortState.by) || 'sev', dir = (sortState && sortState.dir) === 'asc' ? 1 : -1;
+    return rows.map(function (f, i) { return { f: f, i: i }; }).sort(function (a, b) {
+      var av, bv;
+      if (by === 'sev') { av = SEV_RANK[a.f.sev] || 0; bv = SEV_RANK[b.f.sev] || 0; }
+      else { av = String(a.f[by] || '').toLowerCase(); bv = String(b.f[by] || '').toLowerCase(); }
+      if (av < bv) return -1 * dir;
+      if (av > bv) return 1 * dir;
+      return a.i - b.i;
+    }).map(function (x) { return x.f; });
   }
 
   function buildSeries(scale) {
@@ -229,9 +251,12 @@
       return { name: name, shown: items.length, items: items, open: !!s.openGroups[name] };
     }).filter(function (g) { return g.items.length > 0; });
 
-    // Flattened, filtered rows in group order — for the Log Explorer table.
+    // Flattened, filtered rows in group order, then re-sorted per state.sort
+    // for the Log Explorer table (grouping itself isn't shown there — it's a
+    // flat table, so re-sorting the flattened list is safe).
     var rows = [];
     groups.forEach(function (g) { g.items.forEach(function (f) { rows.push(f); }); });
+    rows = sortRows(rows, s.sort);
 
     var fixableCount = base.filter(function (f) { return f.fix && !s.fixed[f.id]; }).length;
     var tabCounts = {
@@ -468,7 +493,16 @@
       }).join('') + '</div>';
 
     var th = 'text-align:left;padding:10px 14px;font-size:10px;letter-spacing:.6px;text-transform:uppercase;color:var(--faint);font-weight:600;border-bottom:1px solid var(--border);';
-    var head = '<tr><th style="' + th + '">Severity</th><th style="' + th + '">Namespace / Pod</th><th style="' + th + 'width:42%;">Message</th><th style="' + th + '">Category</th><th style="' + th + 'text-align:right;">Action</th></tr>';
+    // sortTh renders a clickable header cell with an arrow on the active
+    // sort column; non-sortable headers (Action) pass key === null.
+    function sortTh(label, key, extra) {
+      extra = extra || '';
+      if (!key) return '<th style="' + th + extra + '">' + esc(label) + '</th>';
+      var active = state.sort.by === key;
+      var arrow = active ? (state.sort.dir === 'asc' ? ' ▲' : ' ▼') : '';
+      return '<th data-act="sort" data-key="' + key + '" style="' + th + extra + 'cursor:pointer;user-select:none;color:' + (active ? 'var(--accent)' : 'var(--faint)') + ';">' + esc(label) + arrow + '</th>';
+    }
+    var head = '<tr>' + sortTh('Severity', 'sev') + sortTh('Namespace / Pod', 'ns') + sortTh('Message', 'title', 'width:42%;') + sortTh('Category', 'group') + sortTh('Action', null, 'text-align:right;') + '</tr>';
     var rows = v.rows.map(function (f) {
       var m = sevMeta(f.sev), isFixed = !!state.fixed[f.id], isFixing = !!state.fixing[f.id];
       var td = 'padding:11px 14px;border-bottom:1px solid var(--border);vertical-align:top;';
@@ -964,6 +998,12 @@
       case 'logs': if (window.ExalmLogs) window.ExalmLogs.open(); break;
       case 'drilldown': if (window.ExalmPanels) window.ExalmPanels.openDrilldown({ kind: el.getAttribute('data-kind'), label: el.getAttribute('data-label') }); break;
       case 'filter': state.filter = el.getAttribute('data-f'); render(); break;
+      case 'sort': {
+        var key = el.getAttribute('data-key');
+        state.sort = { by: key, dir: state.sort.by === key ? (state.sort.dir === 'asc' ? 'desc' : 'asc') : SORT_DEFAULT_DIR[key] };
+        render();
+        break;
+      }
       case 'statcard':
         state.filter = el.getAttribute('data-f') || 'all';
         state.query = '';
