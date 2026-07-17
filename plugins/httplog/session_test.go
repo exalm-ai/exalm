@@ -96,8 +96,32 @@ func TestBuildStats_HTTP(t *testing.T) {
 	if len(st.TopClients) != 2 || st.TopClients[0].Name != "10.0.0.1" || st.TopClients[0].Count != 2 {
 		t.Errorf("TopClients = %+v", st.TopClients)
 	}
+	if len(st.TopUserAgents) != 1 || st.TopUserAgents[0].Name != "c" || st.TopUserAgents[0].Count != 3 {
+		t.Errorf("TopUserAgents = %+v", st.TopUserAgents)
+	}
 	if len(st.Bursts5xx) != 1 || st.Bursts5xx[0].T != "10:00" || st.Bursts5xx[0].Count != 2 {
 		t.Errorf("Bursts5xx = %+v", st.Bursts5xx)
+	}
+}
+
+func TestBuildStats_DistinctUserAgents(t *testing.T) {
+	s := investigate.NewLogSession("httplog")
+	idx := s.AddSource(investigate.SourceDesc{Path: "test"})
+	chunk := []byte(`203.0.113.1 - - [13/May/2026:09:00:00 +0000] "GET /health HTTP/1.1" 200 12 "-" "kube-probe/1.30" 0.001
+203.0.113.2 - - [13/May/2026:09:00:01 +0000] "GET /api/users HTTP/1.1" 200 4221 "-" "Mozilla/5.0" 0.043
+203.0.113.3 - - [13/May/2026:09:00:02 +0000] "GET /api/users HTTP/1.1" 200 4221 "-" "Mozilla/5.0" 0.05
+`)
+	s.Append(parseEvents(idx, chunk)...)
+	st := buildStats(s)
+
+	if len(st.TopUserAgents) != 2 {
+		t.Fatalf("TopUserAgents = %+v, want 2 distinct agents", st.TopUserAgents)
+	}
+	if st.TopUserAgents[0].Name != "Mozilla/5.0" || st.TopUserAgents[0].Count != 2 {
+		t.Errorf("top user agent = %+v, want Mozilla/5.0 x2", st.TopUserAgents[0])
+	}
+	if st.TopUserAgents[1].Name != "kube-probe/1.30" || st.TopUserAgents[1].Count != 1 {
+		t.Errorf("second user agent = %+v, want kube-probe/1.30 x1", st.TopUserAgents[1])
 	}
 }
 

@@ -175,6 +175,7 @@ type HTTPStats struct {
 	SlowRequests    int          `json:"slowRequests"`
 	TopURIs         []NameCount  `json:"topUris"`
 	TopClients      []NameCount  `json:"topClients"`
+	TopUserAgents   []NameCount  `json:"topUserAgents"`
 	Bursts5xx       []TimeBucket `json:"bursts5xx"`
 }
 
@@ -189,6 +190,7 @@ func buildStats(s *investigate.LogSession) HTTPStats {
 	codeHist := map[string]int{}
 	uriHist := map[string]int{}
 	clientHist := map[string]int{}
+	uaHist := map[string]int{}
 	perMinute := map[string]int{}
 	perMinute5xx := map[string]int{}
 	for _, e := range events {
@@ -199,8 +201,16 @@ func buildStats(s *investigate.LogSession) HTTPStats {
 		if fields := strings.Fields(e.Message); len(fields) >= 2 {
 			uriHist[fields[1]]++
 		}
-		if m := combinedRe.FindStringSubmatch(e.Raw); m != nil && m[1] != "" {
-			clientHist[m[1]]++
+		// Re-extract fields the parser captures but doesn't store on LogEvent
+		// (combinedRe groups: 1=client IP, 10=user-agent) — the same pattern
+		// TopClients already uses for m[1].
+		if m := combinedRe.FindStringSubmatch(e.Raw); m != nil {
+			if m[1] != "" {
+				clientHist[m[1]]++
+			}
+			if m[10] != "" {
+				uaHist[m[10]]++
+			}
 		}
 		if m := latencyMsRe.FindStringSubmatch(e.Message); m != nil {
 			if ms, err := strconv.Atoi(m[1]); err == nil && ms >= slowRequestMs {
@@ -220,6 +230,7 @@ func buildStats(s *investigate.LogSession) HTTPStats {
 	st.CodeHistogram = topCounts(codeHist, 10)
 	st.TopURIs = topCounts(uriHist, 10)
 	st.TopClients = topCounts(clientHist, 10)
+	st.TopUserAgents = topCounts(uaHist, 10)
 	st.Bursts5xx = burstBuckets(perMinute5xx, 10)
 	return st
 }
