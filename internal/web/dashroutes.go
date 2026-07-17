@@ -6,6 +6,7 @@ package web
 //	GET  /api/dashboards/{id}/logs
 //	POST /api/dashboards/{id}/chat
 //	POST /api/dashboards/{id}/logs/analyze
+//	POST /api/dashboards/incidents/action
 //
 // The legacy unscoped aliases (/api/analyzer/stats, /api/analyzer/logs,
 // /api/chat) keep working unchanged. Until the multi-session hub lands,
@@ -18,6 +19,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -153,6 +155,59 @@ func (s *liveServer) handleDashLogAnalyze(w http.ResponseWriter, r *http.Request
 		return
 	}
 	s.handleLogAnalyze(w, r)
+}
+
+// IncidentActionRequest is the body of POST /api/dashboards/incidents/action.
+// Action selects the operation; the other fields are per-action inputs.
+type IncidentActionRequest struct {
+	Action    string `json:"action"`              // "open" | "close" | "reopen"
+	ID        string `json:"id,omitempty"`        // close/reopen target
+	Title     string `json:"title,omitempty"`     // open: required
+	Severity  string `json:"severity,omitempty"`  // open: default "medium"
+	Namespace string `json:"namespace,omitempty"` // open: optional scope
+	Service   string `json:"service,omitempty"`   // open: optional scope
+}
+
+// handleIncidentAction serves POST /api/dashboards/incidents/action. The
+// operation itself runs in the injected closure (cmd/exalm wires it to the
+// incident store); this handler owns gating, decoding, and shape validation.
+// CSRF protection comes from the server-wide requireCSRF middleware.
+func (s *liveServer) handleIncidentAction(w http.ResponseWriter, r *http.Request) {
+	if !s.gateDashboard(w, "incidents") {
+		return
+	}
+	if s.incidentActFn == nil {
+		http.Error(w, "incident actions not wired", http.StatusServiceUnavailable)
+		return
+	}
+	var req IncidentActionRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 16*1024) // titles and IDs are small
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	switch req.Action {
+	case "open":
+		if strings.TrimSpace(req.Title) == "" {
+			http.Error(w, "title is required", http.StatusBadRequest)
+			return
+		}
+	case "close", "reopen":
+		if strings.TrimSpace(req.ID) == "" {
+			http.Error(w, "id is required", http.StatusBadRequest)
+			return
+		}
+	default:
+		http.Error(w, "unknown action (use open, close, or reopen)", http.StatusBadRequest)
+		return
+	}
+	res, err := s.incidentActFn(r.Context(), req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"ok": true, "incident": res}) //nolint:errcheck
 }
 
 // serveLogQuery parses the drilldown query parameters and writes the result.

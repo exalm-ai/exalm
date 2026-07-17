@@ -41,6 +41,7 @@ import (
 	// in registerPlugins() below.
 	awscostplugin "github.com/exalm-ai/exalm/plugins/aws_cost"
 	chaosplugin "github.com/exalm-ai/exalm/plugins/chaos"
+	cloudtrailplugin "github.com/exalm-ai/exalm/plugins/cloudtrail"
 	doraplugin "github.com/exalm-ai/exalm/plugins/dora"
 	eventlogplugin "github.com/exalm-ai/exalm/plugins/eventlog"
 	httplogplugin "github.com/exalm-ai/exalm/plugins/httplog"
@@ -113,6 +114,7 @@ func registerPlugins() {
 	registry.Register(k8splugin.New())
 	registry.Register(tfplugin.New())
 	registry.Register(awscostplugin.New())
+	registry.Register(cloudtrailplugin.New())
 	registry.Register(eventlogplugin.New())
 	registry.Register(iisplugin.New())
 	registry.Register(sysloplugin.New())
@@ -127,6 +129,19 @@ func registerPlugins() {
 // concurrentPlugins lists plugins that accept the shared analyzer flags
 // (--file repeatable, --concurrency, --chunk-size).
 var concurrentPlugins = map[string]bool{
+	"eventlog":   true,
+	"iis":        true,
+	"syslog":     true,
+	"httplog":    true,
+	"cloudtrail": true,
+}
+
+// sshCollectiblePlugins lists concurrentPlugins members that can also
+// collect their input live over SSH (--host and friends). This is narrower
+// than concurrentPlugins: cloudtrail analyzes AWS API activity delivered via
+// S3/NDJSON, not a file tailed from a live host, so it gets the shared
+// chunked-file flags without the SSH remote-collection ones.
+var sshCollectiblePlugins = map[string]bool{
 	"eventlog": true,
 	"iis":      true,
 	"syslog":   true,
@@ -136,11 +151,12 @@ var concurrentPlugins = map[string]bool{
 // investigableAnalyzers lists the log analyzers that build an investigation
 // session and can open the conversational dashboard with --open.
 var investigableAnalyzers = map[string]bool{
-	"eventlog": true,
-	"iis":      true,
-	"syslog":   true,
-	"httplog":  true,
-	"logs":     true,
+	"eventlog":   true,
+	"iis":        true,
+	"syslog":     true,
+	"httplog":    true,
+	"logs":       true,
+	"cloudtrail": true,
 }
 
 // rootFlags holds top-level persistent flags. Subcommands read from this
@@ -246,14 +262,16 @@ func buildPluginCmd(p plugin.Plugin, flags *rootFlags) *cobra.Command {
 			sub.Flags().StringSlice("file", nil, "read input from this file (repeatable, supports globs)")
 			sub.Flags().String("concurrency", "4", "maximum in-flight LLM calls")
 			sub.Flags().String("chunk-size", "", "soft cap per chunk (e.g. 200KB, 1MB)")
-			// SSH remote collection (Phase 2).
-			sub.Flags().String("host", "", "SSH hostname — collect logs directly from this remote host")
-			sub.Flags().String("ssh-user", "", "SSH username (default: current OS user)")
-			sub.Flags().String("ssh-key", "", "path to SSH private key (default: ~/.ssh/id_rsa)")
-			sub.Flags().String("ssh-port", "22", "SSH port (default: 22)")
-			sub.Flags().String("ssh-password", "", "SSH password (prefer EXALM_SSH_PASSWORD env var)")
-			sub.Flags().String("log-lines", "5000", "number of log lines to fetch from remote host")
-			sub.Flags().String("remote-diag", "", "on-demand SSH diagnostics tier during investigations: off, readonly, full (default: EXALM_REMOTE_DIAG or readonly)")
+			if sshCollectiblePlugins[p.Name()] {
+				// SSH remote collection (Phase 2).
+				sub.Flags().String("host", "", "SSH hostname — collect logs directly from this remote host")
+				sub.Flags().String("ssh-user", "", "SSH username (default: current OS user)")
+				sub.Flags().String("ssh-key", "", "path to SSH private key (default: ~/.ssh/id_rsa)")
+				sub.Flags().String("ssh-port", "22", "SSH port (default: 22)")
+				sub.Flags().String("ssh-password", "", "SSH password (prefer EXALM_SSH_PASSWORD env var)")
+				sub.Flags().String("log-lines", "5000", "number of log lines to fetch from remote host")
+				sub.Flags().String("remote-diag", "", "on-demand SSH diagnostics tier during investigations: off, readonly, full (default: EXALM_REMOTE_DIAG or readonly)")
+			}
 		} else {
 			sub.Flags().String("file", "", "read input from this file instead of stdin")
 		}
@@ -274,6 +292,8 @@ func buildPluginCmd(p plugin.Plugin, flags *rootFlags) *cobra.Command {
 			case "open":
 				sub.Flags().String("title", "", "incident title (required)")
 				sub.Flags().String("severity", "medium", "severity: critical, high, medium, low")
+				sub.Flags().String("namespace", "", "namespace/host scope for cross-referencing investigations")
+				sub.Flags().String("service", "", "affected service/workload name")
 				sub.Flags().String("from-deploy", "", "deployment ID to link as likely cause (from: exalm dora log-deploy)")
 			case "list":
 				sub.Flags().String("status", "", "filter by status: open, closed, mitigated")
@@ -341,7 +361,11 @@ func extractFlags(cmd *cobra.Command, pluginName, subName string) (map[string]st
 			multi["file"] = vs
 			out["file"] = vs[len(vs)-1]
 		}
-		for _, name := range []string{"concurrency", "chunk-size", "host", "ssh-user", "ssh-key", "ssh-port", "ssh-password", "log-lines", "remote-diag"} {
+		names := []string{"concurrency", "chunk-size"}
+		if sshCollectiblePlugins[pluginName] {
+			names = append(names, "host", "ssh-user", "ssh-key", "ssh-port", "ssh-password", "log-lines", "remote-diag")
+		}
+		for _, name := range names {
 			if v, err := cmd.Flags().GetString(name); err == nil && v != "" {
 				out[name] = v
 			}
@@ -373,7 +397,7 @@ func extractFlags(cmd *cobra.Command, pluginName, subName string) (map[string]st
 		}
 	}
 	if pluginName == "incident" {
-		for _, name := range []string{"title", "severity", "status", "incident-id", "from-deploy"} {
+		for _, name := range []string{"title", "severity", "namespace", "service", "status", "incident-id", "from-deploy"} {
 			if v, err := cmd.Flags().GetString(name); err == nil && v != "" {
 				out[name] = v
 			}

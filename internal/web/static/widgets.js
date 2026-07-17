@@ -72,9 +72,13 @@
   }
 
   // counters: severity-colored stat chips; click drills on the filter.
+  // Only chips with a real drill query render as clickable — a chip with no
+  // meaningful filter (e.g. a distinct-value count) must not look clickable
+  // and silently return an unfiltered "related logs" result if clicked.
   function counters(list) {
     return '<div style="display:flex;gap:10px;flex-wrap:wrap;">' + list.map(function (c) {
-      return '<div class="ex-an-drill" data-drill="' + esc(c.drill || '') + '" style="' + (c.drill ? 'cursor:pointer;' : '') + 'flex:1;min-width:110px;background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:9px 12px;">' +
+      var cls = c.drill ? ' class="ex-an-drill"' : '';
+      return '<div' + cls + (c.drill ? ' data-drill="' + esc(c.drill) + '"' : '') + ' style="' + (c.drill ? 'cursor:pointer;' : '') + 'flex:1;min-width:110px;background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:9px 12px;">' +
         '<div style="font-size:20px;font-weight:700;color:' + (c.value > 0 ? (c.color || 'var(--fg)') : 'var(--faint)') + ';">' + c.value + '</div>' +
         '<div style="font-size:10.5px;color:var(--muted);">' + esc(c.label) + '</div></div>';
     }).join('') + '</div>';
@@ -87,34 +91,45 @@
   function kCardLabel(t) { return '<div style="font-size:10.5px;letter-spacing:.7px;text-transform:uppercase;color:var(--faint);font-weight:600;">' + esc(t) + '</div>'; }
 
   // ── Stat cards ──
+  // Each card that maps to a real Log Explorer severity filter is clickable
+  // — it jumps to Explorer pre-filtered. "Namespaces" is a distinct-value
+  // count (not a findings bucket), so it stays a plain display, same
+  // reasoning as counters() above; the namespace bars widget right below
+  // already offers per-namespace drill-through.
   function statCards(v) {
     var E = exalm();
     var fmt = E.fmt || function (n) { return String(n); };
     var cards = [
-      ['Total findings', v.totalFindings, 'var(--accent)'],
-      ['Errors / high', v.sevCounts.high, 'var(--high)'],
-      ['Critical', v.sevCounts.crit, 'var(--crit)'],
-      ['Warnings / med', v.sevCounts.med, 'var(--med)'],
-      ['Namespaces', v.NS.length, 'var(--low)']
+      ['Total findings', v.totalFindings, 'var(--accent)', 'all'],
+      ['Errors / high', v.sevCounts.high, 'var(--high)', 'high'],
+      ['Critical', v.sevCounts.crit, 'var(--crit)', 'critical'],
+      ['Warnings / med', v.sevCounts.med, 'var(--med)', 'med'],
+      ['Namespaces', v.NS.length, 'var(--low)', '']
     ];
     return '<div class="ex-statcards" style="display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:16px;">' +
       cards.map(function (c) {
-        return '<div style="background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:15px 16px;">' +
+        var clickable = !!c[3];
+        return '<div' + (clickable ? ' class="ex-row" data-act="statcard" data-f="' + c[3] + '"' : '') +
+          ' style="background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:15px 16px;' + (clickable ? 'cursor:pointer;' : '') + '">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;">' + kCardLabel(c[0]) + '<span style="width:8px;height:8px;border-radius:2px;background:' + c[2] + ';"></span></div>' +
           '<div style="font-size:30px;font-weight:700;line-height:1;margin-top:12px;font-variant-numeric:tabular-nums;">' + fmt(c[1]) + '</div></div>';
       }).join('') + '</div>';
   }
 
   // ── Severity donut + legend ──
+  // Legend rows are the same four severity buckets as the stat cards above,
+  // so they jump to the same filtered Explorer view on click.
   function severityDonut(v) {
-    var legend = [['Critical', 'crit', v.sevCounts.crit], ['High', 'high', v.sevCounts.high], ['Medium', 'med', v.sevCounts.med], ['Low', 'low', v.sevCounts.low]];
+    var legend = [['Critical', 'crit', v.sevCounts.crit, 'critical'], ['High', 'high', v.sevCounts.high, 'high'], ['Medium', 'med', v.sevCounts.med, 'med'], ['Low', 'low', v.sevCounts.low, 'low']];
     return kCard(kCardLabel('Severity distribution') +
       '<div style="display:flex;align-items:center;gap:18px;margin-top:14px;flex-wrap:wrap;justify-content:center;">' +
       '<svg width="150" height="150" viewBox="0 0 80 80" style="flex:none;"><g transform="rotate(-90 40 40)"><circle cx="40" cy="40" r="34" fill="none" stroke="var(--track)" stroke-width="9"></circle>' +
       v.ringSegs.map(function (r) { return '<circle cx="40" cy="40" r="34" fill="none" stroke="' + r.color + '" stroke-width="9" stroke-dasharray="' + r.dash + '" stroke-dashoffset="' + r.offset + '"></circle>'; }).join('') +
       '</g><text x="40" y="38" text-anchor="middle" font-size="16" font-weight="700" fill="var(--fg)">' + v.totalFindings + '</text><text x="40" y="50" text-anchor="middle" font-size="6.5" fill="var(--faint)" letter-spacing="1">FINDINGS</text></svg>' +
       '<div style="display:flex;flex-direction:column;gap:8px;font-size:12.5px;min-width:130px;">' +
-      legend.map(function (x) { return '<div style="display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:2px;background:var(--' + x[1] + ');"></span><span style="color:var(--muted);flex:1;">' + x[0] + '</span><b>' + x[2] + '</b></div>'; }).join('') +
+      legend.map(function (x) {
+        return '<div class="ex-row" data-act="statcard" data-f="' + x[3] + '" style="display:flex;align-items:center;gap:8px;cursor:pointer;border-radius:6px;padding:2px 4px;margin:-2px -4px;"><span style="width:9px;height:9px;border-radius:2px;background:var(--' + x[1] + ');"></span><span style="color:var(--muted);flex:1;">' + x[0] + '</span><b>' + x[2] + '</b></div>';
+      }).join('') +
       '</div></div>');
   }
 

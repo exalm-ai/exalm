@@ -18,11 +18,13 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/exalm-ai/exalm/internal/cliui"
 	"github.com/exalm-ai/exalm/internal/config"
+	convopkg "github.com/exalm-ai/exalm/internal/convo"
 	"github.com/exalm-ai/exalm/internal/gitprovider"
 	"github.com/exalm-ai/exalm/internal/llm"
 	"github.com/exalm-ai/exalm/internal/preflight"
@@ -30,6 +32,7 @@ import (
 	"github.com/exalm-ai/exalm/internal/settings"
 	"github.com/exalm-ai/exalm/internal/web"
 	"github.com/exalm-ai/exalm/pkg/plugin"
+	incidentplugin "github.com/exalm-ai/exalm/plugins/incident"
 	k8splugin "github.com/exalm-ai/exalm/plugins/k8s"
 	sloplugin "github.com/exalm-ai/exalm/plugins/slo"
 )
@@ -146,14 +149,15 @@ func runServe(ctx context.Context, root *rootFlags, f *serveCLIFlags) error {
 			dashToken = os.Getenv("EXALM_TOKEN")
 		}
 		noK8sOpts := web.ServeOpts{
-			Port:        f.port,
-			BindAddr:    f.bind,
-			OpenBrowser: f.openBrowser,
-			Token:       dashToken,
-			CreatePR:    buildCreatePRFn(f),
-			Settings:    settings.NewStore(),
-			Dashboards:  dashboardRegistry(false),
-			Incidents:   incidentsStatsFn(),
+			Port:           f.port,
+			BindAddr:       f.bind,
+			OpenBrowser:    f.openBrowser,
+			Token:          dashToken,
+			CreatePR:       buildCreatePRFn(f),
+			Settings:       settings.NewStore(),
+			Dashboards:     dashboardRegistry(false),
+			Incidents:      incidentsStatsFn(),
+			IncidentAction: incidentActionFn(),
 		}
 		// Best-effort LLM for ingested-session chat: without a configured
 		// provider the investigation engine falls back to its deterministic
@@ -246,13 +250,14 @@ func runServe(ctx context.Context, root *rootFlags, f *serveCLIFlags) error {
 	}
 
 	serveOpts := web.ServeOpts{
-		Port:        f.port,
-		BindAddr:    f.bind,
-		OpenBrowser: f.openBrowser,
-		Token:       dashToken,
-		Settings:    settings.NewStore(),
-		Dashboards:  dashboardRegistry(true),
-		Incidents:   incidentsStatsFn(),
+		Port:           f.port,
+		BindAddr:       f.bind,
+		OpenBrowser:    f.openBrowser,
+		Token:          dashToken,
+		Settings:       settings.NewStore(),
+		Dashboards:     dashboardRegistry(true),
+		Incidents:      incidentsStatsFn(),
+		IncidentAction: incidentActionFn(),
 	}
 	// Multi-dashboard hub: analyzer --open runs attach their sessions here.
 	if cleanupHub, err := applyHubServeOpts(&serveOpts, llmClient, redactor); err != nil {
@@ -272,6 +277,72 @@ func runServe(ctx context.Context, root *rootFlags, f *serveCLIFlags) error {
 		serveOpts.ApplyFix = func(ctx context.Context, action plugin.RemediationAction) error {
 			return k8splugin.ApplyRemediation(ctx, cs, action)
 		}
+	}
+
+	// Supply real per-namespace pod inventory for the dashboard's namespace
+	// selector and pod-derived metrics.
+	serveOpts.PodInfo = func() web.PodInfo {
+		total, unhealthy, byNs := k8sPlug.LastPodInfo()
+		return web.PodInfo{Total: total, Unhealthy: unhealthy, ByNamespace: byNs}
+	}
+
+	// Deep root-cause investigation: deterministic evidence gather + one
+	// redacted LLM synthesis. Reuses the watch LLM + redactor.
+	serveOpts.Investigate = func(ctx context.Context, findingID string) (*plugin.Investigation, error) {
+		return k8sPlug.Investigate(ctx, findingID, llmClient, redactor)
+	}
+
+	// Log viewer access over the already-connected client (read-only).
+	serveOpts.LogFetch = k8sPlug.LogFetch
+
+	// Conversational investigation assistant (the dashboard's AI chat):
+	// deterministic evidence gathering across the cluster + exactly one
+	// redacted LLM call per turn, persisted across turns and reloads.
+	// `exalm serve` previously left this unwired — findings and remediation
+	// worked, but the chat route always returned 503.
+	convoStore := convopkg.NewStore()
+	incStore := incidentplugin.NewFileStore()
+	k8sPlug.SetHistorySources(func(ctx context.Context, from, to time.Time) ([]k8splugin.PastIncident, error) {
+		incidents, err := incStore.QueryByDateRange(ctx, from, to)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]k8splugin.PastIncident, 0, len(incidents))
+		for _, inc := range incidents {
+			past := k8splugin.PastIncident{
+				Title: inc.Title, Namespace: inc.Namespace, Service: inc.Service,
+				Status: string(inc.Status), OpenedAt: inc.OpenedAt,
+			}
+			if pm := inc.Postmortem; pm != nil {
+				past.Resolution = pm.Mitigation
+				if past.Resolution == "" && len(pm.ActionItems) > 0 {
+					past.Resolution = strings.Join(pm.ActionItems, "; ")
+				}
+			}
+			out = append(out, past)
+		}
+		return out, nil
+	})
+	serveOpts.Converse = func(ctx context.Context, req web.ConverseRequest) (*plugin.Conversation, error) {
+		return k8sPlug.Converse(ctx, req.ConversationID, req.FindingID, req.Namespace, req.Message,
+			llmClient, redactor, convoStore, nil)
+	}
+	serveOpts.GetConversation = func(ctx context.Context, id string) (*plugin.Conversation, error) {
+		c, err := convoStore.Get(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		return &c, nil
+	}
+
+	// Per-log-entry AI analysis (the log viewer's ✦ Analyze action): one
+	// redacted LLM call over a single line + its context.
+	serveOpts.AnalyzeLogLine = func(ctx context.Context, req web.LogAnalyzeRequest) (string, error) {
+		return k8sPlug.AnalyzeLogLine(ctx, k8splugin.LogLineRequest{
+			Namespace: req.Namespace, Pod: req.Pod, Container: req.Container,
+			Severity: req.Severity, Source: req.Source, Labels: req.Labels,
+			Message: req.Message, Context: req.Context,
+		}, llmClient, redactor)
 	}
 
 	// Inject CreatePR closure if a git provider token and repo are configured.

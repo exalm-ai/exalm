@@ -65,6 +65,7 @@
         panel('Status codes', barList(pick(st, 'codeHistogram') || [], 'code', function (n) { return sevColor(n.charAt(0) + 'xx'); })) +
         panel('Top URLs', barList(pick(st, 'topURIs', 'topUris') || [], 'unit')) +
         panel('Top clients', barList(pick(st, 'topClients') || [], 'contains')) +
+        panel('Top user agents', barList(pick(st, 'topUserAgents') || [], 'contains')) +
         '</div>');
   }
 
@@ -100,7 +101,23 @@
       '</div>');
   }
 
-  var PAGES = { syslog: pageSyslog, httplog: pageHTTP, eventlog: pageEventlog, iis: pageIIS, logs: pageLogs };
+  function pageCloudTrail(st) {
+    return section('Overview',
+      panel('Signals', counters([
+        { label: 'Root account usage', value: pick(st, 'rootUsage') || 0, color: 'var(--crit)', drill: 'contains=' + encodeURIComponent('"type":"Root"') },
+        { label: 'Access denied', value: pick(st, 'accessDenied') || 0, color: 'var(--high)', drill: 'code=AccessDenied' },
+        { label: 'Console login failures', value: pick(st, 'consoleLoginFailures') || 0, color: 'var(--med)', drill: 'unit=ConsoleLogin' },
+        { label: 'Resource deletions', value: pick(st, 'resourceDeletions') || 0, color: 'var(--med)', drill: 'contains=Delete' }
+      ]))) +
+      section('Charts', '<div style="' + grid2 + '">' +
+        panel('Events over time', timelineChart(pick(st, 'eventTimeline') || [], '')) +
+        panel('Top event names', barList(pick(st, 'topEventNames') || [], 'unit')) +
+        panel('Top principals', barList(pick(st, 'topPrincipals') || [], 'contains')) +
+        panel('Top source IPs', barList(pick(st, 'topSourceIps', 'topSourceIPs') || [], 'contains')) +
+        '</div>');
+  }
+
+  var PAGES = { syslog: pageSyslog, httplog: pageHTTP, eventlog: pageEventlog, iis: pageIIS, logs: pageLogs, cloudtrail: pageCloudTrail };
 
   // ── drilldown: chart click → analyzer logs API → corpus lines ──
 

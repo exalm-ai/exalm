@@ -94,6 +94,7 @@ var analyzerWidgets = map[string][]WidgetDesc{
 		{ID: "codeHistogram", Title: "Status codes", Kind: "barlist", Drill: true},
 		{ID: "topUris", Title: "Top URLs", Kind: "barlist", Drill: true},
 		{ID: "topClients", Title: "Top clients", Kind: "barlist", Drill: true},
+		{ID: "topUserAgents", Title: "Top user agents", Kind: "barlist", Drill: true},
 		{ID: "bursts5xx", Title: "5xx bursts", Kind: "timeline", Drill: true},
 		{ID: "slowRequests", Title: "Slow requests", Kind: "counters", Drill: true},
 	},
@@ -114,15 +115,23 @@ var analyzerWidgets = map[string][]WidgetDesc{
 		{ID: "errorTimeline", Title: "Error timeline", Kind: "timeline", Drill: true},
 		{ID: "severityCounts", Title: "Severity mix", Kind: "barlist", Drill: true},
 	},
+	"cloudtrail": {
+		{ID: "eventTimeline", Title: "Events over time", Kind: "timeline", Drill: true},
+		{ID: "topEventNames", Title: "Top event names", Kind: "barlist", Drill: true},
+		{ID: "topPrincipals", Title: "Top principals", Kind: "barlist", Drill: true},
+		{ID: "topSourceIps", Title: "Top source IPs", Kind: "barlist", Drill: true},
+		{ID: "signals", Title: "Root usage / denied / login failures / deletions", Kind: "counters", Drill: true},
+	},
 }
 
 // analyzerNames maps analyzer IDs to display metadata.
 var analyzerNames = map[string][2]string{
-	"syslog":   {"Linux Syslog", "System, kernel, auth, and service logs"},
-	"httplog":  {"HTTP Logs", "Apache / Nginx access and error logs"},
-	"eventlog": {"Windows Events", "Windows Event Log channels"},
-	"iis":      {"IIS Logs", "IIS W3C site logs and app pools"},
-	"logs":     {"App Logs", "Any application log via stdin or file"},
+	"syslog":     {"Linux Syslog", "System, kernel, auth, and service logs"},
+	"httplog":    {"HTTP Logs", "Apache / Nginx access and error logs"},
+	"eventlog":   {"Windows Events", "Windows Event Log channels"},
+	"iis":        {"IIS Logs", "IIS W3C site logs and app pools"},
+	"logs":       {"App Logs", "Any application log via stdin or file"},
+	"cloudtrail": {"AWS CloudTrail", "AWS API activity — root usage, denials, deletions, privilege escalation"},
 }
 
 // analyzerDashboard builds the descriptor for one analyzer id.

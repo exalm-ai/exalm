@@ -11,6 +11,9 @@
   var PAGE_KEY = 'exalm.page';
   var GROUP_ORDER = ['Other', 'Pods', 'Resources', 'Security', 'Services', 'Workloads'];
   var PAGES = ['dashboard', 'explorer', 'ai', 'alerts', 'settings'];
+  // Text inputs that should keep focus + caret position across a re-render
+  // (render() rebuilds app.innerHTML from scratch on every state change).
+  var REFOCUS_TEXT_IDS = ['finding-search', 'incident-title', 'incident-namespace', 'incident-service'];
 
   var THEMES = {
     dark: {
@@ -67,7 +70,9 @@
     freqScope: 'cluster', selectedNs: 'all', nsMenuOpen: false,
     openGroups: { Pods: true, Resources: true }, openFinding: null,
     fixed: {}, fixing: {},
-    dash: savedDash // selected dashboard id (registry mode); resolved lazily
+    dash: savedDash, // selected dashboard id (registry mode); resolved lazily
+    incidentDraft: { title: '', severity: 'medium', namespace: '', service: '' },
+    incidentBusy: {}, incidentError: '', incidentFilter: ''
   };
 
   // ── Helpers ──
@@ -511,7 +516,10 @@
   // Legacy mode reads the payload-embedded analyzer/stats; hub mode fetches
   // the selected dashboard's stats from its scoped route (cached per id).
   var hubStatsCache = {};
+  function invalidateDashCache(id) { delete hubStatsCache[id]; }
   function fillAnalyzerDash() {
+    var dd = state.page === 'dash' ? dashById(state.dash) : null;
+    if (dd && dd.id === 'incidents') { fillIncidentsRoot(); return; }
     if (!window.AnalyzerDash) return;
     var root = document.getElementById('analyzer-dash-root');
     if (!root) return;
@@ -520,7 +528,7 @@
       window.AnalyzerDash.attach();
       return;
     }
-    var d = state.page === 'dash' ? dashById(state.dash) : null;
+    var d = dd;
     if (!d || !d.live || d.category !== 'analyzer') return;
     var cached = hubStatsCache[d.id];
     if (cached) {
@@ -538,6 +546,171 @@
       .catch(function () {
         root.innerHTML = '<div style="padding:30px;color:var(--faint);font-size:12.5px;">Could not load this dashboard’s data.</div>';
       });
+  }
+
+  // ── Incidents dashboard (v2: open/close/reopen + cross-links) ──
+  function fillIncidentsRoot() {
+    var root = document.getElementById('incidents-dash-root');
+    if (!root) return;
+    var cached = hubStatsCache.incidents;
+    if (cached) { root.innerHTML = renderIncidents(cached); return; }
+    root.innerHTML = '<div style="padding:30px;color:var(--faint);font-size:12.5px;">Loading incidents…</div>';
+    fetch('/api/dashboards/incidents/stats')
+      .then(function (r) { if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
+      .then(function (json) {
+        hubStatsCache.incidents = (json && json.stats) ? json.stats : json;
+        if (state.page === 'dash' && state.dash === 'incidents') fillIncidentsRoot();
+      })
+      .catch(function () {
+        root.innerHTML = '<div style="padding:30px;color:var(--faint);font-size:12.5px;">Could not load incidents.</div>';
+      });
+  }
+
+  function renderIncidents(stats) {
+    if (!stats || stats.error) {
+      return card('<div style="padding:6px 0;color:var(--muted);font-size:12.5px;">' + esc((stats && stats.error) || 'Incidents unavailable.') + '</div>', '16px 18px');
+    }
+    // Each tile filters the list below by status on click; clicking the
+    // active tile (or Total) clears back to showing everything.
+    var counts = '<div style="display:flex;gap:10px;margin-bottom:14px;">' +
+      incidentCounter('Open', stats.open, 'var(--crit)', 'open') +
+      incidentCounter('Mitigated', stats.mitigated, 'var(--med)', 'mitigated') +
+      incidentCounter('Closed', stats.closed, 'var(--good)', 'closed') +
+      incidentCounter('Total', stats.total, 'var(--muted)', '') +
+      '</div>';
+
+    var d = state.incidentDraft;
+    var form = card(cardLabel('Open a new incident') +
+      '<div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:10px;align-items:flex-end;">' +
+        incField('incident-title', 'Title', d.title, 220) +
+        incSelect() +
+        incField('incident-namespace', 'Namespace (optional)', d.namespace, 160) +
+        incField('incident-service', 'Service (optional)', d.service, 160) +
+        '<button data-act="incident-open" style="height:36px;padding:0 16px;border-radius:9px;border:none;background:var(--accent);color:#04222b;font-size:12.5px;font-weight:700;cursor:pointer;">Open incident</button>' +
+      '</div>' +
+      (state.incidentError ? '<div style="margin-top:8px;font-size:11.5px;color:var(--crit);">' + esc(state.incidentError) + '</div>' : ''),
+      '16px 18px');
+
+    var all = stats.incidents || [];
+    var filter = state.incidentFilter;
+    var shown = filter ? all.filter(function (inc) { return inc.status === filter; }) : all;
+    var rows = shown.map(incidentRow).join('');
+    var tableLabel = cardLabel('Incidents') + (filter
+      ? '<span style="font-size:11px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;"> · filtered to ' + esc(filter) + ' (' + shown.length + ')</span>'
+      : '');
+    var table = card(tableLabel +
+      (rows ? '<div style="margin-top:10px;">' + rows + '</div>'
+        : '<div style="padding:30px 0;text-align:center;color:var(--faint);font-size:12.5px;">' +
+          (all.length ? 'No ' + esc(filter) + ' incidents.' : 'No incidents recorded. Open one above, or run <code>exalm incident open</code>.') + '</div>'),
+      '16px 18px');
+
+    return counts + form + '<div style="height:14px;"></div>' + table;
+  }
+
+  function incidentCounter(label, n, color, status) {
+    var active = state.incidentFilter === status && status !== '';
+    return '<div class="ex-row" data-act="incident-filter" data-status="' + esc(status) + '" style="flex:1;background:var(--panel);border:1px solid ' + (active ? 'var(--accent)' : 'var(--border)') + ';border-radius:12px;padding:12px 14px;cursor:pointer;">' +
+      '<div style="font-size:10.5px;letter-spacing:.6px;text-transform:uppercase;color:var(--faint);font-weight:600;">' + esc(label) + '</div>' +
+      '<div style="font-size:20px;font-weight:700;color:' + color + ';margin-top:3px;">' + fmt(n || 0) + '</div></div>';
+  }
+
+  function incField(id, placeholder, val, w) {
+    return '<input id="' + id + '" value="' + esc(val || '') + '" placeholder="' + esc(placeholder) + '" autocomplete="off" style="width:' + w + 'px;height:36px;padding:0 12px;border-radius:9px;border:1px solid var(--border);background:var(--panel2);color:var(--fg);font-family:inherit;font-size:12.5px;outline:none;">';
+  }
+
+  function incSelect() {
+    var sevs = ['critical', 'high', 'medium', 'low', 'info'];
+    return '<select id="incident-severity" style="height:36px;padding:0 10px;border-radius:9px;border:1px solid var(--border);background:var(--panel2);color:var(--fg);font-family:inherit;font-size:12.5px;">' +
+      sevs.map(function (s) { return '<option value="' + s + '"' + (state.incidentDraft.severity === s ? ' selected' : '') + '>' + s + '</option>'; }).join('') +
+      '</select>';
+  }
+
+  function fmtTime(iso) {
+    if (!iso) return '';
+    var d2 = new Date(iso);
+    return isNaN(d2.getTime()) ? iso : d2.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
+  // relatedDashLinks: jump-to buttons for currently-attached analyzer
+  // dashboards. This is an honest cross-link, not automatic service/
+  // namespace correlation — the operator judges relevance and clicks
+  // through to compare.
+  function relatedDashLinks(inc) {
+    var live = (data.dashboards || []).filter(function (dd) { return dd.category === 'analyzer' && dd.live; });
+    if (!live.length) return '';
+    return live.map(function (dd) {
+      return '<button data-act="nav-dash" data-dash="' + esc(dd.id) + '" style="font-size:10.5px;font-weight:600;color:var(--accent);background:none;border:none;padding:0 8px 0 0;cursor:pointer;">→ ' + esc(dd.name) + '</button>';
+    }).join('');
+  }
+
+  function incidentRow(inc) {
+    var m = sevMeta(inc.severity);
+    var busy = state.incidentBusy[inc.id];
+    var canClose = inc.status === 'open' || inc.status === 'mitigated';
+    var canReopen = inc.status === 'closed';
+    var actBtn = busy
+      ? '<span style="font-size:11px;color:var(--muted);">…</span>'
+      : canClose
+        ? '<button data-act="incident-close" data-id="' + esc(inc.id) + '" style="height:28px;padding:0 12px;border-radius:7px;border:1px solid var(--border);background:var(--panel2);color:var(--fg);font-size:11px;font-weight:600;cursor:pointer;">Close</button>'
+        : canReopen
+          ? '<button data-act="incident-reopen" data-id="' + esc(inc.id) + '" style="height:28px;padding:0 12px;border-radius:7px;border:1px solid var(--border);background:var(--panel2);color:var(--fg);font-size:11px;font-weight:600;cursor:pointer;">Reopen</button>'
+          : '';
+    var links = relatedDashLinks(inc);
+    return '<div class="ex-row" style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);">' +
+      '<span style="font-size:9px;font-weight:700;letter-spacing:.5px;padding:2px 7px;border-radius:5px;color:' + m.c + ';background:' + m.soft + ';border:1px solid ' + m.line + ';flex:none;">' + m.label + '</span>' +
+      '<div style="flex:1;min-width:0;">' +
+      '<div style="font-size:12.5px;font-weight:600;color:var(--fg);">' + esc(inc.title) + '</div>' +
+      '<div style="font-family:\'IBM Plex Mono\',monospace;font-size:10.5px;color:var(--faint);margin-top:2px;">' + esc(inc.id) + ' · ' + esc(inc.status) +
+      (inc.service ? ' · ' + esc(inc.service) : '') + (inc.namespace ? ' · ' + esc(inc.namespace) : '') +
+      ' · opened ' + esc(fmtTime(inc.openedAt)) + (inc.closedAt ? ' · closed ' + esc(fmtTime(inc.closedAt)) : '') + '</div>' +
+      (links ? '<div style="margin-top:5px;">' + links + '</div>' : '') +
+      '</div>' +
+      '<div style="flex:none;">' + actBtn + '</div>' +
+      '</div>';
+  }
+
+  function postIncidentAction(body) {
+    return fetch('/api/dashboards/incidents/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Exalm-Request': 'true' },
+      body: JSON.stringify(body)
+    }).then(function (r) {
+      if (!r.ok) return r.text().then(function (t) { throw new Error(t || ('http ' + r.status)); });
+      return r.json();
+    });
+  }
+
+  function refreshIncidents() {
+    invalidateDashCache('incidents');
+    fillIncidentsRoot();
+  }
+
+  function openIncidentDraft() {
+    var d = state.incidentDraft;
+    if (!d.title || !d.title.trim()) { state.incidentError = 'Title is required.'; render(); return; }
+    state.incidentError = '';
+    postIncidentAction({ action: 'open', title: d.title, severity: d.severity, namespace: d.namespace, service: d.service })
+      .then(function () {
+        state.incidentDraft = { title: '', severity: 'medium', namespace: '', service: '' };
+        refreshIncidents();
+      })
+      .catch(function (e) { state.incidentError = String((e && e.message) || e); render(); });
+  }
+
+  function closeIncidentAction(id) {
+    if (state.incidentBusy[id]) return;
+    state.incidentBusy[id] = true; render();
+    postIncidentAction({ action: 'close', id: id })
+      .then(function () { delete state.incidentBusy[id]; refreshIncidents(); })
+      .catch(function (e) { delete state.incidentBusy[id]; state.incidentError = String((e && e.message) || e); render(); });
+  }
+
+  function reopenIncidentAction(id) {
+    if (state.incidentBusy[id]) return;
+    state.incidentBusy[id] = true; render();
+    postIncidentAction({ action: 'reopen', id: id })
+      .then(function () { delete state.incidentBusy[id]; refreshIncidents(); })
+      .catch(function (e) { delete state.incidentBusy[id]; state.incidentError = String((e && e.message) || e); render(); });
   }
 
   // ── Page: AI Analysis — two-pane investigation workspace ──
@@ -672,8 +845,13 @@
     if (!d) return pageDashboard(v);
     if (d.id === 'k8s') return pageDashboard(v);
     if (d.id === data.analyzer || (d.live && d.category === 'analyzer')) return pageAnalyzer(v, d);
-    if (d.id === 'incidents') return pageNotLive(d, 'Incident records appear here. Open incidents with <code>exalm incident open</code>.');
+    if (d.id === 'incidents') return pageIncidentsShell(d);
     return pageNotLive(d, 'No analysis session is attached. Run <code>exalm ' + esc(d.id) + ' ' + (d.id === 'eventlog' || d.id === 'logs' ? 'summarize' : 'analyze') + ' … --open</code> while this hub is running to attach one.');
+  }
+  function pageIncidentsShell(d) {
+    var header = '<div style="margin-bottom:14px;"><div style="font-size:15px;font-weight:700;">' + esc(d.name) + '</div>' +
+      '<div style="font-size:12px;color:var(--muted);">' + esc(d.description || '') + '</div></div>';
+    return header + '<div id="incidents-dash-root"></div>';
   }
   function pageNotLive(d, hint) {
     return '<div style="padding:60px 20px;text-align:center;">' +
@@ -706,11 +884,12 @@
 
     var app = document.getElementById('app');
     var active = document.activeElement;
-    var refocus = active && active.id === 'finding-search';
+    var activeId = active && active.id;
+    var refocus = REFOCUS_TEXT_IDS.indexOf(activeId) !== -1;
     var caret = refocus ? active.selectionStart : 0;
     app.innerHTML = shell;
     if (refocus) {
-      var inp = document.getElementById('finding-search');
+      var inp = document.getElementById(activeId);
       if (inp) { inp.focus(); try { inp.setSelectionRange(caret, caret); } catch (e) {} }
     }
     if (window.ExalmWidgets && window.ExalmWidgets.attachTooltips) window.ExalmWidgets.attachTooltips();
@@ -785,10 +964,29 @@
       case 'logs': if (window.ExalmLogs) window.ExalmLogs.open(); break;
       case 'drilldown': if (window.ExalmPanels) window.ExalmPanels.openDrilldown({ kind: el.getAttribute('data-kind'), label: el.getAttribute('data-label') }); break;
       case 'filter': state.filter = el.getAttribute('data-f'); render(); break;
+      case 'statcard':
+        state.filter = el.getAttribute('data-f') || 'all';
+        state.query = '';
+        setPage('explorer');
+        break;
+      case 'incident-open': openIncidentDraft(); break;
+      case 'incident-close': e.stopPropagation(); closeIncidentAction(el.getAttribute('data-id')); break;
+      case 'incident-reopen': e.stopPropagation(); reopenIncidentAction(el.getAttribute('data-id')); break;
+      case 'incident-filter':
+        state.incidentFilter = state.incidentFilter === el.getAttribute('data-status') ? '' : el.getAttribute('data-status');
+        render();
+        break;
     }
   }
   function onInput(e) {
-    if (e.target && e.target.id === 'finding-search') { state.query = e.target.value; render(); }
+    if (!e.target) return;
+    switch (e.target.id) {
+      case 'finding-search': state.query = e.target.value; render(); break;
+      case 'incident-title': state.incidentDraft.title = e.target.value; render(); break;
+      case 'incident-namespace': state.incidentDraft.namespace = e.target.value; render(); break;
+      case 'incident-service': state.incidentDraft.service = e.target.value; render(); break;
+      case 'incident-severity': state.incidentDraft.severity = e.target.value; render(); break;
+    }
   }
 
   // ── Shared evidence/fix-card renderers ──
@@ -882,5 +1080,6 @@
   render();
   document.getElementById('app').addEventListener('click', onClick);
   document.getElementById('app').addEventListener('input', onInput);
+  document.getElementById('app').addEventListener('change', onInput);
   if (data.autoRefresh) setInterval(refresh, 30000);
 })();

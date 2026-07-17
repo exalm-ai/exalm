@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -39,8 +40,36 @@ func dashboardRegistry(hasK8s bool) []web.DashboardDesc {
 	return append(out, web.AnalyzerDashboards(analyzerIDs)...)
 }
 
-// incidentsStatsFn returns the incidents-dashboard stats provider: a
-// read-only summary of the local incident store, newest first.
+// incidentRow is the JSON shape of one incident in the dashboard payloads,
+// shared by the stats list and the action responses.
+type incidentRow struct {
+	ID            string `json:"id"`
+	Title         string `json:"title"`
+	Status        string `json:"status"`
+	Severity      string `json:"severity"`
+	OpenedAt      string `json:"openedAt"`
+	ClosedAt      string `json:"closedAt,omitempty"`
+	Namespace     string `json:"namespace,omitempty"`
+	Service       string `json:"service,omitempty"`
+	Deploy        string `json:"relatedDeploymentId,omitempty"`
+	HasPostmortem bool   `json:"hasPostmortem,omitempty"`
+}
+
+func toIncidentRow(inc incidentplugin.Incident) incidentRow {
+	r := incidentRow{
+		ID: inc.ID, Title: inc.Title, Status: string(inc.Status),
+		Severity: string(inc.Severity), OpenedAt: inc.OpenedAt.UTC().Format(time.RFC3339),
+		Namespace: inc.Namespace, Service: inc.Service,
+		Deploy: inc.RelatedDeploymentID, HasPostmortem: inc.Postmortem != nil,
+	}
+	if inc.ClosedAt != nil {
+		r.ClosedAt = inc.ClosedAt.UTC().Format(time.RFC3339)
+	}
+	return r
+}
+
+// incidentsStatsFn returns the incidents-dashboard stats provider: a summary
+// of the local incident store, newest first, with per-status counts.
 func incidentsStatsFn() func() any {
 	store := incidentplugin.NewFileStore()
 	return func() any {
@@ -48,30 +77,50 @@ func incidentsStatsFn() func() any {
 		if err != nil {
 			return map[string]any{"error": "incident store unavailable"}
 		}
-		type row struct {
-			ID       string `json:"id"`
-			Title    string `json:"title"`
-			Status   string `json:"status"`
-			Severity string `json:"severity"`
-			OpenedAt string `json:"openedAt"`
-			Service  string `json:"service,omitempty"`
-		}
-		open := 0
-		rows := make([]row, 0, len(incidents))
+		counts := map[string]int{}
+		rows := make([]incidentRow, 0, len(incidents))
 		for _, inc := range incidents {
-			if string(inc.Status) == "open" {
-				open++
-			}
-			rows = append(rows, row{
-				ID: inc.ID, Title: inc.Title, Status: string(inc.Status),
-				Severity: string(inc.Severity), OpenedAt: inc.OpenedAt.UTC().Format(time.RFC3339),
-				Service: inc.Service,
-			})
+			counts[string(inc.Status)]++
+			rows = append(rows, toIncidentRow(inc))
 		}
 		if len(rows) > 50 {
 			rows = rows[:50]
 		}
-		return map[string]any{"open": open, "total": len(incidents), "incidents": rows}
+		return map[string]any{
+			"open": counts["open"], "mitigated": counts["mitigated"], "closed": counts["closed"],
+			"total": len(incidents), "incidents": rows,
+		}
+	}
+}
+
+// incidentActionFn returns the incidents-dashboard action executor wired to
+// the local incident store (POST /api/dashboards/incidents/action).
+func incidentActionFn() func(ctx context.Context, req web.IncidentActionRequest) (any, error) {
+	store := incidentplugin.NewFileStore()
+	return func(ctx context.Context, req web.IncidentActionRequest) (any, error) {
+		var (
+			inc incidentplugin.Incident
+			err error
+		)
+		switch req.Action {
+		case "open":
+			inc, err = incidentplugin.Open(ctx, store, incidentplugin.OpenRequest{
+				Title:     req.Title,
+				Severity:  plugin.Severity(strings.TrimSpace(req.Severity)),
+				Namespace: req.Namespace,
+				Service:   req.Service,
+			})
+		case "close":
+			inc, err = incidentplugin.Close(ctx, store, req.ID)
+		case "reopen":
+			inc, err = incidentplugin.Reopen(ctx, store, req.ID)
+		default:
+			return nil, fmt.Errorf("unknown incident action %q", req.Action)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return toIncidentRow(inc), nil
 	}
 }
 

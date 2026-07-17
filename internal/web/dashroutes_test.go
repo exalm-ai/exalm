@@ -98,3 +98,85 @@ func TestDashRoutes_ChatAIGating(t *testing.T) {
 		t.Errorf("chat with SupportsAI=false should 503, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
+
+// ── incident action route tests ───────────────────────────────────────────────
+
+// incidentActionMux registers the action route the way Serve() does, with a
+// fake action closure that records the request it received.
+func incidentActionMux(s *liveServer) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/dashboards/incidents/action", s.handleIncidentAction)
+	return mux
+}
+
+func postIncidentAction(mux *http.ServeMux, body string) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/dashboards/incidents/action", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestIncidentAction_OpenHappyPath(t *testing.T) {
+	var got IncidentActionRequest
+	s := &liveServer{
+		dashboards: testRegistry(),
+		incidentActFn: func(_ context.Context, req IncidentActionRequest) (any, error) {
+			got = req
+			return map[string]string{"id": "INC-1", "status": "open"}, nil
+		},
+	}
+	rec := postIncidentAction(incidentActionMux(s), `{"action":"open","title":"db down","severity":"high","service":"db"}`)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"ok":true`) {
+		t.Fatalf("open: got %d %s", rec.Code, rec.Body.String())
+	}
+	if got.Title != "db down" || got.Severity != "high" || got.Service != "db" {
+		t.Errorf("closure received wrong request: %+v", got)
+	}
+}
+
+func TestIncidentAction_Validation(t *testing.T) {
+	s := &liveServer{
+		dashboards: testRegistry(),
+		incidentActFn: func(_ context.Context, _ IncidentActionRequest) (any, error) {
+			t.Error("closure must not run on invalid input")
+			return nil, nil
+		},
+	}
+	mux := incidentActionMux(s)
+	cases := []struct {
+		name, body string
+	}{
+		{"open without title", `{"action":"open"}`},
+		{"close without id", `{"action":"close"}`},
+		{"reopen without id", `{"action":"reopen"}`},
+		{"unknown action", `{"action":"delete","id":"INC-1"}`},
+		{"invalid json", `{{{`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if rec := postIncidentAction(mux, tc.body); rec.Code != 400 {
+				t.Errorf("got %d %s, want 400", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestIncidentAction_UnwiredReturns503(t *testing.T) {
+	s := &liveServer{dashboards: testRegistry()}
+	if rec := postIncidentAction(incidentActionMux(s), `{"action":"open","title":"t"}`); rec.Code != 503 {
+		t.Errorf("got %d, want 503 when the action closure is nil", rec.Code)
+	}
+}
+
+func TestIncidentAction_ClosureErrorReturns422(t *testing.T) {
+	s := &liveServer{
+		dashboards: testRegistry(),
+		incidentActFn: func(_ context.Context, _ IncidentActionRequest) (any, error) {
+			return nil, context.DeadlineExceeded
+		},
+	}
+	if rec := postIncidentAction(incidentActionMux(s), `{"action":"close","id":"INC-1"}`); rec.Code != 422 {
+		t.Errorf("got %d, want 422 on closure error", rec.Code)
+	}
+}

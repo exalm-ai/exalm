@@ -134,6 +134,12 @@ type ServeOpts struct {
 	// (GET /api/dashboards/incidents/stats). Nil => 503.
 	Incidents func() any
 
+	// IncidentAction, when non-nil, executes one incident lifecycle action
+	// (POST /api/dashboards/incidents/action). The closure is supplied by
+	// cmd/exalm so this package stays decoupled from plugins/incident.
+	// Nil => the action route responds 503.
+	IncidentAction func(ctx context.Context, req IncidentActionRequest) (any, error)
+
 	// Sessions, when non-nil, makes this server a multi-dashboard hub:
 	// analyzer sessions attach at runtime (POST /api/ingest/session) and the
 	// per-dashboard routes resolve against the registry. Nil => legacy
@@ -304,6 +310,7 @@ type liveServer struct {
 	settings        *settings.Store
 	dashboards      []DashboardDesc
 	incidentsFn     func() any
+	incidentActFn   func(ctx context.Context, req IncidentActionRequest) (any, error)
 	sessions        *SessionRegistry
 	ingestAuth      string
 	profileLookupFn func(analyzer string) (investigate.Profile, bool)
@@ -389,6 +396,7 @@ func Serve(ctx context.Context, report plugin.Report, opts ServeOpts) error {
 		settings:        opts.Settings,
 		dashboards:      opts.Dashboards,
 		incidentsFn:     opts.Incidents,
+		incidentActFn:   opts.IncidentAction,
 		sessions:        opts.Sessions,
 		ingestAuth:      opts.IngestAuth,
 		profileLookupFn: opts.ProfileLookup,
@@ -421,6 +429,7 @@ func Serve(ctx context.Context, report plugin.Report, opts ServeOpts) error {
 	mux.HandleFunc("GET /api/dashboards/{id}/logs", srv.handleDashLogs)
 	mux.HandleFunc("POST /api/dashboards/{id}/chat", srv.handleDashChat)
 	mux.HandleFunc("POST /api/dashboards/{id}/logs/analyze", srv.handleDashLogAnalyze)
+	mux.HandleFunc("POST /api/dashboards/incidents/action", srv.handleIncidentAction)
 	mux.HandleFunc("/api/ingest/session", srv.handleIngestSession)
 	mux.HandleFunc("/api/metrics", srv.handleMetricsJSON)
 	mux.HandleFunc("/api/chat", srv.handleChat)
@@ -789,6 +798,7 @@ func (s *liveServer) doInvestigate(w http.ResponseWriter, r *http.Request, id st
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	extendWriteDeadline(w, llmHandlerTimeout)
 
 	select {
 	case s.investigateSem <- struct{}{}:
@@ -845,6 +855,25 @@ func (s *liveServer) handleChat(w http.ResponseWriter, r *http.Request) {
 	s.serveChat(w, r, s.converseFn)
 }
 
+// llmHandlerTimeout is how long an LLM-bound handler may take to respond,
+// replacing the server-wide 30s WriteTimeout for just those routes. Local
+// Ollama models on modest hardware (especially reasoning models) routinely
+// need minutes per turn; 30s silently killed the connection mid-inference
+// and the browser saw an empty reply.
+const llmHandlerTimeout = 10 * time.Minute
+
+// extendWriteDeadline pushes this response's write deadline past the global
+// srv.WriteTimeout (Slowloris protection, which stays in place for every
+// other route). Only the WRITE side is extended: chat/analysis bodies are
+// capped at 16-64KB, so the global 10s ReadTimeout already covers them, and
+// extending reads would let a slow client hold an LLM route's connection for
+// minutes before the concurrency semaphore even sees it. Best-effort:
+// httptest recorders and exotic writers don't support deadlines, and a
+// handler must not fail because of that.
+func extendWriteDeadline(w http.ResponseWriter, d time.Duration) {
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(d))
+}
+
 // serveChat runs one conversation turn through the given converse closure —
 // shared by the legacy /api/chat route and the per-dashboard scoped routes.
 func (s *liveServer) serveChat(w http.ResponseWriter, r *http.Request, converse func(ctx context.Context, req ConverseRequest) (*plugin.Conversation, error)) {
@@ -856,6 +885,7 @@ func (s *liveServer) serveChat(w http.ResponseWriter, r *http.Request, converse 
 		http.Error(w, "chat not available", http.StatusServiceUnavailable)
 		return
 	}
+	extendWriteDeadline(w, llmHandlerTimeout)
 
 	var req ConverseRequest
 	r.Body = http.MaxBytesReader(w, r.Body, 16*1024) // a chat message is small
@@ -905,6 +935,7 @@ func (s *liveServer) serveLogAnalyze(w http.ResponseWriter, r *http.Request, ana
 		http.Error(w, "log analysis not available", http.StatusServiceUnavailable)
 		return
 	}
+	extendWriteDeadline(w, llmHandlerTimeout)
 	var req LogAnalyzeRequest
 	r.Body = http.MaxBytesReader(w, r.Body, 64*1024) // one line + bounded context
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
