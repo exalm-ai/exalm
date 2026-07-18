@@ -119,73 +119,90 @@
 
   var PAGES = { syslog: pageSyslog, httplog: pageHTTP, eventlog: pageEventlog, iis: pageIIS, logs: pageLogs, cloudtrail: pageCloudTrail };
 
-  // ── drilldown: chart click → analyzer logs API → corpus lines ──
+  // ── drilldown: chart click → shared logs explorer over the corpus API ──
 
   function drillPanelHTML() {
     return '<div id="ex-an-drillpanel" style="display:none;' + card + 'margin-top:2px;">' +
       '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +
-      '<span style="' + lbl + 'margin-bottom:0;">Matching log lines</span>' +
-      '<span id="ex-an-drillinfo" style="font-size:11px;color:var(--muted);"></span><span style="flex:1;"></span>' +
+      '<span style="' + lbl + 'margin-bottom:0;">Matching log lines</span><span style="flex:1;"></span>' +
       '<button id="ex-an-drillclose" style="border:1px solid var(--border);background:var(--panel2);color:var(--muted);border-radius:6px;cursor:pointer;font-size:10.5px;padding:2px 9px;">✕ close</button></div>' +
-      '<div id="ex-an-drillout" style="max-height:38vh;overflow:auto;font-family:\'IBM Plex Mono\',monospace;font-size:11px;line-height:1.5;background:var(--code);color:var(--codeFg);border-radius:8px;padding:8px 10px;"></div></div>';
+      '<div id="ex-an-drillmount"></div></div>';
+  }
+
+  // parseDrillQuery turns a chart element's data-drill query string into the
+  // explorer's filter object. "bucket=HH:MM" is a UI-side minute filter;
+  // translate via contains on the timestamp text as a best-effort (corpus
+  // timestamps vary).
+  function parseDrillQuery(query) {
+    var filters = {};
+    String(query || '').split('&').forEach(function (pair) {
+      if (!pair) return;
+      var eq = pair.indexOf('=');
+      var k = eq === -1 ? pair : pair.slice(0, eq);
+      var v = eq === -1 ? '' : decodeURIComponent(pair.slice(eq + 1).replace(/\+/g, ' '));
+      if (k === 'bucket') { k = 'contains'; }
+      if (k === 'severity' || k === 'unit' || k === 'scope' || k === 'code' || k === 'contains') filters[k] = v;
+    });
+    return filters;
+  }
+
+  function qs(filters) {
+    var parts = [];
+    ['severity', 'unit', 'scope', 'code', 'contains', 'from', 'to'].forEach(function (k) {
+      if (filters[k]) parts.push(k + '=' + encodeURIComponent(filters[k]));
+    });
+    return parts.join('&');
+  }
+
+  // corpusExplorerConfig builds the shared-explorer config for one analyzer
+  // dashboard — the drilldown panel and the investigation workspace's Logs
+  // pane both use it, so there is exactly one corpus wiring.
+  function corpusExplorerConfig(analyzerId, initialFilters) {
+    return {
+      mode: 'corpus',
+      initialFilters: initialFilters || {},
+      capabilities: { search: true, severity: true, source: true, time: true, export: true, context: true },
+      downloadName: analyzerId + '-logs',
+      // Route line analysis through the dashboard-scoped endpoint: the hub
+      // wires AnalyzeLine per ingested session, while the legacy global
+      // /api/logs/analyze is only bound in single-analyzer mode.
+      analyzeURL: apiBase() + '/logs/analyze',
+      fetchLogs: function (f) {
+        return fetch(apiBase() + '/logs?' + qs(f) + '&limit=200').then(function (r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.json();
+        });
+      },
+      fetchContext: function (ev, n) {
+        var anchor = ev.idx != null ? ev.idx : encodeURIComponent(ev.at || '');
+        return fetch(apiBase() + '/logs?around=' + anchor + '&context=' + n).then(function (r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.json();
+        });
+      },
+      analyzeMeta: function (ev) {
+        return { namespace: ev.scope || '', pod: ev.unit || '', severity: ev.severity || '', source: analyzerId };
+      },
+      onInvestigate: function (ev) {
+        if (window.ExalmChat && window.ExalmChat.ask) {
+          window.ExalmChat.ask('Investigate this ' + (ev.severity || 'log') + ' line from ' + (ev.unit || ev.scope || analyzerId) + ': ' + ev.raw);
+        }
+      },
+      onJumpToResource: function (ev) {
+        var res = ev.unit || ev.scope;
+        if (res && window.ExalmChat && window.ExalmChat.ask) {
+          window.ExalmChat.ask('What is the status of ' + res + '?');
+        }
+      }
+    };
   }
 
   function runDrill(query) {
     var panelEl = document.getElementById('ex-an-drillpanel');
-    var out = document.getElementById('ex-an-drillout');
-    var info = document.getElementById('ex-an-drillinfo');
-    if (!panelEl || !out) return;
+    var mount = document.getElementById('ex-an-drillmount');
+    if (!panelEl || !mount || !window.ExalmLogExplorer) return;
     panelEl.style.display = 'block';
-    out.innerHTML = '<span style="color:var(--faint)">Loading…</span>';
-    // "bucket=HH:MM" is a UI-side minute filter; translate via contains on
-    // the timestamp text as a best-effort (corpus timestamps vary).
-    var q = query.replace(/(^|&)bucket=([^&]*)/, function (_m, p, v) {
-      return p + 'contains=' + v;
-    });
-    fetch(apiBase() + '/logs?' + q + '&limit=200').then(function (r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
-    }).then(function (d) {
-      info.textContent = d.total + ' match(es)' + (d.truncated ? ' · corpus truncated by ' + d.truncated : '');
-      if (!d.events || !d.events.length) {
-        out.innerHTML = '<span style="color:var(--faint)">No matching lines.</span>';
-        return;
-      }
-      out.innerHTML = d.events.map(function (e, i) {
-        return '<div class="ex-an-row" data-idx="' + i + '" style="display:flex;gap:8px;align-items:baseline;padding:1px 2px;border-radius:4px;">' +
-          '<span style="flex:1;white-space:pre-wrap;color:' + sevColor(e.severity) + ';">' + esc(e.raw) + '</span>' +
-          '<button class="ex-an-analyze" data-idx="' + i + '" title="AI analysis of this line" style="border:1px solid var(--accent);background:transparent;color:var(--accent);border-radius:6px;cursor:pointer;font-size:9.5px;padding:1px 7px;flex:none;">✦</button></div>';
-      }).join('');
-      out._events = d.events;
-    }).catch(function (err) {
-      out.innerHTML = '<span style="color:var(--crit)">Drilldown failed: ' + esc(err.message) + '</span>';
-    });
-  }
-
-  function analyzeRow(ev, allEvents) {
-    var ctx = allEvents.map(function (e) { return e.raw; }).join('\n');
-    var out = document.getElementById('ex-an-drillout');
-    var d = window.__DASH__ || {};
-    fetch('/api/logs/analyze', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Exalm-Request': 'true' },
-      body: JSON.stringify({
-        namespace: ev.scope || '', pod: ev.unit || '', severity: ev.severity || '',
-        source: d.analyzer || '', message: ev.raw, context: ctx.slice(0, 20000)
-      })
-    }).then(function (r) {
-      if (!r.ok) throw new Error(r.status === 503 ? 'AI analysis unavailable (no LLM configured)' : 'HTTP ' + r.status);
-      return r.json();
-    }).then(function (resp) {
-      var html = (E.mdToHtml ? E.mdToHtml(resp.analysis) : esc(resp.analysis));
-      out.insertAdjacentHTML('afterend',
-        '<div class="ex-an-analysis" style="margin-top:10px;background:var(--panel2);border:1px solid var(--accent);border-radius:10px;padding:11px 14px;font-size:12.5px;line-height:1.6;color:var(--body);">' +
-        '<div style="display:flex;"><span style="' + lbl + '">✦ AI analysis of the selected line</span><span style="flex:1"></span>' +
-        '<button onclick="this.closest(\'.ex-an-analysis\').remove()" style="border:1px solid var(--border);background:var(--panel);color:var(--muted);border-radius:6px;cursor:pointer;font-size:10px;padding:1px 8px;">✕</button></div>' +
-        html + '</div>');
-    }).catch(function (err) {
-      out.insertAdjacentHTML('afterend', '<div class="ex-an-analysis" style="margin-top:8px;color:var(--crit);font-size:12px;">⚠ ' + esc(err.message) + '</div>');
-    });
+    window.ExalmLogExplorer.create(mount, corpusExplorerConfig(currentAnalyzer, parseDrillQuery(query)));
   }
 
   // render builds the whole analyzer dashboard page body.
@@ -214,18 +231,11 @@
     });
     root.addEventListener('click', function (e) {
       var closeBtn = e.target.closest('#ex-an-drillclose');
-      if (closeBtn) { document.getElementById('ex-an-drillpanel').style.display = 'none'; return; }
-      var analyze = e.target.closest('.ex-an-analyze');
-      if (analyze) {
-        var out = document.getElementById('ex-an-drillout');
-        var events = out._events || [];
-        var ev = events[+analyze.getAttribute('data-idx')];
-        if (ev) analyzeRow(ev, events);
-      }
+      if (closeBtn) { document.getElementById('ex-an-drillpanel').style.display = 'none'; }
     });
   }
 
-  window.AnalyzerDash = { render: render, attach: attach };
+  window.AnalyzerDash = { render: render, attach: attach, corpusExplorerConfig: corpusExplorerConfig };
 
   // dashboard.js's first paint happens before this module loads — fill the
   // analyzer panels now if the container is already on the page.

@@ -498,5 +498,13 @@ func TestHandleDashboard_AutoRefreshFlag(t *testing.T) {
 		if !strings.Contains(body, "/static/dashboard.js") {
 			t.Error("expected the dashboard to load /static/dashboard.js")
 		}
+		// logexplorer.js must load before its two consumers (analyzer.js,
+		// logviewer.js) — definition-before-use across the module set.
+		leIdx := strings.Index(body, "/static/logexplorer.js")
+		if leIdx == -1 {
+			t.Error("expected the dashboard to load /static/logexplorer.js")
+		} else if anIdx := strings.Index(body, "/static/analyzer.js"); anIdx != -1 && leIdx > anIdx {
+			t.Error("logexplorer.js must load before analyzer.js")
+		}
 	}
 }
