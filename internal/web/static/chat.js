@@ -410,6 +410,14 @@
         window.ExalmTree.buildModel(inlineSession.messages, inlineSession.focus),
         treeRoot, inlineSession.treeOpenKeys);
     }
+    // The workspace's Timeline pane (dashboard.js workspaceHTML) mirrors the
+    // latest turn's investigation timeline; repaint it here so a new answer
+    // live-updates the pane without dashboard.js polling.
+    var tlRoot = document.getElementById('ai-timeline-root');
+    if (tlRoot) {
+      var tlEvents = currentTimeline();
+      if (tlEvents.length) tlRoot.innerHTML = timelineHTML(tlEvents);
+    }
     if (wasFocused) {
       var inp = root.querySelector('.ex-chat-input');
       if (inp) { inp.focus(); try { inp.setSelectionRange(caret, caret); } catch (e) {} }
@@ -459,7 +467,20 @@
     reCloseAfterPrint = [];
   });
 
-  window.ExalmChat = { attach: attach, openScoped: openScoped, ask: ask };
+  // currentTimeline returns the newest assistant turn's investigation
+  // timeline for the inline session — the workspace Timeline pane's data.
+  function currentTimeline() {
+    var m = (inlineSession && inlineSession.messages) || [];
+    for (var i = m.length - 1; i >= 0; i--) {
+      if (m[i].role !== 'user' && m[i].timeline && m[i].timeline.length) return m[i].timeline;
+    }
+    return [];
+  }
+
+  window.ExalmChat = {
+    attach: attach, openScoped: openScoped, ask: ask,
+    timelineHTML: timelineHTML, currentTimeline: currentTimeline
+  };
   // dashboard.js's first paint may already have happened before this module
   // loads (script tags run in order, after the page's initial render call).
   attach();

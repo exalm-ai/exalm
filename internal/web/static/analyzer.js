@@ -156,8 +156,14 @@
 
   // corpusExplorerConfig builds the shared-explorer config for one analyzer
   // dashboard — the drilldown panel and the investigation workspace's Logs
-  // pane both use it, so there is exactly one corpus wiring.
+  // pane both use it, so there is exactly one corpus wiring. The API base
+  // derives from the analyzerId ARGUMENT, not the module's currentAnalyzer:
+  // the workspace mounts before this module's render() has run (hub stats
+  // load asynchronously), when currentAnalyzer is still empty or stale.
   function corpusExplorerConfig(analyzerId, initialFilters) {
+    var base = (window.__DASH__ && window.__DASH__.dashboards && window.__DASH__.dashboards.length)
+      ? '/api/dashboards/' + encodeURIComponent(analyzerId)
+      : '/api/analyzer';
     return {
       mode: 'corpus',
       initialFilters: initialFilters || {},
@@ -166,16 +172,16 @@
       // Route line analysis through the dashboard-scoped endpoint: the hub
       // wires AnalyzeLine per ingested session, while the legacy global
       // /api/logs/analyze is only bound in single-analyzer mode.
-      analyzeURL: apiBase() + '/logs/analyze',
+      analyzeURL: base + '/logs/analyze',
       fetchLogs: function (f) {
-        return fetch(apiBase() + '/logs?' + qs(f) + '&limit=200').then(function (r) {
+        return fetch(base + '/logs?' + qs(f) + '&limit=200').then(function (r) {
           if (!r.ok) throw new Error('HTTP ' + r.status);
           return r.json();
         });
       },
       fetchContext: function (ev, n) {
         var anchor = ev.idx != null ? ev.idx : encodeURIComponent(ev.at || '');
-        return fetch(apiBase() + '/logs?around=' + anchor + '&context=' + n).then(function (r) {
+        return fetch(base + '/logs?around=' + anchor + '&context=' + n).then(function (r) {
           if (!r.ok) throw new Error('HTTP ' + r.status);
           return r.json();
         });

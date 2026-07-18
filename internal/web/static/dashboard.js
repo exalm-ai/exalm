@@ -543,12 +543,14 @@
       '<span style="width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#7b5bff,var(--accent));display:flex;align-items:center;justify-content:center;color:#fff;">' + icon('dashboard') + '</span>' +
       '<div style="flex:1;"><div style="font-size:14px;font-weight:700;">' + esc(title) + '</div>' +
       '<div style="font-size:12px;color:var(--muted);">' + esc(sub) + '</div></div></div>';
-    // Hub mode: the analyzer page carries its own AI workspace (the k8s
-    // workspace's AI page stays k8s-scoped). Hidden when AI is disabled.
+    // Hub mode: the analyzer page carries the full investigation workspace
+    // (tree + chat + timeline + embedded corpus explorer — same composition
+    // as the k8s AI page, scoped to this analyzer's routes). Hidden when AI
+    // is disabled; the chart drilldown stays the non-AI log surface.
     var ai = '';
     if (desc && desc.supportsAI && data.supportsAI !== false) {
       ai = '<details open style="margin-top:14px;"><summary style="cursor:pointer;font-size:10.5px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--faint);padding:4px 0;">AI Investigation</summary>' +
-        card('<div id="ai-chat-root" style="min-width:0;"></div>', '14px 16px') + '</details>';
+        card(workspaceHTML({ analyzerId: desc.id }), '14px 16px') + '</details>';
     }
     return header + '<div id="analyzer-dash-root"></div>' + ai;
   }
@@ -754,18 +756,59 @@
       .catch(function (e) { delete state.incidentBusy[id]; state.incidentError = String((e && e.message) || e); render(); });
   }
 
-  // ── Page: AI Analysis — two-pane investigation workspace ──
-  // Left: the cumulative investigation tree (tree.js). Right: the chat.
+  // ── Investigation workspace (shared by the AI page and analyzer pages) ──
+  // The tree+chat grid plus collapsible Timeline and Logs panes. The chat
+  // seed already carries the analysis summary, so there is no separate
+  // Summary card (it would render the same narrative twice). ctx is
+  // {analyzerId} for analyzer dashboards, or null for the k8s workspace.
+  function workspaceHTML(ctx) {
+    function pane(title, inner) {
+      return '<details style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;">' +
+        '<summary style="cursor:pointer;font-size:10.5px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--faint);">' + esc(title) + '</summary>' +
+        '<div style="margin-top:10px;">' + inner + '</div></details>';
+    }
+    var timelineEmpty = '<div style="font-size:12px;color:var(--faint);">No investigation timeline yet — ask a question first.' +
+      (dashById('timeline') ? ' See the <a href="/timeline" style="color:var(--accent);">cross-signal timeline ↗</a> for cluster-wide history.' : '') + '</div>';
+    var logsInner = ctx && ctx.analyzerId
+      ? '<div id="ai-logs-root"></div>'
+      : '<button data-act="logs" style="display:flex;align-items:center;gap:7px;height:32px;padding:0 12px;border-radius:9px;border:1px solid var(--border);background:var(--panel2);color:var(--fg);font-size:12.5px;font-weight:500;cursor:pointer;"><span style="font-size:13px;">▤</span><span>Open the pod log viewer</span></button>';
+    return '<div class="ex-ai-grid" style="display:grid;grid-template-columns:minmax(280px,34%) 1fr;gap:16px;">' +
+      '<div id="ai-tree-root" style="min-width:0;border-right:1px solid var(--border);padding-right:14px;max-height:62vh;overflow-y:auto;"></div>' +
+      '<div id="ai-chat-root" style="min-width:0;"></div>' +
+      '</div>' +
+      pane('Timeline', '<div id="ai-timeline-root">' + timelineEmpty + '</div>') +
+      pane('Logs', logsInner);
+  }
+
+  // fillWorkspace paints the workspace's Timeline and Logs panes after each
+  // re-render (the chat/tree panes are chat.js's). Explorer filter state is
+  // kept per analyzer so render()'s innerHTML rebuild doesn't reset it.
+  var wsExplorerFilters = {};
+  function fillWorkspace() {
+    var tlRoot = document.getElementById('ai-timeline-root');
+    if (tlRoot && window.ExalmChat && window.ExalmChat.currentTimeline) {
+      var ev = window.ExalmChat.currentTimeline();
+      if (ev.length) tlRoot.innerHTML = window.ExalmChat.timelineHTML(ev);
+    }
+    var logsRoot = document.getElementById('ai-logs-root');
+    if (logsRoot && !logsRoot._exWired && window.ExalmLogExplorer && window.AnalyzerDash && window.AnalyzerDash.corpusExplorerConfig) {
+      var id = (state.page === 'dash' && state.dash) || data.analyzer || '';
+      if (!id) return;
+      logsRoot._exWired = true;
+      var cfg = window.AnalyzerDash.corpusExplorerConfig(id, wsExplorerFilters[id] || {});
+      var origFetch = cfg.fetchLogs;
+      cfg.fetchLogs = function (f) { wsExplorerFilters[id] = f; return origFetch(f); };
+      window.ExalmLogExplorer.create(logsRoot, cfg);
+    }
+  }
+
+  // ── Page: AI Analysis — the k8s investigation workspace ──
   function pageAI(v) {
     var header = '<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">' +
       '<span style="width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#7b5bff,var(--accent));display:flex;align-items:center;justify-content:center;color:#fff;">' + icon('ai') + '</span>' +
       '<div style="flex:1;"><div style="font-size:14px;font-weight:700;">Investigation assistant</div><div style="font-size:12px;color:var(--muted);">Ask follow-ups — Exalm plans the investigation, gathers evidence across the cluster, and remembers it all, scoped to ' + esc(v.nsLabel) + '</div></div>' +
       '<button data-act="reanalyze" style="display:flex;align-items:center;gap:8px;height:36px;padding:0 16px;border-radius:9px;border:none;background:var(--accent);color:#04222b;font-size:12.5px;font-weight:700;cursor:pointer;">✦ Re-analyze ' + v.totalFindings + ' findings</button></div>';
-    return card(header +
-      '<div class="ex-ai-grid" style="display:grid;grid-template-columns:minmax(280px,34%) 1fr;gap:16px;">' +
-      '<div id="ai-tree-root" style="min-width:0;border-right:1px solid var(--border);padding-right:14px;max-height:62vh;overflow-y:auto;"></div>' +
-      '<div id="ai-chat-root" style="min-width:0;"></div>' +
-      '</div>', '18px 20px');
+    return card(header + workspaceHTML(null), '18px 20px');
   }
 
   // ── Page: Alerts (read-only critical+high findings) ──
@@ -936,6 +979,7 @@
     if (window.ExalmWidgets && window.ExalmWidgets.attachTooltips) window.ExalmWidgets.attachTooltips();
     if (window.ExalmChat && window.ExalmChat.attach) window.ExalmChat.attach();
     fillAnalyzerDash();
+    fillWorkspace();
   }
 
   function fixBtn(f, isFixed, isFixing, large) {
