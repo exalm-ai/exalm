@@ -9,6 +9,45 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — modular AI-ops platform work (feat/ops-workspace)
+
+Built on top of the existing implementation after a full inventory (registry-driven navigation,
+settings API, per-analyzer dashboards, the AI chat workspace, timeline backend, and all
+source-aware collectors already existed — none were rebuilt). What was actually added:
+
+- **`SupportsExplorer` registry capability** (`internal/web/dashboards.go`) — dashboards declare
+  whether they carry a log/finding explorer surface (k8s + every analyzer: yes); the sidebar's
+  Log Explorer entry is gated on the flag instead of assumed. Not zeroed by settings — it is a
+  data view, not an AI feature.
+- **Settings persisted in SQLite** (`internal/settings/sqlite.go`, `internal/store`) — the
+  settings document moves from `~/.exalm/settings.json` into a single-row `settings` table in
+  `~/.exalm/exalm.db`, selected via the same `SetSettingsDB` atomic-pointer switch the incident
+  and conversation stores use, with automatic file fallback when the DB can't open. One-time
+  `MigrateSettings` imports the legacy file verbatim (left in place). The GET/PUT `/api/settings`
+  contract is unchanged byte-for-byte.
+- **Surrounding-context log queries** (`internal/investigate/logsession.go`, `internal/web`) —
+  `GET .../logs?around=<idx|RFC3339>&context=N` returns the events around one anchor;
+  `LogSession.Around` anchors by corpus index (exact) or timestamp (fallback after re-ingest),
+  and every log-query event now carries its corpus `idx`. The rest of the explorer wishlist
+  (from/to, severity, unit/scope, contains, limit/offset) already existed server-side.
+- **Shared logs explorer** (`internal/web/static/logexplorer.js`) — one view module replaces the
+  two overlapping log viewers (k8s drawer + analyzer drilldown): search/regex, per-vocabulary
+  severity, unit/scope + time-range filters, export, one-shot ✦ analysis (now routed through the
+  dashboard-scoped analyze endpoint — the old hardcoded global URL 503'd in hub mode),
+  show-surrounding-context with anchor highlight, conversational Investigate and jump-to-resource
+  hand-offs. logviewer.js keeps only the k8s pod-selection shell and live-tail loop; analyzer.js'
+  drilldown becomes a thin mount over the same module.
+- **Investigation workspace everywhere** (`internal/web/static/{dashboard,chat,analyzer}.js`) —
+  the AI page's tree+chat grid is a shared `workspaceHTML()` now also embedded in every analyzer
+  dashboard's AI section, extended with a Timeline pane (mirrors the latest turn's investigation
+  timeline, live-updating) and a Logs pane (embedded corpus explorer for analyzers, pod log
+  drawer for k8s). Analyzer pages gain the cumulative evidence tree; the existing chat is
+  untouched — its exports grew by two read-only functions.
+
+Deliberately not built: IIS↔Windows-event cross-correlation (needs two corpora joined in one
+session — architecturally new, flagged for later), and a network (Hubble) analyzer (the adapter
+in `internal/network` remains dormant, wired to nothing).
+
 ### Added
 - **Sortable Log Explorer columns** (`internal/web/static/dashboard.js`) — Severity, Namespace/Pod,
   Message, and Category headers are now clickable: click to sort by that column (with a sensible
