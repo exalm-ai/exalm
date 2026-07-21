@@ -7,10 +7,12 @@ import (
 	"html/template"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/exalm-ai/exalm/internal/remediation"
 	"github.com/exalm-ai/exalm/pkg/plugin"
 )
 
@@ -473,6 +475,82 @@ func TestHandleFix_AppliesThenReCollects(t *testing.T) {
 	}
 	if n := len(srv.getReport().Findings); n != 0 {
 		t.Errorf("handleFix must re-collect after applying; expected 0 findings, got %d", n)
+	}
+}
+
+func TestHandleFixAll_OrdersAppliesAllAndReCollects(t *testing.T) {
+	var appliedOrder []string
+	srv := newTestServer(plugin.Report{
+		Findings: []plugin.Finding{
+			{Title: "no-fix"}, // no Remediation — must be skipped
+			{Title: "z-delete", Remediation: &plugin.RemediationAction{Kind: "delete-pod"}},
+			{Title: "a-restart", Remediation: &plugin.RemediationAction{Kind: "rollout-restart"}},
+		},
+	})
+	srv.fixSem = make(chan struct{}, maxConcurrentFixes)
+	srv.applyFix = func(_ context.Context, a plugin.RemediationAction) error {
+		appliedOrder = append(appliedOrder, a.Kind)
+		if a.Kind == "delete-pod" {
+			return errors.New("delete failed")
+		}
+		return nil
+	}
+	srv.refreshFindings = func(_ context.Context) ([]plugin.Finding, error) {
+		return []plugin.Finding{}, nil // fixed
+	}
+
+	rr := httptest.NewRecorder()
+	srv.handleFixAll(rr, httptest.NewRequest(http.MethodPost, "/api/fix-all", nil))
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body=%s)", rr.Code, rr.Body.String())
+	}
+	if !reflect.DeepEqual(appliedOrder, []string{"rollout-restart", "delete-pod"}) {
+		t.Errorf("expected restart applied before delete, got %v", appliedOrder)
+	}
+
+	var results []remediation.Result
+	if err := json.Unmarshal(rr.Body.Bytes(), &results); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results (no-fix skipped), got %+v", results)
+	}
+	if results[0].Title != "a-restart" || !results[0].OK {
+		t.Errorf("result[0]: %+v", results[0])
+	}
+	if results[1].Title != "z-delete" || results[1].OK || results[1].Error != "delete failed" {
+		t.Errorf("result[1]: %+v", results[1])
+	}
+	if n := len(srv.getReport().Findings); n != 0 {
+		t.Errorf("handleFixAll must re-collect after applying; expected 0 findings, got %d", n)
+	}
+}
+
+func TestHandleFixAll_Unwired503AndGateChecks(t *testing.T) {
+	srv := newTestServer(plugin.Report{})
+	srv.fixSem = make(chan struct{}, maxConcurrentFixes)
+
+	rr := httptest.NewRecorder()
+	srv.handleFixAll(rr, httptest.NewRequest(http.MethodPost, "/api/fix-all", nil))
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Errorf("unwired should 503, got %d", rr.Code)
+	}
+
+	srv.applyFix = func(context.Context, plugin.RemediationAction) error { return nil }
+	rr = httptest.NewRecorder()
+	srv.handleFixAll(rr, httptest.NewRequest(http.MethodGet, "/api/fix-all", nil))
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET should 405, got %d", rr.Code)
+	}
+
+	for i := 0; i < maxConcurrentFixes; i++ { // fill the gate
+		srv.fixSem <- struct{}{}
+	}
+	rr = httptest.NewRecorder()
+	srv.handleFixAll(rr, httptest.NewRequest(http.MethodPost, "/api/fix-all", nil))
+	if rr.Code != http.StatusTooManyRequests {
+		t.Errorf("full gate should 429, got %d", rr.Code)
 	}
 }
 

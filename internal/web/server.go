@@ -23,6 +23,7 @@ import (
 	"github.com/exalm-ai/exalm/internal/changestore"
 	"github.com/exalm-ai/exalm/internal/investigate"
 	"github.com/exalm-ai/exalm/internal/metrics"
+	"github.com/exalm-ai/exalm/internal/remediation"
 	"github.com/exalm-ai/exalm/internal/report"
 	"github.com/exalm-ai/exalm/internal/settings"
 	"github.com/exalm-ai/exalm/pkg/plugin"
@@ -1453,15 +1454,10 @@ func remediationJSON(r *plugin.RemediationAction) template.HTMLAttr {
 	return template.HTMLAttr(strings.ReplaceAll(string(b), "'", "&#39;"))
 }
 
-// fixAllResult is one entry in the /api/fix-all response array.
-type fixAllResult struct {
-	Title string `json:"title"`
-	OK    bool   `json:"ok"`
-	Error string `json:"error,omitempty"`
-}
-
 // handleFixAll applies all remediable findings from the current report.
-// Safe order: rollout-restart → resume-cronjob → delete-pod.
+// Safe order: rollout-restart → resume-cronjob → delete-pod. Ordering,
+// batching, and per-item result collection live in internal/remediation —
+// this handler is decode-gate → call → encode.
 // Shares the same fixSem semaphore as handleFix — fix-all counts as one slot.
 func (s *liveServer) handleFixAll(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -1481,42 +1477,8 @@ func (s *liveServer) handleFixAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	report := s.getReport()
-	kindOrder := map[string]int{"rollout-restart": 0, "resume-cronjob": 1, "delete-pod": 2}
-	order := func(k string) int {
-		if v, ok := kindOrder[k]; ok {
-			return v
-		}
-		return 99
-	}
-
-	type fixable struct {
-		title  string
-		action plugin.RemediationAction
-	}
-	var items []fixable
-	for _, f := range report.Findings {
-		if f.Remediation != nil {
-			items = append(items, fixable{title: f.Title, action: *f.Remediation})
-		}
-	}
-	// Sort by kind order (restarts before deletes).
-	for i := 1; i < len(items); i++ {
-		for j := i; j > 0 && order(items[j].action.Kind) < order(items[j-1].action.Kind); j-- {
-			items[j], items[j-1] = items[j-1], items[j]
-		}
-	}
-
-	results := make([]fixAllResult, 0, len(items))
-	for _, item := range items {
-		res := fixAllResult{Title: item.title}
-		if err := s.applyFix(r.Context(), item.action); err != nil {
-			res.Error = err.Error()
-		} else {
-			res.OK = true
-		}
-		results = append(results, res)
-	}
+	items := remediation.OrderForBatch(remediation.FixableFromReport(s.getReport()))
+	results := remediation.ApplyAll(r.Context(), items, s.applyFix)
 
 	// Re-collect once after applying the batch so the dashboard reflects the
 	// new cluster state on the next poll. Best-effort.
