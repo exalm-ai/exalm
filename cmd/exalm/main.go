@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -233,12 +234,14 @@ func newMCPCmd(_ *rootFlags) *cobra.Command {
 			if tok == "" {
 				tok = os.Getenv("EXALM_TOKEN")
 			}
-			return runMCPServe(cmd.Context(), sse, allowWrite, tok)
+			reportFile, _ := cmd.Flags().GetString("file")
+			return runMCPServe(cmd.Context(), sse, allowWrite, tok, reportFile)
 		},
 	}
 	serve.Flags().String("sse", "", "if non-empty, serve over SSE on this address (e.g. :7434); otherwise stdio")
 	serve.Flags().Bool("write", false, "enable mutating tools (apply_remediation, open_incident)")
 	serve.Flags().String("token", "", "Bearer token required on every SSE request (default: $EXALM_TOKEN)")
+	serve.Flags().String("file", "", "load findings from a saved report JSON (e.g. `exalm k8s analyze --output json > report.json`) instead of starting empty")
 	mcpRoot.AddCommand(serve)
 	return mcpRoot
 }
@@ -703,11 +706,22 @@ func buildVersionString() string {
 // runMCPServe boots the MCP server. Stdio is the MCP-spec default transport
 // used when an LLM client (e.g. Claude Desktop) launches Exalm as a child
 // process. SSE mode is useful when running Exalm as a long-lived sidecar.
-func runMCPServe(ctx context.Context, sseAddr string, allowWrite bool, token string) error {
-	// Empty report; in production this would be wired to a watch loop that
-	// keeps the MCP server's view fresh. For now we expose an empty surface
-	// that tests + manual handshakes can exercise.
-	srv := mcp.NewServer(plugin.Report{Title: "exalm-mcp", Summary: "MCP server (empty report)"}, allowWrite)
+//
+// reportFile, when set, loads a real plugin.Report snapshot (the same JSON
+// shape any plugin writes via --output json) so the read tools expose actual
+// findings instead of an empty surface. A live watch-mode source (mirroring
+// serveOpts.ReportUpdates for the web dashboard) is deferred — read-only
+// file-backed snapshots are this phase's scope.
+func runMCPServe(ctx context.Context, sseAddr string, allowWrite bool, token string, reportFile string) error {
+	report := plugin.Report{Title: "exalm-mcp", Summary: "no report loaded — pass --file <report.json> (from `exalm <plugin> ... --output json`) to expose real findings"}
+	if reportFile != "" {
+		loaded, err := loadReportFile(reportFile)
+		if err != nil {
+			return fmt.Errorf("load report file: %w", err)
+		}
+		report = loaded
+	}
+	srv := mcp.NewServer(report, allowWrite)
 
 	if sseAddr != "" {
 		mux := http.NewServeMux()
@@ -739,6 +753,32 @@ func runMCPServe(ctx context.Context, sseAddr string, allowWrite bool, token str
 
 	fmt.Fprintln(os.Stderr, "exalm mcp: stdio mode (one JSON-RPC request per line)") //nolint:errcheck // startup info to stderr
 	return mcp.ServeStdio(srv, os.Stdin, os.Stdout)
+}
+
+// maxMCPReportFileBytes bounds --file so a mistakenly huge path doesn't stall
+// startup decoding it; a findings snapshot has no legitimate reason to
+// approach this.
+const maxMCPReportFileBytes = 32 << 20 // 32MiB
+
+func loadReportFile(path string) (plugin.Report, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return plugin.Report{}, err
+	}
+	if info.Size() > maxMCPReportFileBytes {
+		return plugin.Report{}, fmt.Errorf("%s is %d bytes, exceeds the %d byte limit for --file", path, info.Size(), maxMCPReportFileBytes)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return plugin.Report{}, err
+	}
+	defer f.Close() //nolint:errcheck // read-only fd, close error not actionable
+
+	var report plugin.Report
+	if err := json.NewDecoder(f).Decode(&report); err != nil {
+		return plugin.Report{}, fmt.Errorf("parse %s as report JSON: %w", path, err)
+	}
+	return report, nil
 }
 
 // newWebhookCmd returns the `exalm webhook` command group, which currently
