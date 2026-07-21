@@ -26,9 +26,9 @@ import (
 	"github.com/exalm-ai/exalm/internal/remediation"
 	"github.com/exalm-ai/exalm/internal/report"
 	"github.com/exalm-ai/exalm/internal/settings"
+	"github.com/exalm-ai/exalm/internal/timeline"
 	"github.com/exalm-ai/exalm/pkg/plugin"
 	dorapkg "github.com/exalm-ai/exalm/plugins/dora"
-	incidentpkg "github.com/exalm-ai/exalm/plugins/incident"
 )
 
 //go:embed templates static
@@ -1122,24 +1122,6 @@ func (s *liveServer) handleChangesJSON(w http.ResponseWriter, r *http.Request) {
 	w.Write(payload) //nolint:errcheck
 }
 
-// ── Timeline types ────────────────────────────────────────────────────────────
-
-// TimelineEvent is a single coloured event on the cross-signal SVG timeline.
-type TimelineEvent struct {
-	At       string `json:"at"` // ISO8601
-	Label    string `json:"label"`
-	Severity string `json:"severity"` // "critical","high","medium","low","info","iac"
-	Source   string `json:"source"`   // "finding","iac","incident"
-	Detail   string `json:"detail"`
-}
-
-// TimelineData is the JSON payload served by /api/timeline.
-type TimelineData struct {
-	StartISO string          `json:"start"` // earliest event ISO8601
-	EndISO   string          `json:"end"`   // now ISO8601
-	Events   []TimelineEvent `json:"events"`
-}
-
 // handleTimeline renders the timeline.html template.
 func (s *liveServer) handleTimeline(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -1153,103 +1135,23 @@ func (s *liveServer) handleTimeline(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
-// handleTimelineJSON builds and serves the TimelineData JSON payload.
-func (s *liveServer) handleTimelineJSON(w http.ResponseWriter, _ *http.Request) {
+// handleTimelineJSON builds and serves the timeline.Data JSON payload.
+// The 4-source merge (current findings, snapshot history, incidents, IaC
+// changes) lives in internal/timeline — this handler just gathers the two
+// pieces of server state the aggregator doesn't own (the current report and
+// the in-memory snapshot history) and encodes the result.
+func (s *liveServer) handleTimelineJSON(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	now := time.Now().UTC()
-	start := now.Add(-7 * 24 * time.Hour)
-
-	var events []TimelineEvent
-
-	// ── 1. Findings from the current report ──────────────────────────────────
-	report := s.getReport()
-	for _, f := range report.Findings {
-		sev := string(f.Severity)
-		if f.Category == "IaC" || f.Source == "iac" {
-			sev = "iac"
-		}
-		ev := TimelineEvent{
-			At:       now.Format(time.RFC3339),
-			Label:    f.Title,
-			Severity: sev,
-			Source:   "finding",
-			Detail:   f.Detail,
-		}
-		events = append(events, ev)
-	}
-
-	// ── 2. Findings from snapshot history ────────────────────────────────────
 	s.mu.RLock()
-	snapshots := s.snapshotHistory
+	history := s.snapshotHistory
 	s.mu.RUnlock()
-	for _, snap := range snapshots {
-		ts := snap.CollectedAt
-		if ts.Before(start) {
-			start = ts
-		}
-		for _, f := range snap.Report.Findings {
-			sev := string(f.Severity)
-			if f.Category == "IaC" || f.Source == "iac" {
-				sev = "iac"
-			}
-			ev := TimelineEvent{
-				At:       ts.Format(time.RFC3339),
-				Label:    f.Title,
-				Severity: sev,
-				Source:   "finding",
-				Detail:   f.Detail,
-			}
-			events = append(events, ev)
-		}
+	snapshots := make([]timeline.Snapshot, len(history))
+	for i, snap := range history {
+		snapshots[i] = timeline.Snapshot{CollectedAt: snap.CollectedAt, Report: snap.Report}
 	}
 
-	// ── 3. Incidents from the incident store ─────────────────────────────────
-	store := incidentpkg.NewFileStore()
-	incidents, err := store.QueryByDateRange(context.Background(), start, now)
-	if err == nil {
-		for _, inc := range incidents {
-			sev := string(inc.Severity)
-			if sev == "" {
-				sev = "info"
-			}
-			label := fmt.Sprintf("[%s] %s", inc.ID, inc.Title)
-			detail := fmt.Sprintf("Status: %s | Opened: %s", inc.Status, inc.OpenedAt.Format(time.RFC3339))
-			events = append(events, TimelineEvent{
-				At:       inc.OpenedAt.Format(time.RFC3339),
-				Label:    label,
-				Severity: sev,
-				Source:   "incident",
-				Detail:   detail,
-			})
-		}
-	}
-
-	// ── 4. IaC changes from the changestore ──────────────────────────────────
-	cs, err := changestore.Open("")
-	if err == nil {
-		changes, err := cs.All(start)
-		if err == nil {
-			for _, c := range changes {
-				events = append(events, TimelineEvent{
-					At:       c.Timestamp.Format(time.RFC3339),
-					Label:    fmt.Sprintf("%s %s/%s", c.Kind, c.Namespace, c.Name),
-					Severity: "iac",
-					Source:   "iac",
-					Detail:   fmt.Sprintf("Action: %s | Actor: %s", c.Action, c.Actor),
-				})
-			}
-		}
-	}
-
-	data := TimelineData{
-		StartISO: start.Format(time.RFC3339),
-		EndISO:   now.Format(time.RFC3339),
-		Events:   events,
-	}
-	if data.Events == nil {
-		data.Events = []TimelineEvent{}
-	}
+	data := timeline.Aggregate(r.Context(), s.getReport(), snapshots, time.Now().UTC())
 	payload, _ := json.Marshal(data)
 	w.Write(payload) //nolint:errcheck
 }
