@@ -13,10 +13,12 @@ import (
 
 	convopkg "github.com/exalm-ai/exalm/internal/convo"
 	"github.com/exalm-ai/exalm/internal/investigate"
+	"github.com/exalm-ai/exalm/internal/metrics"
 	"github.com/exalm-ai/exalm/internal/registry"
 	"github.com/exalm-ai/exalm/internal/web"
 	"github.com/exalm-ai/exalm/pkg/plugin"
 	incidentplugin "github.com/exalm-ai/exalm/plugins/incident"
+	k8splugin "github.com/exalm-ai/exalm/plugins/k8s"
 )
 
 // investigable is satisfied structurally by every analyzer plugin that built
@@ -124,33 +126,74 @@ func incidentActionFn() func(ctx context.Context, req web.IncidentActionRequest)
 	}
 }
 
+// pastIncidentsFn builds the "has this happened before?" closure that reads
+// the local incident store. k8splugin.IncidentHistoryFn is a type alias of
+// investigate.IncidentHistoryFn (see plugins/k8s/history.go), so this one
+// function backs both the k8s copilot's SetHistorySources and the generic
+// analyzer engine's HistorySources.Incidents below — previously copy-pasted
+// verbatim across cmd/exalm/main.go, cmd/exalm/serve.go, and this file.
+func pastIncidentsFn(incStore incidentplugin.Store) investigate.IncidentHistoryFn {
+	return func(ctx context.Context, from, to time.Time) ([]investigate.PastIncident, error) {
+		incidents, err := incStore.QueryByDateRange(ctx, from, to)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]investigate.PastIncident, 0, len(incidents))
+		for _, inc := range incidents {
+			past := investigate.PastIncident{
+				Title: inc.Title, Namespace: inc.Namespace, Service: inc.Service,
+				Status: string(inc.Status), OpenedAt: inc.OpenedAt,
+			}
+			if pm := inc.Postmortem; pm != nil {
+				past.Resolution = pm.Mitigation
+				if past.Resolution == "" && len(pm.ActionItems) > 0 {
+					past.Resolution = strings.Join(pm.ActionItems, "; ")
+				}
+			}
+			out = append(out, past)
+		}
+		return out, nil
+	}
+}
+
 // incidentHistorySources builds the shared history sources (prior
-// conversations + incident records) for an investigation engine.
+// conversations + incident records) for the generic analyzer investigation
+// engine.
 func incidentHistorySources(convoStore convopkg.Store) investigate.HistorySources {
-	incStore := incidentplugin.NewFileStore()
 	return investigate.HistorySources{
-		Convo: convoStore,
-		Incidents: func(ctx context.Context, from, to time.Time) ([]investigate.PastIncident, error) {
-			incidents, err := incStore.QueryByDateRange(ctx, from, to)
-			if err != nil {
-				return nil, err
-			}
-			out := make([]investigate.PastIncident, 0, len(incidents))
-			for _, inc := range incidents {
-				past := investigate.PastIncident{
-					Title: inc.Title, Namespace: inc.Namespace, Service: inc.Service,
-					Status: string(inc.Status), OpenedAt: inc.OpenedAt,
-				}
-				if pm := inc.Postmortem; pm != nil {
-					past.Resolution = pm.Mitigation
-					if past.Resolution == "" && len(pm.ActionItems) > 0 {
-						past.Resolution = strings.Join(pm.ActionItems, "; ")
-					}
-				}
-				out = append(out, past)
-			}
-			return out, nil
-		},
+		Convo:     convoStore,
+		Incidents: pastIncidentsFn(incidentplugin.NewFileStore()),
+	}
+}
+
+// buildK8sServeHandlers wires the k8s plugin's conversational investigation
+// assistant (Converse, GetConversation, AnalyzeLogLine) and historical
+// recurrence lookup into serveOpts. Shared by `exalm <analyzer>
+// --output web`/`--open` (cmd/exalm/main.go runSubcommand) and `exalm serve`
+// (cmd/exalm/serve.go runServe) — previously copy-pasted between the two
+// verbatim, including the incident-history closure. metricsProvider may be
+// nil (matches serve.go's prior behavior of passing no evidence provider).
+func buildK8sServeHandlers(serveOpts *web.ServeOpts, k8sPlug *k8splugin.Plugin, llmClient plugin.LLMClient, redactor plugin.Redactor, metricsProvider metrics.Provider) {
+	convoStore := convopkg.NewStore()
+	k8sPlug.SetHistorySources(pastIncidentsFn(incidentplugin.NewFileStore()))
+
+	serveOpts.Converse = func(ctx context.Context, req web.ConverseRequest) (*plugin.Conversation, error) {
+		return k8sPlug.Converse(ctx, req.ConversationID, req.FindingID, req.Namespace, req.Message,
+			llmClient, redactor, convoStore, metricsProvider)
+	}
+	serveOpts.GetConversation = func(ctx context.Context, id string) (*plugin.Conversation, error) {
+		c, err := convoStore.Get(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		return &c, nil
+	}
+	serveOpts.AnalyzeLogLine = func(ctx context.Context, req web.LogAnalyzeRequest) (string, error) {
+		return k8sPlug.AnalyzeLogLine(ctx, k8splugin.LogLineRequest{
+			Namespace: req.Namespace, Pod: req.Pod, Container: req.Container,
+			Severity: req.Severity, Source: req.Source, Labels: req.Labels,
+			Message: req.Message, Context: req.Context,
+		}, llmClient, redactor)
 	}
 }
 

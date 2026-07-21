@@ -22,7 +22,6 @@ import (
 	"github.com/exalm-ai/exalm/internal/cliui"
 	"github.com/exalm-ai/exalm/internal/config"
 	convopkg "github.com/exalm-ai/exalm/internal/convo"
-	"github.com/exalm-ai/exalm/internal/gitprovider"
 	"github.com/exalm-ai/exalm/internal/llm"
 	"github.com/exalm-ai/exalm/internal/mcp"
 	"github.com/exalm-ai/exalm/internal/metrics"
@@ -619,53 +618,11 @@ func runSubcommand(ctx context.Context, p plugin.Plugin, sc plugin.Subcommand, f
 			// Conversational investigation assistant (the AI Analysis page):
 			// deterministic evidence gathering across the cluster + exactly one
 			// redacted LLM call per turn, persisted across turns and reloads.
-			convoStore := convopkg.NewStore()
-			// Historical recurrence ("has this happened before?") reads the
-			// incident store through a decoupled closure so plugins/k8s never
-			// imports plugins/incident.
-			incStore := incidentplugin.NewFileStore()
-			k8sPlug.SetHistorySources(func(ctx context.Context, from, to time.Time) ([]k8splugin.PastIncident, error) {
-				incidents, err := incStore.QueryByDateRange(ctx, from, to)
-				if err != nil {
-					return nil, err
-				}
-				out := make([]k8splugin.PastIncident, 0, len(incidents))
-				for _, inc := range incidents {
-					past := k8splugin.PastIncident{
-						Title: inc.Title, Namespace: inc.Namespace, Service: inc.Service,
-						Status: string(inc.Status), OpenedAt: inc.OpenedAt,
-					}
-					if pm := inc.Postmortem; pm != nil {
-						past.Resolution = pm.Mitigation
-						if past.Resolution == "" && len(pm.ActionItems) > 0 {
-							past.Resolution = strings.Join(pm.ActionItems, "; ")
-						}
-					}
-					out = append(out, past)
-				}
-				return out, nil
-			})
-			serveOpts.Converse = func(ctx context.Context, req web.ConverseRequest) (*plugin.Conversation, error) {
-				return k8sPlug.Converse(ctx, req.ConversationID, req.FindingID, req.Namespace, req.Message,
-					trackedLLM, redactor, convoStore, metricsProvider)
-			}
-			serveOpts.GetConversation = func(ctx context.Context, id string) (*plugin.Conversation, error) {
-				c, err := convoStore.Get(ctx, id)
-				if err != nil {
-					return nil, err
-				}
-				return &c, nil
-			}
-
-			// Per-log-entry AI analysis (the log viewer's ✦ Analyze action):
-			// one redacted LLM call over a single line + its context.
-			serveOpts.AnalyzeLogLine = func(ctx context.Context, req web.LogAnalyzeRequest) (string, error) {
-				return k8sPlug.AnalyzeLogLine(ctx, k8splugin.LogLineRequest{
-					Namespace: req.Namespace, Pod: req.Pod, Container: req.Container,
-					Severity: req.Severity, Source: req.Source, Labels: req.Labels,
-					Message: req.Message, Context: req.Context,
-				}, trackedLLM, redactor)
-			}
+			// Shared with `exalm serve` via buildK8sServeHandlers
+			// (serve_investigate.go) — historical recurrence ("has this
+			// happened before?") reads the incident store through a decoupled
+			// closure so plugins/k8s never imports plugins/incident.
+			buildK8sServeHandlers(&serveOpts, k8sPlug, trackedLLM, redactor, metricsProvider)
 		} else if inv, ok := p.(investigable); ok {
 			// Log analyzers (syslog, httplog, eventlog, iis, logs): the same
 			// conversational copilot over the analysis session's parsed
@@ -680,6 +637,9 @@ func runSubcommand(ctx context.Context, p plugin.Plugin, sc plugin.Subcommand, f
 		}
 
 		// Inject CreatePR closure if a git provider token and repo are configured.
+		// Shared core with cmd/exalm/serve.go's buildCreatePRFn — this call site
+		// resolves token/repo/baseBranch from plugin flags instead of serve's
+		// dedicated --github-* flags, but builds the closure identically.
 		gpToken := pluginFlags["github-token"]
 		if gpToken == "" {
 			gpToken = os.Getenv("GITHUB_TOKEN")
@@ -688,28 +648,11 @@ func runSubcommand(ctx context.Context, p plugin.Plugin, sc plugin.Subcommand, f
 		if gpRepo == "" {
 			gpRepo = os.Getenv("GITHUB_REPO")
 		}
-		if gpToken != "" && gpRepo != "" {
-			parts := strings.SplitN(gpRepo, "/", 2)
-			if len(parts) == 2 {
-				baseBranch := pluginFlags["github-base-branch"]
-				if baseBranch == "" {
-					baseBranch = "main"
-				}
-				gpOpts := gitprovider.Options{
-					Token:      gpToken,
-					Owner:      parts[0],
-					Repo:       parts[1],
-					BaseBranch: baseBranch,
-				}
-				gp, err := gitprovider.NewFromFlags(pluginFlags["git-provider"], gpOpts)
-				if err != nil {
-					return fmt.Errorf("git provider: %w", err)
-				}
-				serveOpts.CreatePR = func(ctx context.Context, r plugin.Report) (string, error) {
-					return gp.CreateFixPR(ctx, r)
-				}
-			}
+		createPR, err := buildCreatePRFnFromParts(pluginFlags["git-provider"], gpToken, gpRepo, pluginFlags["github-base-branch"])
+		if err != nil {
+			return fmt.Errorf("git provider: %w", err)
 		}
+		serveOpts.CreatePR = createPR
 
 		return web.Serve(ctx, report, serveOpts)
 	default:

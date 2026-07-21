@@ -18,13 +18,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/exalm-ai/exalm/internal/cliui"
 	"github.com/exalm-ai/exalm/internal/config"
-	convopkg "github.com/exalm-ai/exalm/internal/convo"
 	"github.com/exalm-ai/exalm/internal/gitprovider"
 	"github.com/exalm-ai/exalm/internal/llm"
 	"github.com/exalm-ai/exalm/internal/preflight"
@@ -32,7 +30,6 @@ import (
 	"github.com/exalm-ai/exalm/internal/settings"
 	"github.com/exalm-ai/exalm/internal/web"
 	"github.com/exalm-ai/exalm/pkg/plugin"
-	incidentplugin "github.com/exalm-ai/exalm/plugins/incident"
 	k8splugin "github.com/exalm-ai/exalm/plugins/k8s"
 	sloplugin "github.com/exalm-ai/exalm/plugins/slo"
 )
@@ -299,51 +296,11 @@ func runServe(ctx context.Context, root *rootFlags, f *serveCLIFlags) error {
 	// deterministic evidence gathering across the cluster + exactly one
 	// redacted LLM call per turn, persisted across turns and reloads.
 	// `exalm serve` previously left this unwired — findings and remediation
-	// worked, but the chat route always returned 503.
-	convoStore := convopkg.NewStore()
-	incStore := incidentplugin.NewFileStore()
-	k8sPlug.SetHistorySources(func(ctx context.Context, from, to time.Time) ([]k8splugin.PastIncident, error) {
-		incidents, err := incStore.QueryByDateRange(ctx, from, to)
-		if err != nil {
-			return nil, err
-		}
-		out := make([]k8splugin.PastIncident, 0, len(incidents))
-		for _, inc := range incidents {
-			past := k8splugin.PastIncident{
-				Title: inc.Title, Namespace: inc.Namespace, Service: inc.Service,
-				Status: string(inc.Status), OpenedAt: inc.OpenedAt,
-			}
-			if pm := inc.Postmortem; pm != nil {
-				past.Resolution = pm.Mitigation
-				if past.Resolution == "" && len(pm.ActionItems) > 0 {
-					past.Resolution = strings.Join(pm.ActionItems, "; ")
-				}
-			}
-			out = append(out, past)
-		}
-		return out, nil
-	})
-	serveOpts.Converse = func(ctx context.Context, req web.ConverseRequest) (*plugin.Conversation, error) {
-		return k8sPlug.Converse(ctx, req.ConversationID, req.FindingID, req.Namespace, req.Message,
-			llmClient, redactor, convoStore, nil)
-	}
-	serveOpts.GetConversation = func(ctx context.Context, id string) (*plugin.Conversation, error) {
-		c, err := convoStore.Get(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		return &c, nil
-	}
-
-	// Per-log-entry AI analysis (the log viewer's ✦ Analyze action): one
-	// redacted LLM call over a single line + its context.
-	serveOpts.AnalyzeLogLine = func(ctx context.Context, req web.LogAnalyzeRequest) (string, error) {
-		return k8sPlug.AnalyzeLogLine(ctx, k8splugin.LogLineRequest{
-			Namespace: req.Namespace, Pod: req.Pod, Container: req.Container,
-			Severity: req.Severity, Source: req.Source, Labels: req.Labels,
-			Message: req.Message, Context: req.Context,
-		}, llmClient, redactor)
-	}
+	// worked, but the chat route always returned 503. Shared with
+	// cmd/exalm/main.go's --output web wiring via buildK8sServeHandlers
+	// (serve_investigate.go) — no metrics provider here, matching the prior
+	// behavior of this call site.
+	buildK8sServeHandlers(&serveOpts, k8sPlug, llmClient, redactor, nil)
 
 	// Inject CreatePR closure if a git provider token and repo are configured.
 	serveOpts.CreatePR = buildCreatePRFn(f)
@@ -474,30 +431,44 @@ func buildCreatePRFn(f *serveCLIFlags) func(context.Context, plugin.Report) (str
 	if repo == "" {
 		repo = os.Getenv("GITHUB_REPO")
 	}
-	if token == "" || repo == "" {
+	fn, err := buildCreatePRFnFromParts(f.gitProvider, token, repo, f.githubBaseBranch)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "exalm serve: git provider setup failed: %v\n", err) //nolint:errcheck // warning to stderr; returns nil
 		return nil
+	}
+	return fn
+}
+
+// buildCreatePRFnFromParts builds the CreatePR closure once token/repo/
+// baseBranch/provider have been resolved. Shared by buildCreatePRFn (serve's
+// own --github-* flags) and cmd/exalm/main.go's per-plugin --output web
+// wiring (which resolves the same values from plugin flags) — previously an
+// inline copy of this exact logic. Returns (nil, nil) when the provider is
+// not fully configured (no token/repo) — that is not an error, just "no PR
+// support configured."
+func buildCreatePRFnFromParts(gitProviderName, token, repo, baseBranch string) (func(context.Context, plugin.Report) (string, error), error) {
+	if token == "" || repo == "" {
+		return nil, nil
 	}
 	parts := strings.SplitN(repo, "/", 2)
 	if len(parts) != 2 {
-		return nil
+		return nil, nil
 	}
-	baseBranch := f.githubBaseBranch
 	if baseBranch == "" {
 		baseBranch = "main"
 	}
-	gp, err := gitprovider.NewFromFlags(f.gitProvider, gitprovider.Options{
+	gp, err := gitprovider.NewFromFlags(gitProviderName, gitprovider.Options{
 		Token:      token,
 		Owner:      parts[0],
 		Repo:       parts[1],
 		BaseBranch: baseBranch,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "exalm serve: git provider setup failed: %v\n", err) //nolint:errcheck // warning to stderr; returns nil
-		return nil
+		return nil, err
 	}
 	return func(ctx context.Context, r plugin.Report) (string, error) {
 		return gp.CreateFixPR(ctx, r)
-	}
+	}, nil
 }
 
 // Compile-time checks: both plugin types must satisfy plugin.Plugin.
