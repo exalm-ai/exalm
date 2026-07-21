@@ -7,8 +7,89 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/exalm-ai/exalm/internal/mcp"
 	"github.com/exalm-ai/exalm/pkg/plugin"
 )
+
+// A minimal but valid kubeconfig pointing at an address nothing listens on.
+// Building a client never dials it (kubernetes.NewForConfig is lazy), so
+// wireK8sApplyHandler succeeds; only an actual apply_remediation call would
+// reach the network, and 127.0.0.1:1 refuses instantly (no hang, no real
+// cluster needed).
+const fakeKubeconfigForMCP = `
+apiVersion: v1
+kind: Config
+clusters:
+- name: test-cluster
+  cluster:
+    server: https://127.0.0.1:1
+current-context: test-context
+contexts:
+- name: test-context
+  context:
+    cluster: test-cluster
+    user: test-user
+users:
+- name: test-user
+  user:
+    token: fake-token
+`
+
+func writeFakeKubeconfigForMCP(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "kubeconfig")
+	if err := os.WriteFile(path, []byte(fakeKubeconfigForMCP), 0o600); err != nil {
+		t.Fatalf("write fake kubeconfig: %v", err)
+	}
+	return path
+}
+
+func applyRemediationVia(srv *mcp.Server, title string) []byte {
+	req := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"apply_remediation","arguments":{"title":"` + title + `"}}}`)
+	return srv.Handle(req)
+}
+
+func reportWithOneRemediableFinding() plugin.Report {
+	return plugin.Report{Findings: []plugin.Finding{
+		{Title: "ns/pod", Remediation: &plugin.RemediationAction{Kind: "delete-pod", Namespace: "ns", Name: "pod"}},
+	}}
+}
+
+func TestWireK8sApplyHandler_ValidKubeconfigWiresARealExecutor(t *testing.T) {
+	defer mcp.SetApplyHandler(nil)
+	wireK8sApplyHandler(writeFakeKubeconfigForMCP(t), "")
+
+	srv := mcp.NewServer(reportWithOneRemediableFinding(), true)
+	resp := decodeMCPResponse(t, applyRemediationVia(srv, "ns/pod"))
+
+	if resp.Error == nil {
+		t.Fatal("expected an error — 127.0.0.1:1 refuses connections — but got success")
+	}
+	if strings.Contains(resp.Error.Message, "not configured") {
+		t.Errorf("handler should be wired (a real, if unreachable, executor); got the unconfigured message: %s", resp.Error.Message)
+	}
+}
+
+func TestWireK8sApplyHandler_MissingKubeconfigLeavesApplyUnconfigured(t *testing.T) {
+	defer mcp.SetApplyHandler(nil)
+	wireK8sApplyHandler(filepath.Join(t.TempDir(), "does-not-exist"), "")
+
+	srv := mcp.NewServer(reportWithOneRemediableFinding(), true)
+	resp := decodeMCPResponse(t, applyRemediationVia(srv, "ns/pod"))
+
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "not configured") {
+		t.Errorf("expected the graceful \"not configured\" message, got: %+v", resp.Error)
+	}
+}
+
+func decodeMCPResponse(t *testing.T, raw []byte) mcp.JSONRPCResponse {
+	t.Helper()
+	var r mcp.JSONRPCResponse
+	if err := json.Unmarshal(raw, &r); err != nil {
+		t.Fatalf("response not JSON: %v\nraw=%s", err, raw)
+	}
+	return r
+}
 
 func writeReportFile(t *testing.T, r plugin.Report) string {
 	t.Helper()

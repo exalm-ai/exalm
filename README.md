@@ -296,12 +296,15 @@ Full values reference and sealed-secrets / External Secrets Operator setup:
 ## MCP integration (Claude Desktop)
 
 exalm implements the [Model Context Protocol](https://modelcontextprotocol.io), letting
-Claude Desktop call exalm analysis tools directly from a conversation.
+Claude Desktop and other MCP agents query exalm's findings and apply remediations
+directly from a conversation.
 
 ```sh
-# Start the MCP server
-export EXALM_TOKEN=your-secret-token
-exalm mcp serve --token $EXALM_TOKEN
+# 1. Produce a report to serve
+exalm k8s analyze --output json > report.json
+
+# 2. Serve it (read-only, stdio)
+exalm mcp serve --file report.json
 ```
 
 Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
@@ -311,18 +314,18 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
   "mcpServers": {
     "exalm": {
       "command": "exalm",
-      "args": ["mcp", "serve"],
-      "env": {
-        "ANTHROPIC_API_KEY": "sk-ant-...",
-        "EXALM_TOKEN": "your-token"
-      }
+      "args": ["mcp", "serve", "--file", "/absolute/path/report.json"]
     }
   }
 }
 ```
 
-Restart Claude Desktop. You can now ask: _"Analyze my Kubernetes cluster and give me a
-DORA report for the last 30 days"_ and Claude will call exalm directly.
+Restart Claude Desktop. You can now ask: _"What are the critical findings, and which
+can be auto-fixed?"_ and Claude will call exalm's tools directly. Add `--write` (plus a
+`--kubeconfig`) to let Claude apply k8s remediations.
+
+Full walkthrough — read tools, write mode, SSE transport, safety model:
+[docs/mcp.md](docs/mcp.md).
 
 ---
 

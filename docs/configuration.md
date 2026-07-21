@@ -86,7 +86,13 @@ disables remote commands entirely.
 | Flag | Default | Description |
 |---|---|---|
 | `--sse` | — | If set, serve over HTTP/SSE on this address (e.g. `:7434`); otherwise stdio |
-| `--write` | `false` | Enable mutating MCP tools (`apply_remediation`, `open_incident`) |
+| `--write` | `false` | Enable mutating MCP tools (`apply_remediation`) |
+| `--token` | `$EXALM_TOKEN` | Bearer token required on every SSE request |
+| `--file` | — | Load findings from a saved report JSON (e.g. `exalm k8s analyze --output json > report.json`) instead of starting empty |
+| `--kubeconfig` | standard discovery | Kubeconfig for `--write`'s k8s remediation executor |
+| `--context` | current-context | Kubeconfig context for `--write`'s k8s remediation executor |
+
+See the [MCP usage guide](mcp.md) for a step-by-step walkthrough.
 
 ---
 

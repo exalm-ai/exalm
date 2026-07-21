@@ -235,13 +235,17 @@ func newMCPCmd(_ *rootFlags) *cobra.Command {
 				tok = os.Getenv("EXALM_TOKEN")
 			}
 			reportFile, _ := cmd.Flags().GetString("file")
-			return runMCPServe(cmd.Context(), sse, allowWrite, tok, reportFile)
+			kubeconfigPath, _ := cmd.Flags().GetString("kubeconfig")
+			kubeContext, _ := cmd.Flags().GetString("context")
+			return runMCPServe(cmd.Context(), sse, allowWrite, tok, reportFile, kubeconfigPath, kubeContext)
 		},
 	}
 	serve.Flags().String("sse", "", "if non-empty, serve over SSE on this address (e.g. :7434); otherwise stdio")
 	serve.Flags().Bool("write", false, "enable mutating tools (apply_remediation, open_incident)")
 	serve.Flags().String("token", "", "Bearer token required on every SSE request (default: $EXALM_TOKEN)")
 	serve.Flags().String("file", "", "load findings from a saved report JSON (e.g. `exalm k8s analyze --output json > report.json`) instead of starting empty")
+	serve.Flags().String("kubeconfig", "", "path to kubeconfig for --write's k8s remediation executor (default: standard discovery)")
+	serve.Flags().String("context", "", "kubeconfig context for --write's k8s remediation executor (default: current-context)")
 	mcpRoot.AddCommand(serve)
 	return mcpRoot
 }
@@ -712,7 +716,15 @@ func buildVersionString() string {
 // findings instead of an empty surface. A live watch-mode source (mirroring
 // serveOpts.ReportUpdates for the web dashboard) is deferred — read-only
 // file-backed snapshots are this phase's scope.
-func runMCPServe(ctx context.Context, sseAddr string, allowWrite bool, token string, reportFile string) error {
+//
+// When allowWrite is set, apply_remediation is wired to the same
+// k8splugin.ApplyRemediation executor the web dashboard's ApplyFix uses
+// (main.go/serve.go), via a fresh kubeconfig-discovered client — no cluster
+// connection is required to start the server (read tools work regardless);
+// a missing/invalid kubeconfig just leaves apply_remediation reporting "not
+// configured", the same graceful degradation the dashboard already uses
+// when no cluster is reachable.
+func runMCPServe(ctx context.Context, sseAddr string, allowWrite bool, token string, reportFile string, kubeconfigPath, kubeContext string) error {
 	report := plugin.Report{Title: "exalm-mcp", Summary: "no report loaded — pass --file <report.json> (from `exalm <plugin> ... --output json`) to expose real findings"}
 	if reportFile != "" {
 		loaded, err := loadReportFile(reportFile)
@@ -722,6 +734,10 @@ func runMCPServe(ctx context.Context, sseAddr string, allowWrite bool, token str
 		report = loaded
 	}
 	srv := mcp.NewServer(report, allowWrite)
+
+	if allowWrite {
+		wireK8sApplyHandler(kubeconfigPath, kubeContext)
+	}
 
 	if sseAddr != "" {
 		mux := http.NewServeMux()
@@ -753,6 +769,26 @@ func runMCPServe(ctx context.Context, sseAddr string, allowWrite bool, token str
 
 	fmt.Fprintln(os.Stderr, "exalm mcp: stdio mode (one JSON-RPC request per line)") //nolint:errcheck // startup info to stderr
 	return mcp.ServeStdio(srv, os.Stdin, os.Stdout)
+}
+
+// wireK8sApplyHandler builds a k8s client via standard kubeconfig discovery
+// and, on success, registers it as the MCP apply_remediation executor — the
+// same k8splugin.ApplyRemediation function the web dashboard's ApplyFix
+// closure calls (main.go/serve.go). Building the client never dials the
+// cluster (kubernetes.NewForConfig is lazy), so this only fails when no
+// usable kubeconfig exists; that failure is logged and left non-fatal,
+// since read tools work fine with no cluster at all — apply_remediation
+// just keeps reporting "not configured" until one is available.
+func wireK8sApplyHandler(kubeconfigPath, kubeContext string) {
+	cs, err := k8splugin.NewClient(kubeconfigPath, kubeContext)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  ⚠️  MCP write mode: %v — apply_remediation will report \"not configured\" until a kubeconfig is available.\n", err) //nolint:errcheck // startup warning to stderr
+		return
+	}
+	mcp.SetApplyHandler(func(a plugin.RemediationAction) error {
+		return k8splugin.ApplyRemediation(context.Background(), cs, a)
+	})
+	fmt.Fprintln(os.Stderr, "  ⬡ MCP write mode: k8s remediation executor connected — apply_remediation is live.") //nolint:errcheck // startup info to stderr
 }
 
 // maxMCPReportFileBytes bounds --file so a mistakenly huge path doesn't stall

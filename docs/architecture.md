@@ -353,10 +353,18 @@ The `/timeline` page renders an SVG chart with 30-second auto-refresh.
 
 ## MCP integration
 
-`internal/mcp` exposes Exalm analyses via the Model Context Protocol (MCP)
-over Server-Sent Events (SSE). This allows Claude Desktop to call Exalm
-analyses as tool calls. No authentication on the SSE endpoint yet (Phase 6
-roadmap item).
+`internal/mcp` exposes Exalm analyses via the Model Context Protocol (MCP),
+letting Claude Desktop and other MCP agents call Exalm's findings and
+remediation as tool calls. Both **stdio** (default) and **SSE/HTTP**
+transports are supported. The read tools (`list_findings`, `get_finding`,
+`report_summary`, `list_remediable`) delegate to `internal/service`'s
+`FindingsService` — the same service the web dashboard uses — and
+`apply_remediation` delegates to `RemediationService`, wired in `--write`
+mode to the k8s `ApplyRemediation` executor via standard kubeconfig
+discovery. SSE requests require a bearer token (`--token` / `$EXALM_TOKEN`);
+starting SSE without one prints a warning and runs unauthenticated.
+
+See the [MCP usage guide](mcp.md) for setup and examples.
 
 ---
 
