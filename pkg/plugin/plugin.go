@@ -311,6 +311,23 @@ type RemediationAction struct {
 	Downtime string `json:"downtime,omitempty"`
 }
 
+// SplitFixesByType partitions fixes into temporary (buys time, issue
+// recurs) and root-cause (addresses the underlying cause) groups, by
+// FixType. Anything not explicitly "root-cause" is treated as temporary —
+// this matches the historically unclassified default. Previously
+// reimplemented identically in three places (the Markdown/HTML investigation
+// exporters and plugins/k8s's Investigate); this is the one copy.
+func SplitFixesByType(fixes []RemediationAction) (temporary, root []RemediationAction) {
+	for _, fx := range fixes {
+		if fx.FixType == "root-cause" {
+			root = append(root, fx)
+		} else {
+			temporary = append(temporary, fx)
+		}
+	}
+	return temporary, root
+}
+
 // Severity ranks findings from informational to critical.
 type Severity string
 

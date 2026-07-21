@@ -55,15 +55,7 @@ func (p *Plugin) Investigate(ctx context.Context, id string, llm plugin.LLMClien
 	}
 
 	steps := investigationSteps(*f, snap)
-
-	var temporary, root []plugin.RemediationAction
-	for _, fx := range f.Fixes {
-		if fx.FixType == "root-cause" {
-			root = append(root, fx)
-		} else {
-			temporary = append(temporary, fx)
-		}
-	}
+	temporary, root := plugin.SplitFixesByType(f.Fixes)
 
 	inv := &plugin.Investigation{
 		RootCause:      f.RootCause,

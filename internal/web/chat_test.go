@@ -310,21 +310,3 @@ func TestHandleGetConversation_ExportHTMLAndEscaping(t *testing.T) {
 		t.Error("expected the hostile excerpt to be escaped into the document")
 	}
 }
-
-func TestConversationMarkdown_ExecutiveSummary(t *testing.T) {
-	conv := sampleConv("c9")
-	conv.Fingerprint = "oom-kill\x1fweb-01/nginx"
-	conv.Messages[1].Score = 85
-	conv.Messages[1].ScoreRationale = "kernel OOM line"
-	conv.Messages[1].Hypotheses = []plugin.Hypothesis{{Title: "Memory exhaustion", Score: 85}}
-	md := conversationMarkdown(conv)
-	for _, want := range []string{"## Executive summary", "Memory exhaustion", "85%", "`oom-kill`", "Investigation turns:** 1"} {
-		if !strings.Contains(md, want) {
-			t.Errorf("markdown exec summary missing %q", want)
-		}
-	}
-	// Existing structure preserved below the summary.
-	if !strings.Contains(md, "## Question") || !strings.Contains(md, "## Answer") {
-		t.Error("technical transcript sections missing")
-	}
-}

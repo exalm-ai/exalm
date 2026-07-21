@@ -1,8 +1,8 @@
-package web
+package report
 
-// chat_export_html.go renders a persisted investigation as a STANDALONE
-// HTML report — inline CSS, no external assets, @media print styles so the
-// browser's Print → Save-as-PDF produces a clean document. Every piece of
+// html.go renders a persisted investigation as a STANDALONE HTML report —
+// inline CSS, no external assets, @media print styles so the browser's
+// Print → Save-as-PDF produces a clean document. Every piece of
 // conversation content is escaped via html/template; nothing user-authored
 // is emitted raw.
 
@@ -14,8 +14,10 @@ import (
 	"github.com/exalm-ai/exalm/pkg/plugin"
 )
 
-// conversationHTML renders the full investigation report.
-func conversationHTML(c *plugin.Conversation, analyzer string) string {
+// HTML renders the full investigation report. analyzer labels which
+// dashboard/analyzer produced the conversation (shown in the meta line);
+// pass "" when not applicable (e.g. the k8s workspace).
+func HTML(c *plugin.Conversation, analyzer string) string {
 	esc := template.HTMLEscapeString
 	var b strings.Builder
 
@@ -146,15 +148,6 @@ func conversationHTML(c *plugin.Conversation, analyzer string) string {
 	return b.String()
 }
 
-func lastAssistantMsg(c *plugin.Conversation) *plugin.ConversationMessage {
-	for i := len(c.Messages) - 1; i >= 0; i-- {
-		if c.Messages[i].Role == "assistant" {
-			return &c.Messages[i]
-		}
-	}
-	return nil
-}
-
 func orDot(s string) string {
 	if s == "" {
 		return "•"
@@ -164,14 +157,7 @@ func orDot(s string) string {
 
 func writeHTMLFixes(b *strings.Builder, fixes, prevention []plugin.RemediationAction) {
 	esc := template.HTMLEscapeString
-	var temp, root []plugin.RemediationAction
-	for _, fx := range fixes {
-		if fx.FixType == "root-cause" {
-			root = append(root, fx)
-		} else {
-			temp = append(temp, fx)
-		}
-	}
+	temp, root := plugin.SplitFixesByType(fixes)
 	writeGroup := func(title, class string, actions []plugin.RemediationAction) {
 		if len(actions) == 0 {
 			return

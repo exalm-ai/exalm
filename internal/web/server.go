@@ -23,6 +23,7 @@ import (
 	"github.com/exalm-ai/exalm/internal/changestore"
 	"github.com/exalm-ai/exalm/internal/investigate"
 	"github.com/exalm-ai/exalm/internal/metrics"
+	"github.com/exalm-ai/exalm/internal/report"
 	"github.com/exalm-ai/exalm/internal/settings"
 	"github.com/exalm-ai/exalm/pkg/plugin"
 	dorapkg "github.com/exalm-ai/exalm/plugins/dora"
@@ -1000,7 +1001,7 @@ func (s *liveServer) handleGetConversation(w http.ResponseWriter, r *http.Reques
 	case "", "md":
 		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 		w.Header().Set("Content-Disposition", `attachment; filename="investigation-`+id+`.md"`)
-		fmt.Fprint(w, conversationMarkdown(conv)) //nolint:errcheck
+		fmt.Fprint(w, report.Markdown(conv)) //nolint:errcheck
 	case "json":
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Content-Disposition", `attachment; filename="investigation-`+id+`.json"`)
@@ -1010,7 +1011,7 @@ func (s *liveServer) handleGetConversation(w http.ResponseWriter, r *http.Reques
 	case "html":
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Content-Disposition", `attachment; filename="investigation-`+id+`.html"`)
-		fmt.Fprint(w, conversationHTML(conv, s.analyzer)) //nolint:errcheck
+		fmt.Fprint(w, report.HTML(conv, s.analyzer)) //nolint:errcheck
 	default:
 		http.Error(w, "unsupported format (use md, json, or html)", http.StatusBadRequest)
 	}
