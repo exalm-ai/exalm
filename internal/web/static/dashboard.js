@@ -552,7 +552,40 @@
       ai = '<details open style="margin-top:14px;"><summary style="cursor:pointer;font-size:10.5px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--faint);padding:4px 0;">AI Investigation</summary>' +
         card(workspaceHTML({ analyzerId: desc.id }), '14px 16px') + '</details>';
     }
-    return header + '<div id="analyzer-dash-root"></div>' + ai;
+    return header + analyzerFindingsHTML() + '<div id="analyzer-dash-root"></div>' + ai;
+  }
+
+  // analyzerFindingsHTML renders the structured findings promoted from the
+  // analyzer's symptom catalog (severity, likely cause, suggestion) as a
+  // collapsible panel above the charts. Each card opens the shared
+  // remediation panel (data-act="remediate") — the same explainable panel the
+  // k8s dashboard uses — so proposed shell fixes render with copy buttons and
+  // an "Apply" action that is gated server-side (applicableKinds). Empty when
+  // the analyzer emitted no findings.
+  var SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3, other: 4 };
+  function analyzerFindingsHTML() {
+    var fs = data.findings || [];
+    if (!fs.length) return '';
+    var sorted = fs.slice().sort(function (a, b) {
+      var ra = SEV_ORDER[a.sev]; var rb = SEV_ORDER[b.sev];
+      return (ra == null ? 9 : ra) - (rb == null ? 9 : rb);
+    });
+    var cards = sorted.map(function (f) {
+      var m = sevMeta(f.sev);
+      var chip = '<span style="font-size:9px;font-weight:700;letter-spacing:.5px;padding:2px 7px;border-radius:5px;color:' + m.c + ';background:' + m.soft + ';border:1px solid ' + m.line + ';white-space:nowrap;">' + m.label + '</span>';
+      var conf = f.confidence ? '<span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:' + confColor(f.confidence) + ';">' + esc(f.confidence) + ' confidence</span>' : '';
+      var fixTag = f.fix ? '<span style="font-size:9px;font-weight:700;letter-spacing:.4px;color:var(--accent);">FIX AVAILABLE</span>' : '';
+      var body = '';
+      if (f.reason) body += '<div style="font-size:12px;color:var(--muted);margin-top:5px;">' + esc(f.reason) + '</div>';
+      if (f.root) body += '<div style="font-size:11.5px;color:var(--faint);margin-top:3px;"><b style="color:var(--muted);">Likely cause:</b> ' + esc(f.root) + '</div>';
+      if (f.suggestion) body += '<div style="font-size:11.5px;color:var(--good);margin-top:4px;">💡 ' + esc(f.suggestion) + '</div>';
+      return '<div data-act="remediate" data-id="' + esc(f.id) + '" class="ex-row" title="Open remediation details" style="background:var(--panel);border:1px solid var(--border);border-left:3px solid ' + m.c + ';border-radius:11px;padding:12px 15px;margin-bottom:9px;cursor:pointer;">' +
+        '<div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;">' + chip + conf + fixTag + '</div>' +
+        '<div style="font-size:13px;font-weight:600;color:var(--fg);margin-top:6px;">' + esc(f.title) + '</div>' + body + '</div>';
+    }).join('');
+    return '<details open style="margin-bottom:14px;">' +
+      '<summary style="cursor:pointer;font-size:10.5px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--faint);padding:4px 0;">Findings (' + fs.length + ')</summary>' +
+      '<div style="margin-top:8px;">' + cards + '</div></details>';
   }
 
   // fillAnalyzerDash paints the analyzer panels after every re-render.
