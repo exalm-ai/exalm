@@ -38,7 +38,35 @@ var (
 	reDiskErr    = investigate.Re(`No space left|EXT4-fs error|I/O error|read-only file ?system`)
 	reKernelErr  = investigate.Re(`kernel:.*(panic|BUG|segfault|hung task|oops)`)
 	reSvcFailure = investigate.Re(`Failed to start|entered failed state|Main process exited|Failed with result`)
+
+	// reUnitName captures a systemd unit token ("nginx.service"). It is
+	// deliberately constrained to the same shape the SSH remediation allowlist
+	// accepts (internal/ssh paramRe) so a unit lifted from the corpus is a
+	// valid, injection-safe remediation parameter.
+	reUnitName = regexp.MustCompile(`([A-Za-z0-9][A-Za-z0-9_.@:\-]*\.service)`)
 )
+
+// failedUnitFromCorpus returns the first systemd unit named in a service-
+// failure line, or "" when none can be safely identified (advice-only then).
+// Prefers a "<name>.service" token in the text, else the event's parsed Unit.
+func failedUnitFromCorpus(s *investigate.LogSession) string {
+	if s == nil {
+		return ""
+	}
+	events, _ := s.Query(investigate.LogQuery{Limit: investigate.MaxSessionEvents})
+	for _, e := range events {
+		if !reSvcFailure.MatchString(e.Message) && !reSvcFailure.MatchString(e.Raw) {
+			continue
+		}
+		if m := reUnitName.FindStringSubmatch(e.Message + " " + e.Raw); m != nil {
+			return m[1]
+		}
+		if e.Unit != "" {
+			return e.Unit
+		}
+	}
+	return ""
+}
 
 // sessionOf unwraps the corpus session from the framework's opaque Facts.
 func sessionOf(f investigate.Facts) *investigate.LogSession {
@@ -104,7 +132,13 @@ func matchCorpus(fn func(s *investigate.LogSession, t investigate.Target) bool) 
 // each syslog failure signature, and the candidate causes to rank.
 var syslogSymptomCatalog = []investigate.Symptom{
 	{
-		Key: "oom-kill",
+		Key:      "oom-kill",
+		Title:    "Out-of-memory kill detected",
+		Category: "Reliability",
+		Severity: plugin.SeverityCritical,
+		Describe: func(f investigate.Facts, _ investigate.Target) string {
+			return fmt.Sprintf("The kernel OOM killer fired %d time(s) in the analyzed corpus.", corpusCount(sessionOf(f), reOOM))
+		},
 		Match: matchCorpus(func(s *investigate.LogSession, _ investigate.Target) bool {
 			return corpusHas(s, reOOM)
 		}),
@@ -128,7 +162,13 @@ var syslogSymptomCatalog = []investigate.Symptom{
 		},
 	},
 	{
-		Key: "disk-full",
+		Key:      "disk-full",
+		Title:    "Disk / filesystem errors detected",
+		Category: "Storage",
+		Severity: plugin.SeverityHigh,
+		Describe: func(f investigate.Facts, _ investigate.Target) string {
+			return fmt.Sprintf("%d disk/filesystem error line(s) in the corpus (out-of-space or I/O errors).", corpusCount(sessionOf(f), reDiskErr))
+		},
 		Match: matchCorpus(func(s *investigate.LogSession, _ investigate.Target) bool {
 			return corpusHas(s, reDiskErr)
 		}),
@@ -149,7 +189,35 @@ var syslogSymptomCatalog = []investigate.Symptom{
 		},
 	},
 	{
-		Key: "service-failure",
+		Key:      "service-failure",
+		Title:    "systemd service failure",
+		Category: "Availability",
+		Severity: plugin.SeverityHigh,
+		Describe: func(f investigate.Facts, _ investigate.Target) string {
+			s := sessionOf(f)
+			if unit := failedUnitFromCorpus(s); unit != "" {
+				return fmt.Sprintf("%d service-failure line(s); %s is among the failed units.", corpusCount(s, reSvcFailure), unit)
+			}
+			return fmt.Sprintf("%d service-failure line(s) in the corpus.", corpusCount(s, reSvcFailure))
+		},
+		Remediate: func(f investigate.Facts, _ investigate.Target) *plugin.RemediationAction {
+			unit := failedUnitFromCorpus(sessionOf(f))
+			if unit == "" {
+				return nil // no safely-identifiable unit → advice-only
+			}
+			return &plugin.RemediationAction{
+				Kind:            "svc-restart-linux",
+				Name:            unit,
+				Shell:           "bash",
+				KubectlCmd:      "systemctl restart " + unit,
+				Description:     "Restart the failed unit " + unit,
+				FixType:         "temporary",
+				Risk:            "medium",
+				Rollback:        "systemctl stop " + unit + " (or restore the prior unit state) if the restart makes things worse",
+				Warning:         "Restarts the service; in-flight work handled by " + unit + " is interrupted.",
+				ExpectedOutcome: "The unit returns to active (running); recurrence points at a config/dependency root cause.",
+			}
+		},
 		Match: matchCorpus(func(s *investigate.LogSession, _ investigate.Target) bool {
 			return corpusHas(s, reSvcFailure)
 		}),
@@ -173,7 +241,13 @@ var syslogSymptomCatalog = []investigate.Symptom{
 		},
 	},
 	{
-		Key: "auth-failure",
+		Key:      "auth-failure",
+		Title:    "Repeated authentication failures",
+		Category: "Security",
+		Severity: plugin.SeverityHigh,
+		Describe: func(f investigate.Facts, _ investigate.Target) string {
+			return fmt.Sprintf("%d authentication-failure line(s) — possible brute force or a stuck client.", corpusCount(sessionOf(f), reAuthFail))
+		},
 		Match: matchCorpus(func(s *investigate.LogSession, _ investigate.Target) bool {
 			return corpusCount(s, reAuthFail) >= 3
 		}),
@@ -192,7 +266,13 @@ var syslogSymptomCatalog = []investigate.Symptom{
 		},
 	},
 	{
-		Key: "kernel-issue",
+		Key:      "kernel-issue",
+		Title:    "Kernel fault detected",
+		Category: "Reliability",
+		Severity: plugin.SeverityHigh,
+		Describe: func(f investigate.Facts, _ investigate.Target) string {
+			return fmt.Sprintf("%d kernel-fault line(s) (panic/BUG/segfault/hung task/oops).", corpusCount(sessionOf(f), reKernelErr))
+		},
 		Match: matchCorpus(func(s *investigate.LogSession, _ investigate.Target) bool {
 			return corpusHas(s, reKernelErr)
 		}),
@@ -209,6 +289,9 @@ var syslogSymptomCatalog = []investigate.Symptom{
 	},
 	{
 		Key:      "unknown-degraded",
+		Title:    "Elevated error rate",
+		Category: "Reliability",
+		Severity: plugin.SeverityMedium,
 		Fallback: true,
 		Match: matchCorpus(func(s *investigate.LogSession, _ investigate.Target) bool {
 			return hasErrorEvents(s)

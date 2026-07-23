@@ -82,13 +82,65 @@ func countSlow(s *investigate.LogSession) int {
 	return n
 }
 
+// poolNameRe / reW3SVC gate what a corpus-derived app-pool name may be: a
+// single injection-safe token (subset of the SSH allowlist paramRe) that is NOT
+// the numeric "W3SVCn" site-id form (a site id is not an app-pool name). W3C
+// access logs carry the site (s-sitename), not the pool, so this only yields a
+// candidate for friendly single-token site names — otherwise the finding stays
+// advice-only rather than proposing a possibly-wrong recycle.
+var (
+	poolNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.@:\-]{0,127}$`)
+	reW3SVC    = regexp.MustCompile(`(?i)^W3SVC\d+$`)
+)
+
+// poolCandidateFromCorpus returns a plausible, injection-safe app-pool name
+// derived from the site scope of the 503 events, or "" when none qualifies.
+func poolCandidateFromCorpus(s *investigate.LogSession) string {
+	if s == nil {
+		return ""
+	}
+	events, _ := s.Query(investigate.LogQuery{Code: "503", Limit: investigate.MaxSessionEvents})
+	for _, e := range events {
+		site := strings.TrimSpace(e.Scope)
+		if site == "" || reW3SVC.MatchString(site) || !poolNameRe.MatchString(site) {
+			continue
+		}
+		return site
+	}
+	return ""
+}
+
 // ── symptom catalog ─────────────────────────────────────────────────────────
 
 var iisRe = investigate.Re
 
 var iisSymptomCatalog = []investigate.Symptom{
 	{
-		Key: "pool-failure",
+		Key:      "pool-failure",
+		Title:    "IIS application pool failure (503)",
+		Category: "Availability",
+		Severity: plugin.SeverityHigh,
+		Describe: func(f investigate.Facts, _ investigate.Target) string {
+			return fmt.Sprintf("%d Service Unavailable (503) response(s) — a stopped or rapid-fail-protected app pool.", countCode(sessionOf(f), "503"))
+		},
+		Remediate: func(f investigate.Facts, _ investigate.Target) *plugin.RemediationAction {
+			pool := poolCandidateFromCorpus(sessionOf(f))
+			if pool == "" {
+				return nil // no safely-derivable pool name → advice-only
+			}
+			return &plugin.RemediationAction{
+				Kind:            "iis-pool-recycle",
+				Name:            pool,
+				Shell:           "powershell",
+				KubectlCmd:      "Import-Module WebAdministration; Restart-WebAppPool -Name " + pool,
+				Description:     "Recycle the IIS application pool " + pool,
+				FixType:         "temporary",
+				Risk:            "medium",
+				Rollback:        "None needed — a recycle restarts workers; no config change is made.",
+				Warning:         "Assumes the app pool is named after site " + pool + "; verify with Get-IISAppPool before applying. Recycling drops in-flight requests and in-process session state.",
+				ExpectedOutcome: "Workers restart and 503s clear; recurrence points at an app/config root cause.",
+			}
+		},
 		Match: func(f investigate.Facts, _ investigate.Target) bool {
 			return countCode(sessionOf(f), "503") >= 3
 		},
@@ -108,7 +160,13 @@ var iisSymptomCatalog = []investigate.Symptom{
 		},
 	},
 	{
-		Key: "burst-5xx",
+		Key:      "burst-5xx",
+		Title:    "5xx error burst",
+		Category: "Availability",
+		Severity: plugin.SeverityHigh,
+		Describe: func(f investigate.Facts, _ investigate.Target) string {
+			return fmt.Sprintf("%d server-error (5xx) response(s) in the corpus.", count5xx(sessionOf(f)))
+		},
 		Match: func(f investigate.Facts, _ investigate.Target) bool {
 			return count5xx(sessionOf(f)) >= 3
 		},
@@ -127,7 +185,13 @@ var iisSymptomCatalog = []investigate.Symptom{
 		},
 	},
 	{
-		Key: "slow-requests",
+		Key:      "slow-requests",
+		Title:    "Slow requests",
+		Category: "Performance",
+		Severity: plugin.SeverityMedium,
+		Describe: func(f investigate.Facts, _ investigate.Target) string {
+			return fmt.Sprintf("%d slow request(s) (≥1000ms time-taken) in the corpus.", countSlow(sessionOf(f)))
+		},
 		Match: func(f investigate.Facts, _ investigate.Target) bool {
 			return countSlow(sessionOf(f)) >= 3
 		},
@@ -144,7 +208,14 @@ var iisSymptomCatalog = []investigate.Symptom{
 		},
 	},
 	{
-		Key: "auth-4xx",
+		Key:      "auth-4xx",
+		Title:    "Authorization failures (401/403)",
+		Category: "Security",
+		Severity: plugin.SeverityMedium,
+		Describe: func(f investigate.Facts, _ investigate.Target) string {
+			s := sessionOf(f)
+			return fmt.Sprintf("%d unauthorized/forbidden response(s) (401+403).", countCode(s, "401")+countCode(s, "403"))
+		},
 		Match: func(f investigate.Facts, _ investigate.Target) bool {
 			s := sessionOf(f)
 			return countCode(s, "401")+countCode(s, "403") >= 5
@@ -161,6 +232,9 @@ var iisSymptomCatalog = []investigate.Symptom{
 	},
 	{
 		Key:      "site-anomaly",
+		Title:    "Site anomaly",
+		Category: "Reliability",
+		Severity: plugin.SeverityLow,
 		Fallback: true,
 		Match: func(f investigate.Facts, _ investigate.Target) bool {
 			return sessionOf(f) != nil

@@ -107,6 +107,27 @@ type Symptom struct {
 	Fallback bool
 	Checks   []Check
 	Causes   []CauseTemplate
+
+	// ── Finding-promotion metadata (all optional; used by FindingsFrom to
+	// turn a matched symptom into a plugin.Finding during `analyze`, not just
+	// during interactive investigation). Existing profiles that leave these
+	// zero still work — FindingsFrom applies sensible fallbacks. ──
+
+	// Title is the finding headline; "" => derived from Key.
+	Title string
+	// Category groups the finding in the dashboard, e.g. "Reliability",
+	// "Security", "Availability", "Performance". "" => "Log".
+	Category string
+	// Severity is the finding severity; "" => medium.
+	Severity plugin.Severity
+	// Describe returns a count-rich detail line (e.g. "5 auth failures across
+	// 2 hosts") read from the domain Facts. Nil => FindingsFrom uses a generic
+	// detail derived from the top cause.
+	Describe func(f Facts, t Target) string
+	// Remediate returns an executable primary remediation for this symptom
+	// (e.g. restart the failed unit). Nil => advice-only (the finding still
+	// carries the Prevention catalog entries as copy-only Fixes).
+	Remediate func(f Facts, t Target) *plugin.RemediationAction
 }
 
 // Edge documents one resource-graph relationship the planner can follow and

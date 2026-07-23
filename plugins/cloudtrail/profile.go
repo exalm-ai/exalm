@@ -106,7 +106,13 @@ func matchCorpus(fn func(s *investigate.LogSession, t investigate.Target) bool) 
 // to rank.
 var cloudtrailSymptomCatalog = []investigate.Symptom{
 	{
-		Key: "root-account-usage",
+		Key:      "root-account-usage",
+		Title:    "Root account usage",
+		Category: "Security",
+		Severity: plugin.SeverityCritical,
+		Describe: func(f investigate.Facts, _ investigate.Target) string {
+			return fmt.Sprintf("%d root-account API call(s) — root should not be used for day-to-day operations.", corpusCount(sessionOf(f), reRoot))
+		},
 		Match: matchCorpus(func(s *investigate.LogSession, _ investigate.Target) bool {
 			return corpusHas(s, reRoot)
 		}),
@@ -124,7 +130,13 @@ var cloudtrailSymptomCatalog = []investigate.Symptom{
 		},
 	},
 	{
-		Key: "access-denied-spike",
+		Key:      "access-denied-spike",
+		Title:    "Access-denied spike",
+		Category: "Security",
+		Severity: plugin.SeverityHigh,
+		Describe: func(f investigate.Facts, _ investigate.Target) string {
+			return fmt.Sprintf("%d access-denied / unauthorized API call(s) — possible probing or an over-tightened policy.", corpusCount(sessionOf(f), reAccessDenied))
+		},
 		Match: matchCorpus(func(s *investigate.LogSession, _ investigate.Target) bool {
 			return corpusCount(s, reAccessDenied) >= 3
 		}),
@@ -143,7 +155,13 @@ var cloudtrailSymptomCatalog = []investigate.Symptom{
 		},
 	},
 	{
-		Key: "console-login-failure",
+		Key:      "console-login-failure",
+		Title:    "Console login failures",
+		Category: "Security",
+		Severity: plugin.SeverityHigh,
+		Describe: func(f investigate.Facts, _ investigate.Target) string {
+			return fmt.Sprintf("%d failed console-login event(s) — possible brute force or credential stuffing.", corpusCount(sessionOf(f), reLoginFail))
+		},
 		Match: matchCorpus(func(s *investigate.LogSession, _ investigate.Target) bool {
 			return corpusHas(s, reLoginFail)
 		}),
@@ -161,7 +179,13 @@ var cloudtrailSymptomCatalog = []investigate.Symptom{
 		},
 	},
 	{
-		Key: "resource-deletion",
+		Key:      "resource-deletion",
+		Title:    "Resource deletion activity",
+		Category: "Security",
+		Severity: plugin.SeverityHigh,
+		Describe: func(f investigate.Facts, _ investigate.Target) string {
+			return fmt.Sprintf("%d delete/terminate/remove API call(s) — confirm each was intended.", corpusCount(sessionOf(f), reDeletion))
+		},
 		Match: matchCorpus(func(s *investigate.LogSession, _ investigate.Target) bool {
 			return corpusHas(s, reDeletion)
 		}),
@@ -179,7 +203,13 @@ var cloudtrailSymptomCatalog = []investigate.Symptom{
 		},
 	},
 	{
-		Key: "privilege-escalation",
+		Key:      "privilege-escalation",
+		Title:    "Possible privilege escalation",
+		Category: "Security",
+		Severity: plugin.SeverityCritical,
+		Describe: func(f investigate.Facts, _ investigate.Target) string {
+			return fmt.Sprintf("%d IAM policy/access-key API call(s) that can grant new privileges — review the principals.", corpusCount(sessionOf(f), rePrivEsc))
+		},
 		Match: matchCorpus(func(s *investigate.LogSession, _ investigate.Target) bool {
 			return corpusHas(s, rePrivEsc)
 		}),
@@ -198,6 +228,9 @@ var cloudtrailSymptomCatalog = []investigate.Symptom{
 	},
 	{
 		Key:      "unknown-activity",
+		Title:    "Notable AWS activity",
+		Category: "Security",
+		Severity: plugin.SeverityLow,
 		Fallback: true,
 		Match: matchCorpus(func(s *investigate.LogSession, _ investigate.Target) bool {
 			return hasNotableEvents(s)

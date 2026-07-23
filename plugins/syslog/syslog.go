@@ -104,5 +104,7 @@ func (p *Plugin) analyze(ctx context.Context, args plugin.RunArgs) (plugin.Repor
 	}
 	session.Stats = buildStats(session)
 	p.setSession(session)
+	rep.Findings = investigate.FindingsFrom(syslogProfile(), session, investigate.Target{},
+		investigate.FindingSource("syslog", remoteHost, session))
 	return rep, nil
 }

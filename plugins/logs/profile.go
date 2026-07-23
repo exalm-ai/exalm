@@ -75,7 +75,13 @@ func countMatching(s *investigate.LogSession, re *regexp.Regexp) int {
 // application-log failure mode, and the candidate causes to rank.
 var logsSymptomCatalog = []investigate.Symptom{
 	{
-		Key: "error-burst",
+		Key:      "error-burst",
+		Title:    "Error burst",
+		Category: "Reliability",
+		Severity: plugin.SeverityHigh,
+		Describe: func(f investigate.Facts, _ investigate.Target) string {
+			return fmt.Sprintf("%d error-class log line(s) in the corpus.", countErrorClass(logsSessionOf(f)))
+		},
 		Match: func(f investigate.Facts, _ investigate.Target) bool {
 			s := logsSessionOf(f)
 			return s != nil && countErrorClass(s) >= 5
@@ -100,7 +106,13 @@ var logsSymptomCatalog = []investigate.Symptom{
 		},
 	},
 	{
-		Key: "exception-cluster",
+		Key:      "exception-cluster",
+		Title:    "Exception cluster",
+		Category: "Reliability",
+		Severity: plugin.SeverityHigh,
+		Describe: func(f investigate.Facts, _ investigate.Target) string {
+			return fmt.Sprintf("%d exception/stack-trace line(s) in the corpus.", countMatching(logsSessionOf(f), exceptionRe))
+		},
 		Match: func(f investigate.Facts, _ investigate.Target) bool {
 			s := logsSessionOf(f)
 			return s != nil && countMatching(s, exceptionRe) >= 3
@@ -118,7 +130,13 @@ var logsSymptomCatalog = []investigate.Symptom{
 		},
 	},
 	{
-		Key: "timeout-cluster",
+		Key:      "timeout-cluster",
+		Title:    "Timeout cluster",
+		Category: "Performance",
+		Severity: plugin.SeverityMedium,
+		Describe: func(f investigate.Facts, _ investigate.Target) string {
+			return fmt.Sprintf("%d timeout/deadline-exceeded line(s) in the corpus.", countMatching(logsSessionOf(f), timeoutSearchRe))
+		},
 		Match: func(f investigate.Facts, _ investigate.Target) bool {
 			s := logsSessionOf(f)
 			return s != nil && countMatching(s, timeoutSearchRe) >= 3
@@ -138,6 +156,9 @@ var logsSymptomCatalog = []investigate.Symptom{
 	},
 	{
 		Key:      "log-anomaly",
+		Title:    "Log anomaly",
+		Category: "Reliability",
+		Severity: plugin.SeverityLow,
 		Fallback: true,
 		Match: func(f investigate.Facts, _ investigate.Target) bool {
 			return logsSessionOf(f) != nil

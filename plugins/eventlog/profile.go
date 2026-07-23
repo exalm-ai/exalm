@@ -36,6 +36,47 @@ var (
 	rebootRe   = investigate.Re(`unexpected(ly)? (shut ?down|reboot)|6008|Kernel-Power`)
 )
 
+// reWinServiceName captures a single-token Windows service short name from an
+// SCM crash message ("The Spooler service terminated…"). It matches ONLY a
+// space-free token, so a display name like "Print Spooler" yields no match
+// (advice-only then) rather than an unusable `Restart-Service -Name` argument.
+// The token shape is a subset of the SSH remediation allowlist's paramRe, so a
+// name lifted from the corpus is injection-safe.
+var reWinServiceName = regexp.MustCompile(`(?i)\bThe ([A-Za-z0-9_.\-]+) service\b`)
+
+// crashedServiceFromCorpus returns the first single-token Windows service name
+// named in an SCM crash line, or "" when none can be safely identified.
+func crashedServiceFromCorpus(s *investigate.LogSession) string {
+	if s == nil {
+		return ""
+	}
+	events, _ := s.Query(investigate.LogQuery{Limit: investigate.MaxSessionEvents})
+	for _, e := range events {
+		if !svcCrashRe.MatchString(e.Message) && !svcCrashRe.MatchString(e.Raw) {
+			continue
+		}
+		if m := reWinServiceName.FindStringSubmatch(e.Message + " " + e.Raw); m != nil {
+			return m[1]
+		}
+	}
+	return ""
+}
+
+// countMatching counts corpus events whose Message or Raw matches re.
+func countMatching(s *investigate.LogSession, re *regexp.Regexp) int {
+	if s == nil {
+		return 0
+	}
+	events, _ := s.Query(investigate.LogQuery{Limit: investigate.MaxSessionEvents})
+	n := 0
+	for _, e := range events {
+		if re.MatchString(e.Message) || re.MatchString(e.Raw) {
+			n++
+		}
+	}
+	return n
+}
+
 // corpusMatches reports whether any event's Message or Raw matches re.
 func corpusMatches(s *investigate.LogSession, re *regexp.Regexp) bool {
 	if s == nil {
@@ -129,7 +170,35 @@ func timelineSeverity(severity string) string {
 // the candidate causes the hypothesis engine ranks against the evidence.
 var eventlogSymptoms = []investigate.Symptom{
 	{
-		Key: "service-crash",
+		Key:      "service-crash",
+		Title:    "Windows service crash",
+		Category: "Availability",
+		Severity: plugin.SeverityHigh,
+		Describe: func(f investigate.Facts, _ investigate.Target) string {
+			s := sess(f)
+			if svc := crashedServiceFromCorpus(s); svc != "" {
+				return fmt.Sprintf("Service Control Manager reported crashes; %s is among the failed services.", svc)
+			}
+			return fmt.Sprintf("%d service-crash event(s) from the Service Control Manager (7031/7034/7000).", countMatching(s, svcCrashRe))
+		},
+		Remediate: func(f investigate.Facts, _ investigate.Target) *plugin.RemediationAction {
+			svc := crashedServiceFromCorpus(sess(f))
+			if svc == "" {
+				return nil // no single-token service name → advice-only
+			}
+			return &plugin.RemediationAction{
+				Kind:            "svc-restart-windows",
+				Name:            svc,
+				Shell:           "powershell",
+				KubectlCmd:      "Restart-Service -Name " + svc,
+				Description:     "Restart the crashed Windows service " + svc,
+				FixType:         "temporary",
+				Risk:            "medium",
+				Rollback:        "Stop-Service -Name " + svc + " if the restart destabilizes the host",
+				Warning:         "Restarts the service; dependent services may briefly drop.",
+				ExpectedOutcome: "The service returns to Running; recurrence indicates a config/dependency root cause.",
+			}
+		},
 		Match: func(f investigate.Facts, _ investigate.Target) bool {
 			s := sess(f)
 			return hasAnyCode(s, "7031", "7034", "7000", "7009") || corpusMatches(s, svcCrashRe)
@@ -153,7 +222,13 @@ var eventlogSymptoms = []investigate.Symptom{
 		},
 	},
 	{
-		Key: "auth-failure",
+		Key:      "auth-failure",
+		Title:    "Repeated logon failures",
+		Category: "Security",
+		Severity: plugin.SeverityHigh,
+		Describe: func(f investigate.Facts, _ investigate.Target) string {
+			return fmt.Sprintf("%d failed-logon event(s) (Event ID 4625/4740).", codeCount(sess(f), "4625"))
+		},
 		Match: func(f investigate.Facts, _ investigate.Target) bool {
 			s := sess(f)
 			return codeCount(s, "4625") >= 3 || corpusMatches(s, authFailRe)
@@ -175,7 +250,13 @@ var eventlogSymptoms = []investigate.Symptom{
 		},
 	},
 	{
-		Key: "update-failure",
+		Key:      "update-failure",
+		Title:    "Windows Update failure",
+		Category: "Maintenance",
+		Severity: plugin.SeverityMedium,
+		Describe: func(f investigate.Facts, _ investigate.Target) string {
+			return fmt.Sprintf("%d Windows Update failure event(s) (failing KB / 0x8… error code).", countMatching(sess(f), updateRe))
+		},
 		Match: func(f investigate.Facts, _ investigate.Target) bool {
 			return corpusMatches(sess(f), updateRe)
 		},
@@ -193,7 +274,13 @@ var eventlogSymptoms = []investigate.Symptom{
 		},
 	},
 	{
-		Key: "unexpected-reboot",
+		Key:      "unexpected-reboot",
+		Title:    "Unexpected reboot / dirty shutdown",
+		Category: "Reliability",
+		Severity: plugin.SeverityHigh,
+		Describe: func(f investigate.Facts, _ investigate.Target) string {
+			return "Dirty-shutdown / Kernel-Power (6008 / 41) events indicate the host went down unexpectedly."
+		},
 		Match: func(f investigate.Facts, _ investigate.Target) bool {
 			s := sess(f)
 			return hasAnyCode(s, "6008", "41") || corpusMatches(s, rebootRe)
@@ -216,7 +303,13 @@ var eventlogSymptoms = []investigate.Symptom{
 		},
 	},
 	{
-		Key: "disk-error",
+		Key:      "disk-error",
+		Title:    "Disk / NTFS errors",
+		Category: "Storage",
+		Severity: plugin.SeverityHigh,
+		Describe: func(f investigate.Facts, _ investigate.Target) string {
+			return "Disk/NTFS error events (Event ID 7/51/55/98 or a disk/ntfs provider) indicate storage trouble."
+		},
 		Match: func(f investigate.Facts, _ investigate.Target) bool {
 			s := sess(f)
 			return hasAnyCode(s, "7", "51", "55", "98") || hasProviderContaining(s, "disk", "ntfs")
@@ -238,6 +331,9 @@ var eventlogSymptoms = []investigate.Symptom{
 	},
 	{
 		Key:      "unknown-events",
+		Title:    "Elevated error events",
+		Category: "Reliability",
+		Severity: plugin.SeverityMedium,
 		Fallback: true,
 		Match: func(f investigate.Facts, _ investigate.Target) bool {
 			s := sess(f)

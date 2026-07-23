@@ -119,6 +119,8 @@ func (p *Plugin) summarize(ctx context.Context, args plugin.RunArgs) (plugin.Rep
 	}
 	session.Stats = buildStats(session)
 	p.setSession(session)
+	rep.Findings = investigate.FindingsFrom(p.InvestigationProfile(), session, investigate.Target{},
+		investigate.FindingSource("eventlog", remoteHost, session))
 	return rep, nil
 }
 

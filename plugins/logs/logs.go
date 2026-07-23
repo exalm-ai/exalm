@@ -101,6 +101,8 @@ func (p *Plugin) summarize(ctx context.Context, args plugin.RunArgs) (plugin.Rep
 		Title:   "Log analysis",
 		Summary: fmt.Sprintf("Analyzed %d bytes of log content using %s.", len(raw), args.LLM.Name()),
 		Raw:     resp.Content,
+		Findings: investigate.FindingsFrom(logsProfile(), session, investigate.Target{},
+			investigate.FindingSource("logs", "", session)),
 	}, nil
 }
 

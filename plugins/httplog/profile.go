@@ -99,7 +99,13 @@ func corpusHas(s *investigate.LogSession, re *regexp.Regexp) bool {
 
 var httplogSymptomCatalog = []investigate.Symptom{
 	{
-		Key: "burst-5xx",
+		Key:      "burst-5xx",
+		Title:    "5xx error burst",
+		Category: "Availability",
+		Severity: plugin.SeverityHigh,
+		Describe: func(f investigate.Facts, _ investigate.Target) string {
+			return fmt.Sprintf("%d server-error (5xx) response(s) in the corpus.", countSeverity(sessionOf(f), "5xx"))
+		},
 		Match: func(f investigate.Facts, _ investigate.Target) bool {
 			return countSeverity(sessionOf(f), "5xx") >= 3
 		},
@@ -120,7 +126,13 @@ var httplogSymptomCatalog = []investigate.Symptom{
 		},
 	},
 	{
-		Key: "latency-degradation",
+		Key:      "latency-degradation",
+		Title:    "Latency degradation",
+		Category: "Performance",
+		Severity: plugin.SeverityMedium,
+		Describe: func(f investigate.Facts, _ investigate.Target) string {
+			return fmt.Sprintf("%d slow request(s) (≥1000ms) in the corpus.", countSlow(sessionOf(f)))
+		},
 		Match: func(f investigate.Facts, _ investigate.Target) bool {
 			return countSlow(sessionOf(f)) >= 3
 		},
@@ -137,7 +149,10 @@ var httplogSymptomCatalog = []investigate.Symptom{
 		},
 	},
 	{
-		Key: "upstream-failure",
+		Key:      "upstream-failure",
+		Title:    "Upstream / backend failure",
+		Category: "Availability",
+		Severity: plugin.SeverityHigh,
 		Match: func(f investigate.Facts, _ investigate.Target) bool {
 			return corpusHas(sessionOf(f), reUpstream)
 		},
@@ -154,7 +169,10 @@ var httplogSymptomCatalog = []investigate.Symptom{
 		},
 	},
 	{
-		Key: "tls-error",
+		Key:      "tls-error",
+		Title:    "TLS / certificate errors",
+		Category: "Security",
+		Severity: plugin.SeverityHigh,
 		Match: func(f investigate.Facts, _ investigate.Target) bool {
 			return corpusHas(sessionOf(f), reTLS)
 		},
@@ -170,7 +188,13 @@ var httplogSymptomCatalog = []investigate.Symptom{
 		},
 	},
 	{
-		Key: "client-4xx-spike",
+		Key:      "client-4xx-spike",
+		Title:    "Client 4xx spike",
+		Category: "Security",
+		Severity: plugin.SeverityMedium,
+		Describe: func(f investigate.Facts, _ investigate.Target) string {
+			return fmt.Sprintf("%d client-error (4xx) response(s) — possible scanner or broken client.", countSeverity(sessionOf(f), "4xx"))
+		},
 		Match: func(f investigate.Facts, _ investigate.Target) bool {
 			return countSeverity(sessionOf(f), "4xx") >= 10
 		},
@@ -186,6 +210,9 @@ var httplogSymptomCatalog = []investigate.Symptom{
 	},
 	{
 		Key:      "traffic-anomaly",
+		Title:    "Traffic anomaly",
+		Category: "Reliability",
+		Severity: plugin.SeverityLow,
 		Fallback: true,
 		Match: func(f investigate.Facts, _ investigate.Target) bool {
 			return sessionOf(f) != nil
