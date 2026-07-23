@@ -55,9 +55,9 @@ func reportWithOneRemediableFinding() plugin.Report {
 	}}
 }
 
-func TestWireK8sApplyHandler_ValidKubeconfigWiresARealExecutor(t *testing.T) {
+func TestWireMCPApplyHandler_ValidKubeconfigWiresARealExecutor(t *testing.T) {
 	defer mcp.SetApplyHandler(nil)
-	wireK8sApplyHandler(writeFakeKubeconfigForMCP(t), "")
+	wireMCPApplyHandler(mcpWriteConfig{kubeconfigPath: writeFakeKubeconfigForMCP(t)})
 
 	srv := mcp.NewServer(reportWithOneRemediableFinding(), true)
 	resp := decodeMCPResponse(t, applyRemediationVia(srv, "ns/pod"))
@@ -70,15 +70,37 @@ func TestWireK8sApplyHandler_ValidKubeconfigWiresARealExecutor(t *testing.T) {
 	}
 }
 
-func TestWireK8sApplyHandler_MissingKubeconfigLeavesApplyUnconfigured(t *testing.T) {
+func TestWireMCPApplyHandler_NoConfigLeavesApplyUnconfigured(t *testing.T) {
 	defer mcp.SetApplyHandler(nil)
-	wireK8sApplyHandler(filepath.Join(t.TempDir(), "does-not-exist"), "")
+	// No kubeconfig and no host → no executor is registered at all.
+	wireMCPApplyHandler(mcpWriteConfig{kubeconfigPath: filepath.Join(t.TempDir(), "does-not-exist")})
 
 	srv := mcp.NewServer(reportWithOneRemediableFinding(), true)
 	resp := decodeMCPResponse(t, applyRemediationVia(srv, "ns/pod"))
 
 	if resp.Error == nil || !strings.Contains(resp.Error.Message, "not configured") {
 		t.Errorf("expected the graceful \"not configured\" message, got: %+v", resp.Error)
+	}
+}
+
+func TestWireMCPApplyHandler_RoutesSSHKindToHost(t *testing.T) {
+	defer mcp.SetApplyHandler(nil)
+	// A host is configured but no kubeconfig; an SSH remediation kind must
+	// route to the SSH executor (which dials 127.0.0.1:1 and is refused), NOT
+	// report "not configured".
+	wireMCPApplyHandler(mcpWriteConfig{host: "127.0.0.1", sshPort: 1})
+
+	report := plugin.Report{Findings: []plugin.Finding{
+		{Title: "svc/down", Remediation: &plugin.RemediationAction{Kind: "svc-restart-linux", Name: "nginx.service", Shell: "bash"}},
+	}}
+	srv := mcp.NewServer(report, true)
+	resp := decodeMCPResponse(t, applyRemediationVia(srv, "svc/down"))
+
+	if resp.Error == nil {
+		t.Fatal("expected a dial error against 127.0.0.1:1")
+	}
+	if strings.Contains(resp.Error.Message, "not configured") || strings.Contains(resp.Error.Message, "needs an SSH host") {
+		t.Errorf("SSH kind should route to the wired SSH executor, got: %s", resp.Error.Message)
 	}
 }
 

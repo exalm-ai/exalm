@@ -38,7 +38,24 @@ func (p *Plugin) Subcommands() []plugin.Subcommand {
 			Description: "Analyze IIS W3C access logs from --file (repeatable, supports globs) or stdin",
 			Run:         p.analyze,
 		},
+		{
+			Name:        "fix",
+			Description: "Analyze, then apply proposed IIS app-pool recycle fixes over SSH (needs --host; --apply to execute)",
+			Run:         p.fix,
+		},
 	}
+}
+
+// fix analyzes to surface findings, then drives the shared interactive fix
+// flow: it lists the auto-applicable app-pool recycle fixes and, with --apply,
+// prompts and executes each confirmed one over SSH (PowerShell) against --host.
+func (p *Plugin) fix(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) {
+	rp := sessionRemoteParams(args, args.Flags["log-dir"])
+	rep, err := p.analyze(ctx, args)
+	if err != nil {
+		return plugin.Report{}, err
+	}
+	return investigate.RunFixSubcommand(ctx, args, rep, "iis fix", rp)
 }
 
 func (p *Plugin) analyze(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) {

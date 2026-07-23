@@ -376,6 +376,7 @@ See the [MCP usage guide](mcp.md) for setup and examples.
 | SSH host verification | TOFU + `~/.exalm/known_hosts` — prevents MITM on first connection |
 | Web dashboard auth | Bearer token via `requireToken()` middleware |
 | Injection prevention | `internal/ssh` validates remote command strings before execution |
+| SSH remediation allowlist | `internal/ssh/remediate.go` — mutating commands are fixed templates with a strict-charset-validated parameter, refused not sanitized; the write gate fails closed. See [analyzer-remediation.md](analyzer-remediation.md) |
 | Mutation gate | `Mutates() = true` + `--apply` flag + confirmation prompt |
 | No telemetry by default | Zero opt-out-required telemetry; all network calls are explicit |
 

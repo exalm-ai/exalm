@@ -37,7 +37,24 @@ func (p *Plugin) Subcommands() []plugin.Subcommand {
 			Description: "Analyze syslog or journalctl output from --file (repeatable, supports globs) or stdin",
 			Run:         p.analyze,
 		},
+		{
+			Name:        "fix",
+			Description: "Analyze, then apply proposed service-restart fixes over SSH (needs --host; --apply to execute)",
+			Run:         p.fix,
+		},
 	}
+}
+
+// fix runs analyze to surface findings, then drives the shared interactive
+// fix flow: it lists the auto-applicable service-restart fixes and, with
+// --apply, prompts and executes each confirmed one over SSH against --host.
+func (p *Plugin) fix(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) {
+	rp := sessionRemoteParams(args)
+	rep, err := p.analyze(ctx, args)
+	if err != nil {
+		return plugin.Report{}, err
+	}
+	return investigate.RunFixSubcommand(ctx, args, rep, "syslog fix", rp)
 }
 
 func (p *Plugin) analyze(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) {

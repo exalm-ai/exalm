@@ -91,12 +91,18 @@ type dashEvidence struct {
 	CollectedAt string `json:"collectedAt,omitempty"` // original collection time
 }
 
-// applicableKinds are the remediation kinds the server can auto-apply via
-// ApplyRemediation. Anything else (e.g. "advice") is copy-only guidance.
+// applicableKinds are the remediation kinds the server can auto-apply. The
+// k8s kinds go through k8s ApplyRemediation; the SSH kinds
+// (svc-restart-linux/-windows, iis-pool-recycle) go through the allowlisted
+// SSH remediation executor. Anything else (e.g. "advice") is copy-only
+// guidance. The dashboard shows an active "Apply this fix" button only for
+// kinds listed here; whether ApplyFix is actually wired (a live cluster or a
+// remote host) is a separate server-side gate.
 var applicableKinds = map[string]bool{
 	"rollout-restart": true, "resume-cronjob": true, "delete-pod": true,
 	"patch-resource": true, "scale-deployment": true, "add-limits": true,
 	"label-resource": true, "cordon-node": true,
+	"svc-restart-linux": true, "svc-restart-windows": true, "iis-pool-recycle": true,
 }
 
 func mapFixes(fixes []plugin.RemediationAction) []dashFix {

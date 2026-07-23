@@ -327,6 +327,11 @@ can be auto-fixed?"_ and Claude will call exalm's tools directly. Add `--write` 
 Full walkthrough — read tools, write mode, SSE transport, safety model:
 [docs/mcp.md](docs/mcp.md).
 
+All six log analyzers (syslog, httplog, eventlog, iis, logs, cloudtrail) also
+emit structured findings, and syslog/eventlog/iis can propose and apply
+service-restart fixes over SSH — see
+[docs/analyzer-remediation.md](docs/analyzer-remediation.md).
+
 ---
 
 ## LLM providers

@@ -23,6 +23,7 @@ import (
 	"github.com/exalm-ai/exalm/internal/cliui"
 	"github.com/exalm-ai/exalm/internal/config"
 	convopkg "github.com/exalm-ai/exalm/internal/convo"
+	"github.com/exalm-ai/exalm/internal/investigate"
 	"github.com/exalm-ai/exalm/internal/llm"
 	"github.com/exalm-ai/exalm/internal/mcp"
 	"github.com/exalm-ai/exalm/internal/metrics"
@@ -31,6 +32,7 @@ import (
 	"github.com/exalm-ai/exalm/internal/redact"
 	"github.com/exalm-ai/exalm/internal/registry"
 	settingspkg "github.com/exalm-ai/exalm/internal/settings"
+	exassh "github.com/exalm-ai/exalm/internal/ssh"
 	exalmstore "github.com/exalm-ai/exalm/internal/store"
 	"github.com/exalm-ai/exalm/internal/version"
 	"github.com/exalm-ai/exalm/internal/web"
@@ -235,9 +237,15 @@ func newMCPCmd(_ *rootFlags) *cobra.Command {
 				tok = os.Getenv("EXALM_TOKEN")
 			}
 			reportFile, _ := cmd.Flags().GetString("file")
-			kubeconfigPath, _ := cmd.Flags().GetString("kubeconfig")
-			kubeContext, _ := cmd.Flags().GetString("context")
-			return runMCPServe(cmd.Context(), sse, allowWrite, tok, reportFile, kubeconfigPath, kubeContext)
+			wc := mcpWriteConfig{}
+			wc.kubeconfigPath, _ = cmd.Flags().GetString("kubeconfig")
+			wc.kubeContext, _ = cmd.Flags().GetString("context")
+			wc.host, _ = cmd.Flags().GetString("host")
+			wc.sshUser, _ = cmd.Flags().GetString("ssh-user")
+			wc.sshKey, _ = cmd.Flags().GetString("ssh-key")
+			wc.sshPort, _ = cmd.Flags().GetInt("ssh-port")
+			wc.sshPassword = os.Getenv("EXALM_SSH_PASSWORD")
+			return runMCPServe(cmd.Context(), sse, allowWrite, tok, reportFile, wc)
 		},
 	}
 	serve.Flags().String("sse", "", "if non-empty, serve over SSE on this address (e.g. :7434); otherwise stdio")
@@ -246,6 +254,10 @@ func newMCPCmd(_ *rootFlags) *cobra.Command {
 	serve.Flags().String("file", "", "load findings from a saved report JSON (e.g. `exalm k8s analyze --output json > report.json`) instead of starting empty")
 	serve.Flags().String("kubeconfig", "", "path to kubeconfig for --write's k8s remediation executor (default: standard discovery)")
 	serve.Flags().String("context", "", "kubeconfig context for --write's k8s remediation executor (default: current-context)")
+	serve.Flags().String("host", "", "SSH host for --write's log-analyzer remediation executor (svc-restart, iis-pool-recycle)")
+	serve.Flags().String("ssh-user", "", "SSH username for --host (default: current OS user)")
+	serve.Flags().String("ssh-key", "", "SSH private key path for --host (default: ~/.ssh/id_rsa)")
+	serve.Flags().Int("ssh-port", 22, "SSH port for --host")
 	mcpRoot.AddCommand(serve)
 	return mcpRoot
 }
@@ -724,7 +736,7 @@ func buildVersionString() string {
 // a missing/invalid kubeconfig just leaves apply_remediation reporting "not
 // configured", the same graceful degradation the dashboard already uses
 // when no cluster is reachable.
-func runMCPServe(ctx context.Context, sseAddr string, allowWrite bool, token string, reportFile string, kubeconfigPath, kubeContext string) error {
+func runMCPServe(ctx context.Context, sseAddr string, allowWrite bool, token string, reportFile string, wc mcpWriteConfig) error {
 	report := plugin.Report{Title: "exalm-mcp", Summary: "no report loaded — pass --file <report.json> (from `exalm <plugin> ... --output json`) to expose real findings"}
 	if reportFile != "" {
 		loaded, err := loadReportFile(reportFile)
@@ -736,7 +748,7 @@ func runMCPServe(ctx context.Context, sseAddr string, allowWrite bool, token str
 	srv := mcp.NewServer(report, allowWrite)
 
 	if allowWrite {
-		wireK8sApplyHandler(kubeconfigPath, kubeContext)
+		wireMCPApplyHandler(wc)
 	}
 
 	if sseAddr != "" {
@@ -771,24 +783,59 @@ func runMCPServe(ctx context.Context, sseAddr string, allowWrite bool, token str
 	return mcp.ServeStdio(srv, os.Stdin, os.Stdout)
 }
 
-// wireK8sApplyHandler builds a k8s client via standard kubeconfig discovery
-// and, on success, registers it as the MCP apply_remediation executor — the
-// same k8splugin.ApplyRemediation function the web dashboard's ApplyFix
-// closure calls (main.go/serve.go). Building the client never dials the
-// cluster (kubernetes.NewForConfig is lazy), so this only fails when no
-// usable kubeconfig exists; that failure is logged and left non-fatal,
-// since read tools work fine with no cluster at all — apply_remediation
-// just keeps reporting "not configured" until one is available.
-func wireK8sApplyHandler(kubeconfigPath, kubeContext string) {
-	cs, err := k8splugin.NewClient(kubeconfigPath, kubeContext)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "  ⚠️  MCP write mode: %v — apply_remediation will report \"not configured\" until a kubeconfig is available.\n", err) //nolint:errcheck // startup warning to stderr
+// mcpWriteConfig carries the connection config `mcp serve --write` needs to
+// build its remediation executors: a kubeconfig for k8s remediation kinds and
+// an SSH host for the log-analyzer remediation kinds (svc-restart-*,
+// iis-pool-recycle).
+type mcpWriteConfig struct {
+	kubeconfigPath, kubeContext        string
+	host, sshUser, sshKey, sshPassword string
+	sshPort                            int
+}
+
+// wireMCPApplyHandler registers the apply_remediation executor, routing by
+// remediation Kind: SSH kinds (a log-analyzer's proposed shell fix) go through
+// the allowlisted SSH remediator against --host; everything else goes through
+// the k8s ApplyRemediation executor (the same one the web dashboard uses).
+// Each executor is built only when its connection config is present — building
+// them never dials (both are lazy), so read tools always work; a kind whose
+// executor is unavailable reports a clear error at call time rather than at
+// startup, mirroring the graceful degradation the k8s-only wiring already had.
+func wireMCPApplyHandler(wc mcpWriteConfig) {
+	var k8sApply func(context.Context, plugin.RemediationAction) error
+	if cs, err := k8splugin.NewClient(wc.kubeconfigPath, wc.kubeContext); err == nil {
+		k8sApply = func(ctx context.Context, a plugin.RemediationAction) error {
+			return k8splugin.ApplyRemediation(ctx, cs, a)
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "  ⚠️  MCP write mode: k8s executor unavailable (%v); k8s remediation kinds will error until a kubeconfig is available.\n", err) //nolint:errcheck // startup warning
+	}
+
+	var sshApply func(context.Context, plugin.RemediationAction) error
+	if wc.host != "" {
+		rp := &investigate.RemoteParams{Host: wc.host, User: wc.sshUser, KeyPath: wc.sshKey, Port: wc.sshPort, Password: wc.sshPassword}
+		sshApply = investigate.SSHRemediator(rp, true)
+	}
+
+	if k8sApply == nil && sshApply == nil {
+		fmt.Fprintln(os.Stderr, "  ⚠️  MCP write mode: no executor configured — pass --kubeconfig (k8s) and/or --host (log analyzers). apply_remediation will report \"not configured\".") //nolint:errcheck // startup warning
 		return
 	}
+
 	mcp.SetApplyHandler(func(a plugin.RemediationAction) error {
-		return k8splugin.ApplyRemediation(context.Background(), cs, a)
+		ctx := context.Background()
+		if exassh.IsRemediationKind(a.Kind) {
+			if sshApply == nil {
+				return fmt.Errorf("remediation %q needs an SSH host: start `mcp serve --write --host <host>`", a.Kind)
+			}
+			return sshApply(ctx, a)
+		}
+		if k8sApply == nil {
+			return fmt.Errorf("remediation %q needs a reachable kubeconfig", a.Kind)
+		}
+		return k8sApply(ctx, a)
 	})
-	fmt.Fprintln(os.Stderr, "  ⬡ MCP write mode: k8s remediation executor connected — apply_remediation is live.") //nolint:errcheck // startup info to stderr
+	fmt.Fprintln(os.Stderr, "  ⬡ MCP write mode: remediation executor connected — apply_remediation is live.") //nolint:errcheck // startup info
 }
 
 // maxMCPReportFileBytes bounds --file so a mistakenly huge path doesn't stall

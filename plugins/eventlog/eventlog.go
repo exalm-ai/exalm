@@ -45,7 +45,28 @@ func (p *Plugin) Subcommands() []plugin.Subcommand {
 			Description: "Summarize Windows Event Log JSON and highlight critical events",
 			Run:         p.summarize,
 		},
+		{
+			Name:        "fix",
+			Description: "Summarize, then apply proposed Windows service-restart fixes over SSH (needs --host; --apply to execute)",
+			Run:         p.fix,
+		},
 	}
+}
+
+// fix summarizes to surface findings, then drives the shared interactive fix
+// flow: it lists the auto-applicable Restart-Service fixes and, with --apply,
+// prompts and executes each confirmed one over SSH (PowerShell) against --host.
+func (p *Plugin) fix(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) {
+	logName := args.Flags["log-name"]
+	if logName == "" {
+		logName = "Security"
+	}
+	rp := sessionRemoteParams(args, logName)
+	rep, err := p.summarize(ctx, args)
+	if err != nil {
+		return plugin.Report{}, err
+	}
+	return investigate.RunFixSubcommand(ctx, args, rep, "eventlog fix", rp)
 }
 
 func (p *Plugin) summarize(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) {

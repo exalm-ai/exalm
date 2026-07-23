@@ -294,5 +294,17 @@ func applyAnalyzerServeOpts(opts *web.ServeOpts, inv investigable, llm plugin.LL
 	opts.GetConversation = h.GetConversation
 	opts.AnalyzeLogLine = h.AnalyzeLine
 	opts.LogQuery = h.LogQuery
+
+	// When the analysis was collected from a remote host, wire the SSH
+	// remediation executor so the dashboard's "Apply fix" button can execute
+	// the analyzer's proposed shell fixes (svc-restart-*, iis-pool-recycle)
+	// against that host. Dashboard actions are already gated by the bearer
+	// token + CSRF/localhost-origin checks, so applying is allowed here (allow
+	// = true), mirroring how the k8s dashboard applies without a second flag.
+	// Local file analyses (session.SSH == nil) leave ApplyFix nil, so the fix
+	// button stays hidden and /api/fix* returns 503 — nothing to apply to.
+	if session.SSH != nil {
+		opts.ApplyFix = investigate.SSHRemediator(session.SSH, true)
+	}
 	return true, nil
 }

@@ -110,15 +110,38 @@ For Claude Desktop, add the flags to `args`:
 "args": ["mcp", "serve", "--write", "--file", "/path/report.json", "--kubeconfig", "/path/.kube/config"]
 ```
 
+### Log-analyzer (SSH) remediation
+
+Findings from the log analyzers (syslog, eventlog, iis) can carry a proposed
+**shell** remediation — restart a failed unit, recycle an app pool. To let
+`apply_remediation` execute those, give the server the SSH host to act on:
+
+```bash
+exalm mcp serve --write --file report.json --host web-01 --ssh-user ops --ssh-key ~/.ssh/id_rsa
+```
+
+`apply_remediation` then routes by kind: k8s kinds go through the k8s executor,
+SSH kinds (`svc-restart-linux`, `svc-restart-windows`, `iis-pool-recycle`) go
+through the allowlisted SSH remediator against `--host`. You can pass both
+`--kubeconfig` and `--host` to serve a mixed report. `EXALM_SSH_PASSWORD` is
+read from the environment if key auth is unavailable.
+
 ### Safety model
 
 - `apply_remediation` is **denied** (`-32001 permission denied`) unless
   `--write` was passed at startup — mirroring the CLI's `--apply` gate.
 - Only findings that carry a remediation action can be applied; everything
   else returns "finding has no remediation".
-- The executor supports the k8s remediation kinds (`rollout-restart`,
-  `resume-cronjob`, `delete-pod`, `patch-resource`, `scale-deployment`,
-  `add-limits`, `label-resource`, `cordon-node`).
+- The k8s executor supports `rollout-restart`, `resume-cronjob`, `delete-pod`,
+  `patch-resource`, `scale-deployment`, `add-limits`, `label-resource`,
+  `cordon-node`.
+- The SSH executor runs only the **allowlisted** commands (`svc-restart-linux`
+  → `systemctl restart '<unit>'`, `svc-restart-windows` → `Restart-Service`,
+  `iis-pool-recycle` → `Restart-WebAppPool`). The service/unit/pool name is
+  validated against a strict character set and substituted into a compile-time
+  template — the finding's display command is **never** executed verbatim, and
+  an injection attempt in the name is refused, not sanitized. See
+  [analyzer-remediation.md](analyzer-remediation.md) for the full model.
 
 ## Step 6 — SSE / HTTP transport
 
