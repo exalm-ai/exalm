@@ -1095,7 +1095,7 @@ func (s *liveServer) handleMetricsJSON(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleChangesJSON returns recent cluster change events for the
-// Komodor-style change timeline. Reads directly from the default changestore;
+// change timeline. Reads directly from the default changestore;
 // if the store is missing or empty, returns []. Bounded to ~500 events for
 // payload sanity.
 //

@@ -1,10 +1,17 @@
-# Network-layer correlation (Hubble)
+# Network-layer correlation (Hubble) — EXPERIMENTAL
 
-Exalm can correlate Kubernetes findings with L4/L7 network flow data captured by [Hubble](https://github.com/cilium/hubble) — Cilium's eBPF-backed observability layer. This lets you tell *application regression* apart from *network policy drops* and *DNS failures*, a class of incident neither OpenObserve nor Komodor can diagnose today.
+> **Status: experimental, not wired.** This is a design + adapter preview, **not
+> a shipping feature**. The `internal/network` package is not referenced by any
+> command, there is no `--hubble-endpoint` flag today, and nothing in the CLI or
+> dashboard consumes network flows yet. This document describes the intended
+> design so contributors can help finish it — it is not a description of current
+> behavior.
 
-## Phase 5 status
+The goal is to correlate Kubernetes findings with L4/L7 network flow data captured by [Hubble](https://github.com/cilium/hubble) — Cilium's eBPF-backed observability layer — so you can tell *application regression* apart from *network policy drops* and *DNS failures*.
 
-This release ships the **adapter and correlation logic** with mocked unit tests. The production gRPC client to Hubble Relay is **deferred** — the Cilium API package (`github.com/cilium/cilium/api/v1/observer`) is intentionally not yet added to keep the binary lean (per the project's stdlib-first rule).
+## Current status
+
+The repository contains the **adapter and correlation logic** with mocked unit tests only. The production gRPC client to Hubble Relay is **deferred** — the Cilium API package (`github.com/cilium/cilium/api/v1/observer`) is intentionally not yet added to keep the binary lean.
 
 The shape is final, the wire path is stubbed. When Hubble Relay support lands, callers swap `network.Dial(addr)` for the real gRPC dial and everything downstream — `CorrelateDrops`, `SummarizeReason`, evidence-chain integration — works unchanged.
 

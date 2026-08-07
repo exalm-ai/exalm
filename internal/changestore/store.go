@@ -1,14 +1,9 @@
 // Package changestore persists a chronological log of cluster changes:
 // Deployments updated, ConfigMaps edited, RoleBindings created, etc. The store
-// is the foundation for Phase 4's change-correlation engine, which ties recent
-// changes to currently-failing pods.
-//
-// Competitive gap:
-//   - Komodor's "change timeline" is their signature UI element (strengths #1
-//     and #4 in komodor_config.json) — Exalm needs an equivalent.
-//   - OpenObserve's RCF anomaly model has zero change-point awareness
-//     (openobserve_config.json weakness #6: "post-deployment metric shifts always
-//     score as anomalies regardless of whether a Helm release caused them").
+// is the foundation for the change-correlation engine, which ties recent
+// changes to currently-failing pods — most cluster incidents are
+// change-induced, so a chronological change log is what lets a finding say
+// "likely caused by the deploy 12m ago".
 //
 // Storage model: append-only JSON-lines file at $EXALM_HOME/changes.jsonl, or
 // ~/.exalm/changes.jsonl by default. Reads stream the file. Bounded rotation

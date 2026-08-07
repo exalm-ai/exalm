@@ -1,10 +1,10 @@
 package k8s
 
-// enrich.go layers two competitive-gap features on top of BuildFindings:
+// enrich.go layers two features on top of BuildFindings:
 //   1. Change correlation — annotates each finding with its LikelyCause from
-//      the changestore (Phase 4 Komodor-style change timeline).
+//      the changestore (the change-timeline signal).
 //   2. Evidence chain — attaches verifiable log/event/change items to each
-//      finding (Phase 4 OpenObserve-style evidence transparency).
+//      finding (evidence transparency).
 //
 // Both layers are non-fatal: when the changestore is unavailable or evidence
 // sources are empty, the finding still ships unannotated.

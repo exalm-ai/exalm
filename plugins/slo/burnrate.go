@@ -3,11 +3,8 @@ package slo
 // Multi-window burn-rate computation following the Google SRE Workbook §5
 // pattern (https://sre.google/workbook/alerting-on-slos/).
 //
-// Competitive gap: OpenObserve (opp #1, HIGH) and Komodor (opp #2, HIGH) both
-// explicitly lack a native SLO/error-budget engine. OpenObserve users hand-code
-// burn-rate logic in VRL multi-window functions; Komodor delegates to external
-// PagerDuty/Datadog. Exalm fills the gap with a first-class, declarative engine
-// that runs on any sample stream (Prometheus today, OpenObserve / Mimir / Cortex
+// Exalm ships a first-class, declarative SLO/error-budget engine that runs on
+// any sample stream (Prometheus today; Mimir / Cortex / other backends
 // tomorrow — the engine math is backend-agnostic).
 //
 // The three-window pattern catches both acute outages and slow degradation:
@@ -47,7 +44,7 @@ type BurnRate struct {
 }
 
 // Sample is one observation of good/total counts at a moment in time.
-// Backends (Prometheus, OpenObserve, etc.) emit a slice of these per query.
+// Metrics backends (Prometheus, etc.) emit a slice of these per query.
 type Sample struct {
 	At    time.Time `json:"at"`
 	Good  float64   `json:"good"`

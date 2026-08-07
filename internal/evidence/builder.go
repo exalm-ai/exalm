@@ -3,18 +3,11 @@
 // events, and cluster changes back each finding, with a deep-link or kubectl
 // command to retrieve the full context themselves.
 //
-// Competitive gap:
-//   - Komodor's Klaudia AI is opaque about evidence — its RCA text is the only
-//     output (komodor_config.json weakness #4: "AI RCA evidence-chain
-//     transparency is opaque relative to tools that expose exact log lines and
-//     metric values backing each conclusion").
-//   - OpenObserve's AI SRE Agent has the evidence chain but exposes it only
-//     inside the agent output, not as a queryable first-class field
-//     (openobserve_config.json strength #4 acknowledges this but no
-//     queryable surface exists).
-//
-// Exalm puts EvidenceItem on every Finding, so the UI, the MCP server, and
-// downstream consumers all read it the same way.
+// The design goal is transparency: an AI root-cause should never be a black
+// box. Exalm puts EvidenceItem on every Finding as a queryable, first-class
+// field, so the UI, the MCP server, and downstream consumers all read the
+// exact log lines, metric values, events, and changes behind a conclusion the
+// same way.
 package evidence
 
 import (
