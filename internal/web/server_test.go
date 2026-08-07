@@ -7,10 +7,12 @@ import (
 	"html/template"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/exalm-ai/exalm/internal/remediation"
 	"github.com/exalm-ai/exalm/pkg/plugin"
 )
 
@@ -476,33 +478,111 @@ func TestHandleFix_AppliesThenReCollects(t *testing.T) {
 	}
 }
 
-func TestHandleDashboard_AutoRefreshFooter(t *testing.T) {
+func TestHandleFixAll_OrdersAppliesAllAndReCollects(t *testing.T) {
+	var appliedOrder []string
+	srv := newTestServer(plugin.Report{
+		Findings: []plugin.Finding{
+			{Title: "no-fix"}, // no Remediation — must be skipped
+			{Title: "z-delete", Remediation: &plugin.RemediationAction{Kind: "delete-pod"}},
+			{Title: "a-restart", Remediation: &plugin.RemediationAction{Kind: "rollout-restart"}},
+		},
+	})
+	srv.fixSem = make(chan struct{}, maxConcurrentFixes)
+	srv.applyFix = func(_ context.Context, a plugin.RemediationAction) error {
+		appliedOrder = append(appliedOrder, a.Kind)
+		if a.Kind == "delete-pod" {
+			return errors.New("delete failed")
+		}
+		return nil
+	}
+	srv.refreshFindings = func(_ context.Context) ([]plugin.Finding, error) {
+		return []plugin.Finding{}, nil // fixed
+	}
+
+	rr := httptest.NewRecorder()
+	srv.handleFixAll(rr, httptest.NewRequest(http.MethodPost, "/api/fix-all", nil))
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body=%s)", rr.Code, rr.Body.String())
+	}
+	if !reflect.DeepEqual(appliedOrder, []string{"rollout-restart", "delete-pod"}) {
+		t.Errorf("expected restart applied before delete, got %v", appliedOrder)
+	}
+
+	var results []remediation.Result
+	if err := json.Unmarshal(rr.Body.Bytes(), &results); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results (no-fix skipped), got %+v", results)
+	}
+	if results[0].Title != "a-restart" || !results[0].OK {
+		t.Errorf("result[0]: %+v", results[0])
+	}
+	if results[1].Title != "z-delete" || results[1].OK || results[1].Error != "delete failed" {
+		t.Errorf("result[1]: %+v", results[1])
+	}
+	if n := len(srv.getReport().Findings); n != 0 {
+		t.Errorf("handleFixAll must re-collect after applying; expected 0 findings, got %d", n)
+	}
+}
+
+func TestHandleFixAll_Unwired503AndGateChecks(t *testing.T) {
+	srv := newTestServer(plugin.Report{})
+	srv.fixSem = make(chan struct{}, maxConcurrentFixes)
+
+	rr := httptest.NewRecorder()
+	srv.handleFixAll(rr, httptest.NewRequest(http.MethodPost, "/api/fix-all", nil))
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Errorf("unwired should 503, got %d", rr.Code)
+	}
+
+	srv.applyFix = func(context.Context, plugin.RemediationAction) error { return nil }
+	rr = httptest.NewRecorder()
+	srv.handleFixAll(rr, httptest.NewRequest(http.MethodGet, "/api/fix-all", nil))
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET should 405, got %d", rr.Code)
+	}
+
+	for i := 0; i < maxConcurrentFixes; i++ { // fill the gate
+		srv.fixSem <- struct{}{}
+	}
+	rr = httptest.NewRecorder()
+	srv.handleFixAll(rr, httptest.NewRequest(http.MethodPost, "/api/fix-all", nil))
+	if rr.Code != http.StatusTooManyRequests {
+		t.Errorf("full gate should 429, got %d", rr.Code)
+	}
+}
+
+func TestHandleDashboard_AutoRefreshFlag(t *testing.T) {
+	// The redesigned dashboard is client-rendered; the autoRefresh flag rides in
+	// the embedded JSON blob (window.__DASH__), not in server-rendered markup.
 	cases := []struct {
-		name        string
 		autoRefresh bool
 		want        string
-		notWant     string
 	}{
-		{"live", true, "auto-refreshes every 30s", "static snapshot"},
-		{"static", false, "static snapshot", "auto-refreshes every 30s"},
+		{true, `"autoRefresh":true`},
+		{false, `"autoRefresh":false`},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			srv := newTestServer(plugin.Report{Title: "t", Findings: []plugin.Finding{{Title: "f"}}})
-			srv.autoRefresh = tc.autoRefresh
-			rr := httptest.NewRecorder()
-			srv.handleDashboard(rr, httptest.NewRequest("GET", "/", nil))
-			body := rr.Body.String()
-			if !strings.Contains(body, tc.want) {
-				t.Errorf("expected footer to contain %q", tc.want)
-			}
-			if strings.Contains(body, tc.notWant) {
-				t.Errorf("footer should not contain %q when autoRefresh=%v", tc.notWant, tc.autoRefresh)
-			}
-			wantAttr := `data-auto-refresh="` + map[bool]string{true: "true", false: "false"}[tc.autoRefresh] + `"`
-			if !strings.Contains(body, wantAttr) {
-				t.Errorf("expected body attribute %q", wantAttr)
-			}
-		})
+		srv := newTestServer(plugin.Report{Title: "t", Findings: []plugin.Finding{{Title: "f"}}})
+		srv.autoRefresh = tc.autoRefresh
+		rr := httptest.NewRecorder()
+		srv.handleDashboard(rr, httptest.NewRequest("GET", "/", nil))
+		body := rr.Body.String()
+		if !strings.Contains(body, tc.want) {
+			t.Errorf("autoRefresh=%v: expected embedded JSON to contain %q", tc.autoRefresh, tc.want)
+		}
+		if !strings.Contains(body, "/static/dashboard.js") {
+			t.Error("expected the dashboard to load /static/dashboard.js")
+		}
+		// logexplorer.js must load before its two consumers (analyzer.js,
+		// logviewer.js) — definition-before-use across the module set.
+		leIdx := strings.Index(body, "/static/logexplorer.js")
+		if leIdx == -1 {
+			t.Error("expected the dashboard to load /static/logexplorer.js")
+		} else if anIdx := strings.Index(body, "/static/analyzer.js"); anIdx != -1 && leIdx > anIdx {
+			t.Error("logexplorer.js must load before analyzer.js")
+		}
 	}
 }

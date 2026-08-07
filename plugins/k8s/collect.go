@@ -39,7 +39,9 @@ func Collect(ctx context.Context, cs kubernetes.Interface, lf logFetcher, opts C
 		result healthResult
 	}
 	var unhealthy []scoredPod
+	podsByNs := make(map[string]int)
 	for _, pod := range podList.Items {
+		podsByNs[pod.Namespace]++
 		r := checkHealth(pod, now)
 		if r.reason != "" {
 			unhealthy = append(unhealthy, scoredPod{pod, r})
@@ -49,6 +51,7 @@ func Collect(ctx context.Context, cs kubernetes.Interface, lf logFetcher, opts C
 	sort.Slice(unhealthy, func(i, j int) bool {
 		return unhealthy[i].result.score > unhealthy[j].result.score
 	})
+	unhealthyTotal := len(unhealthy)
 	if len(unhealthy) > opts.MaxPods {
 		unhealthy = unhealthy[:opts.MaxPods]
 	}
@@ -77,13 +80,15 @@ func Collect(ctx context.Context, cs kubernetes.Interface, lf logFetcher, opts C
 	}
 
 	snap := Snapshot{
-		Namespace:     ns,
-		TotalPods:     len(podList.Items),
-		UnhealthyPods: podSummaries,
-		Events:        events,
-		Deployments:   deployments,
-		HPAs:          hpas,
-		Quotas:        quotas,
+		Namespace:       ns,
+		TotalPods:       len(podList.Items),
+		PodsByNamespace: podsByNs,
+		UnhealthyTotal:  unhealthyTotal,
+		UnhealthyPods:   podSummaries,
+		Events:          events,
+		Deployments:     deployments,
+		HPAs:            hpas,
+		Quotas:          quotas,
 	}
 
 	if opts.IncludeNodes {
@@ -296,13 +301,14 @@ func collectEvents(ctx context.Context, cs kubernetes.Interface, ns string, sinc
 		}
 
 		summaries = append(summaries, EventSummary{
-			Namespace: e.Namespace,
-			PodName:   e.InvolvedObject.Name,
-			Reason:    e.Reason,
-			Message:   e.Message,
-			Count:     e.Count,
-			LastSeen:  humanAge(now.Sub(lastSeen)) + " ago",
-			Density:   density,
+			Namespace:  e.Namespace,
+			PodName:    e.InvolvedObject.Name,
+			Reason:     e.Reason,
+			Message:    e.Message,
+			Count:      e.Count,
+			LastSeen:   humanAge(now.Sub(lastSeen)) + " ago",
+			LastSeenAt: lastSeen,
+			Density:    density,
 		})
 	}
 	return summaries, nil

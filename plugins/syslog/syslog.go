@@ -4,8 +4,10 @@ package syslog
 
 import (
 	"context"
+	"sync"
 
 	"github.com/exalm-ai/exalm/internal/analyzer"
+	"github.com/exalm-ai/exalm/internal/investigate"
 	exassh "github.com/exalm-ai/exalm/internal/ssh"
 	"github.com/exalm-ai/exalm/pkg/plugin"
 )
@@ -13,7 +15,10 @@ import (
 // MaxInputBytes caps the per-file slice we examine.
 const MaxInputBytes = 512 * 1024
 
-type Plugin struct{}
+type Plugin struct {
+	mu          sync.Mutex
+	lastSession *investigate.LogSession
+}
 
 func New() *Plugin { return &Plugin{} }
 
@@ -30,17 +35,38 @@ func (p *Plugin) Subcommands() []plugin.Subcommand {
 		{
 			Name:        "analyze",
 			Description: "Analyze syslog or journalctl output from --file (repeatable, supports globs) or stdin",
-			Run:         analyze,
+			Run:         p.analyze,
+		},
+		{
+			Name:        "fix",
+			Description: "Analyze, then apply proposed service-restart fixes over SSH (needs --host; --apply to execute)",
+			Run:         p.fix,
 		},
 	}
 }
 
-func analyze(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) {
+// fix runs analyze to surface findings, then drives the shared interactive
+// fix flow: it lists the auto-applicable service-restart fixes and, with
+// --apply, prompts and executes each confirmed one over SSH against --host.
+func (p *Plugin) fix(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) {
+	rp := sessionRemoteParams(args)
+	rep, err := p.analyze(ctx, args)
+	if err != nil {
+		return plugin.Report{}, err
+	}
+	return investigate.RunFixSubcommand(ctx, args, rep, "syslog fix", rp)
+}
+
+func (p *Plugin) analyze(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) {
+	session := investigate.NewLogSession("syslog")
+
 	// Phase 2: SSH remote collection.
+	remoteHost := ""
 	if rem, err := exassh.CollectIfNeeded(ctx, args,
 		exassh.SyslogCmd(true, exassh.LogLinesFromArgs(args, 5000))); err != nil {
 		return plugin.Report{}, err
 	} else if rem != nil {
+		remoteHost = rem.Host
 		args.Stdin = rem.Reader
 		args.FlagsMulti = map[string][]string{} // clear --file; use stdin only
 		if args.Flags == nil {
@@ -52,11 +78,17 @@ func analyze(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) {
 		}
 	}
 
+	if rp := sessionRemoteParams(args); rp != nil {
+		session.SSH = rp
+		session.DiagTier = args.Flags["remote-diag"]
+	}
+
 	title := "syslog analysis"
 	if h := args.Flags["host"]; h != "" {
 		title = "syslog analysis — " + h
 	}
 
+	srcIdx := map[string]int{}
 	spec := analyzer.Spec{
 		Sources:       analyzer.SourcesFromArgs(args),
 		Stdin:         args.Stdin,
@@ -70,6 +102,26 @@ func analyze(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) {
 		Redactor:      args.Redactor,
 		Progress:      args.Stderr,
 		Parse:         parseSyslog,
+		OnChunk: func(source string, data []byte) {
+			idx, ok := srcIdx[source]
+			if !ok {
+				d := investigate.SourceDesc{Path: source}
+				if remoteHost != "" {
+					d = investigate.SourceDesc{Host: remoteHost, Channel: "syslog"}
+				}
+				idx = session.AddSource(d)
+				srcIdx[source] = idx
+			}
+			session.Append(parseEvents(idx, data)...)
+		},
 	}
-	return analyzer.Analyze(ctx, spec)
+	rep, err := analyzer.Analyze(ctx, spec)
+	if err != nil {
+		return plugin.Report{}, err
+	}
+	session.Stats = buildStats(session)
+	p.setSession(session)
+	rep.Findings = investigate.FindingsFrom(syslogProfile(), session, investigate.Target{},
+		investigate.FindingSource("syslog", remoteHost, session))
+	return rep, nil
 }

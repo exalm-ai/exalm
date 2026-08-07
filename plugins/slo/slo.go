@@ -12,8 +12,8 @@
 //
 // When --samples is omitted, slo check uses a synthetic healthy sample stream so
 // the command demonstrates the multi-window output without requiring a metrics
-// backend. Production deployments will plug Prometheus / OpenObserve / Mimir into
-// the Sample stream via collect.go.
+// backend. Production deployments plug a metrics backend (Prometheus, Mimir,
+// Cortex, …) into the Sample stream via collect.go.
 package slo
 
 import (
@@ -63,11 +63,9 @@ func (p *Plugin) Subcommands() []plugin.Subcommand {
 	}
 }
 
-// Snapshot is the result of a single `slo check` run.
-//
-// Strength: openobserve — "Aggregation functions for alerts: count, avg, min,
-// max, sum, median, p50, p75, p90, p95, p99" — we add the SLO layer that turns
-// those aggregations into burn-rate decisions OO/Komodor cannot make natively.
+// Snapshot is the result of a single `slo check` run: it adds the SLO layer on
+// top of raw metric aggregations, turning them into multi-window burn-rate
+// decisions.
 type Snapshot struct {
 	GeneratedAt time.Time             `json:"generated_at"`
 	Specs       []SLOSpec             `json:"specs"`

@@ -211,7 +211,51 @@ The fingerprint is saved to `~/.exalm/known_hosts` and verified on all subsequen
 
 ---
 
-## Step 6: DORA metrics
+## Step 6: Ask the AI investigator
+
+Every analyzer you just used — `syslog`, `httplog`, `eventlog`, `iis`, `logs`, and
+Kubernetes — shares the same conversational investigation experience. Add `--open` to
+launch it right after the analysis:
+
+```sh
+exalm syslog analyze --file /var/log/syslog --open
+exalm httplog analyze --host web-01 --ssh-user ubuntu --open
+```
+
+This opens the web dashboard (same as Step 9) straight to the AI investigation view. Ask
+questions like:
+
+- "Why is this failing?"
+- "What happened before this?"
+- "Is memory the real problem?"
+- "Generate an RCA"
+
+Every answer cites the exact evidence it used, includes a confidence score with its
+rationale, and proposes remediation in tiers — immediate mitigation, root-cause fix, and
+prevention. Click any chart on the dashboard to drill down into the matching raw log
+lines. Export the conversation as Markdown, JSON, or a standalone HTML report.
+
+During an investigation, exalm can also run a small set of **read-only** diagnostics on
+a remote host (disk/memory/uptime, service status, journal excerpts, …) to answer
+follow-up questions without you running another SSH command by hand. This is gated by a
+fixed, reviewed command allowlist — the LLM never chooses or writes a command:
+
+```sh
+# Default: read-only diagnostics allowed
+exalm syslog analyze --host db-prod-01 --open
+
+# Disable remote diagnostics entirely
+exalm syslog analyze --host db-prod-01 --open --remote-diag off
+
+# Opt in to security-sensitive reads (auth logs, login history, firewall state, …)
+exalm syslog analyze --host db-prod-01 --open --remote-diag full
+```
+
+Set `EXALM_REMOTE_DIAG` to change the default tier for every run.
+
+---
+
+## Step 7: DORA metrics
 
 DORA measures engineering health through four key metrics: Deployment Frequency,
 Lead Time for Changes, Change Failure Rate, and Mean Time to Restore.
@@ -250,7 +294,7 @@ exalm dora report --days 7 # last 7 days
 
 ---
 
-## Step 7: Incident management
+## Step 8: Incident management
 
 ```sh
 # Open an incident
@@ -274,19 +318,24 @@ deployment records. All data is redacted before it is sent.
 
 ---
 
-## Step 8: Web dashboard
+## Step 9: Web dashboard
 
-The dashboard shows findings, DORA metrics, and a cross-signal timeline in a browser.
+`exalm serve` is a multi-dashboard hub: one browser tab for Kubernetes findings, AI
+investigations, DORA metrics, the cross-signal timeline, incidents, and a dashboard
+per log analyzer — navigation builds itself from your enabled plugins.
 
 ```sh
 # Always set a token when running the dashboard
 export EXALM_TOKEN=$(openssl rand -hex 32)
 
-# Run an analysis and start the dashboard
-exalm k8s analyze && exalm serve --token $EXALM_TOKEN
+# Start the hub
+exalm serve --token $EXALM_TOKEN
 ```
 
-Open `http://localhost:7433`.
+Open `http://localhost:7433`. While the hub runs, any analysis started with `--open`
+(Step 6) **attaches** its session to it — the analyzer's dashboard lights up in the
+hub navigation instead of opening a second server. Use the **Settings** page to
+enable/disable dashboards and AI features; choices persist at `~/.exalm/settings.json`.
 
 **Dashboard routes:**
 
@@ -302,7 +351,7 @@ Open `http://localhost:7433`.
 
 ---
 
-## Step 9: MCP integration (Claude Desktop)
+## Step 10: MCP integration (Claude Desktop)
 
 If you use Claude Desktop, exalm can expose its tools via the Model Context Protocol
 so you can ask Claude to run analyses from a conversation.

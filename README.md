@@ -119,6 +119,7 @@ kubectl logs -l app=api --since=1h | exalm logs summarize
 | Command | What it does |
 |---|---|
 | `exalm aws cost` | AWS Cost Explorer anomaly detection and spend analysis |
+| `exalm cloudtrail analyze` | AWS CloudTrail activity — root usage, denials, deletions, privilege escalation |
 | `exalm tf review` | Terraform plan JSON security and risk analysis |
 | `exalm webhook terraform` | Receive Terraform Cloud apply webhooks → auto-populate DORA |
 
@@ -174,25 +175,83 @@ exalm iis analyze --host iis-01 --log-dir 'C:\inetpub\logs\LogFiles\W3SVC1'
 stores the key fingerprint at `~/.exalm/known_hosts`. Subsequent connections verify it.
 A fingerprint mismatch stops the connection before any data is exchanged.
 
+**Remote diagnostics:** during an AI investigation (see below), exalm can run a small,
+fixed set of read-only commands on the remote host — disk/memory/uptime, service status,
+journal/event log excerpts, and similar — to answer questions like "is memory the real
+problem?" without another SSH round trip from you. Every command comes from a reviewed
+allowlist in `internal/ssh/diagnostics.go`; the LLM never chooses or writes a command.
+
+| Tier | Unlocks |
+|---|---|
+| `off` | No remote commands — investigation reasons over the collected logs only |
+| `readonly` (default) | Disk/memory/uptime, service status, journal/event excerpts, IIS app pools |
+| `full` | Also: auth logs, login history, firewall state, certificate expiry, scheduled tasks |
+
+Set with `--remote-diag off\|readonly\|full` per run, or `EXALM_REMOTE_DIAG` globally.
+
+---
+
+## AI investigation
+
+Every analyzer — Kubernetes, `syslog`, `httplog`, `eventlog`, `iis`, and `logs` — shares
+one investigation experience: ask a question in plain language and get evidence-backed
+root cause analysis, a numeric confidence score with its rationale, a chronological
+timeline, tiered remediation (immediate mitigation → root-cause fix → prevention), and
+automatic follow-up questions — all persisted so the conversation continues across
+reloads.
+
+```sh
+# Analyze, then open the AI investigation dashboard
+exalm syslog analyze --host db-01 --open
+exalm httplog analyze --file /var/log/nginx/access.log --open
+exalm k8s analyze --open
+```
+
+Ask things like "why is this failing?", "what changed recently?", "is memory the real
+problem?", or "generate an RCA" — every answer cites the exact evidence it used (click to
+expand), and every chart on the dashboard drills down into the matching raw log lines.
+Export the investigation as Markdown, JSON, or a standalone HTML report (PDF via your
+browser's print dialog).
+
+One redacted LLM call happens per turn; the assistant never picks which diagnostics run —
+that's always the deterministic planner above.
+
 ---
 
 ## Web dashboard
 
+`exalm serve` is a multi-dashboard hub: one process hosts every enabled dashboard —
+Kubernetes findings, DORA, the cross-signal timeline, incidents, and a dashboard per
+log analyzer. Navigation builds itself from the enabled plugins, Grafana-style.
+
 ```sh
-# Start dashboard after an analysis
-exalm k8s analyze && exalm serve --token $EXALM_TOKEN
+# Start the hub
+exalm serve --token $EXALM_TOKEN
+
+# While it runs, any analysis with --open ATTACHES to it instead of
+# starting a second server — its dashboard lights up in the hub nav.
+exalm syslog analyze --host db-01 --open
+exalm httplog analyze --file /var/log/nginx/access.log --open
 ```
 
-Open `http://localhost:7433`. The dashboard includes:
+Open `http://localhost:7433`. The hub includes:
 
-- **Findings view** — severity-filtered findings with remediation steps
+- **Per-analyzer dashboards** — widgets adapted to each source (severity timelines,
+  status codes, top units/URLs/clients, auth/OOM/reboot signals); every chart drills
+  into the matching log lines or seeds an AI investigation
+- **AI investigation** — conversational root cause analysis on every dashboard
+- **Findings view** — severity-filtered k8s findings with remediation steps
 - **DORA dashboard** — four-key metrics with deployment history
 - **Cross-signal timeline** — k8s findings, IaC changes, and incidents on a shared time axis
+- **Settings** — enable/disable dashboards and AI features, persisted at `~/.exalm/settings.json`
 - **`/metrics`** — Prometheus endpoint
 - **`/healthz`** — Kubernetes liveness probe endpoint
 
-The dashboard binds to `localhost` by default. Pass `--token` or set `EXALM_TOKEN` to
-require Bearer token authentication. Do not expose the dashboard without TLS termination.
+Attached sessions never carry SSH credentials — the hub can't run remote diagnostics
+on them (corpus-only investigation); run the analyzer standalone when you want live
+remote checks. The dashboard binds to `localhost` by default. Pass `--token` or set
+`EXALM_TOKEN` to require Bearer token authentication. Do not expose the dashboard
+without TLS termination.
 
 ---
 
@@ -237,12 +296,15 @@ Full values reference and sealed-secrets / External Secrets Operator setup:
 ## MCP integration (Claude Desktop)
 
 exalm implements the [Model Context Protocol](https://modelcontextprotocol.io), letting
-Claude Desktop call exalm analysis tools directly from a conversation.
+Claude Desktop and other MCP agents query exalm's findings and apply remediations
+directly from a conversation.
 
 ```sh
-# Start the MCP server
-export EXALM_TOKEN=your-secret-token
-exalm mcp serve --token $EXALM_TOKEN
+# 1. Produce a report to serve
+exalm k8s analyze --output json > report.json
+
+# 2. Serve it (read-only, stdio)
+exalm mcp serve --file report.json
 ```
 
 Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
@@ -252,18 +314,23 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
   "mcpServers": {
     "exalm": {
       "command": "exalm",
-      "args": ["mcp", "serve"],
-      "env": {
-        "ANTHROPIC_API_KEY": "sk-ant-...",
-        "EXALM_TOKEN": "your-token"
-      }
+      "args": ["mcp", "serve", "--file", "/absolute/path/report.json"]
     }
   }
 }
 ```
 
-Restart Claude Desktop. You can now ask: _"Analyze my Kubernetes cluster and give me a
-DORA report for the last 30 days"_ and Claude will call exalm directly.
+Restart Claude Desktop. You can now ask: _"What are the critical findings, and which
+can be auto-fixed?"_ and Claude will call exalm's tools directly. Add `--write` (plus a
+`--kubeconfig`) to let Claude apply k8s remediations.
+
+Full walkthrough — read tools, write mode, SSE transport, safety model:
+[docs/mcp.md](docs/mcp.md).
+
+All six log analyzers (syslog, httplog, eventlog, iis, logs, cloudtrail) also
+emit structured findings, and syslog/eventlog/iis can propose and apply
+service-restart fixes over SSH — see
+[docs/analyzer-remediation.md](docs/analyzer-remediation.md).
 
 ---
 
@@ -331,6 +398,7 @@ receive the highest priority response.
 | `EXALM_OUTPUT` | Output format: `markdown` or `json` | `markdown` |
 | `EXALM_TOKEN` | Dashboard and MCP server bearer token | — |
 | `EXALM_SSH_PASSWORD` | SSH password authentication | — |
+| `EXALM_REMOTE_DIAG` | Remote diagnostics tier: `off` / `readonly` / `full` (see [SSH remote log collection](#ssh-remote-log-collection)) | `readonly` |
 
 Full reference: [docs/configuration.md](docs/configuration.md)
 

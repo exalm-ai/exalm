@@ -1,6 +1,6 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-/* Phase 6 — Komodor-inspired theme.
+/* Dashboard theme.
  *
  * Deep navy backgrounds + bright cyan/teal accent + high-contrast status colours.
  * Replaces the GitHub-dark palette; all components inherit through these tokens.
@@ -18,7 +18,7 @@
   --text-dim: #8b95b3;
   --text-hi:  #ffffff;
 
-  /* Brand — bright cyan/teal (Komodor signature) */
+  /* Brand — bright cyan/teal */
   --brand:    #00d9c5;
   --brand-dim:#00a89a;
   --blue:     #00d9c5;   /* alias so existing references keep working */
@@ -135,8 +135,8 @@
 body {
   background: var(--bg);
   color: var(--text);
-  /* Phase 6: Komodor uses a clean sans-serif (Inter); fall back to system stack
-   * so we don't add a web-font dependency. Monospace is still used for
+  /* Clean sans-serif via the system stack so we don't add a web-font
+   * dependency. Monospace is still used for
    * commands, code, and evidence excerpts via inline rules below. */
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
   font-size: 13px;
@@ -1025,7 +1025,7 @@ body {
   background: linear-gradient(90deg, #0a0e17 0%, var(--surface) 100%);
 }
 
-/* ── Phase 4: Change timeline strip (Komodor-signature) ── */
+/* ── Change timeline strip ── */
 .change-timeline {
   position: relative;
   margin: 8px 16px 0 16px;
@@ -1134,7 +1134,7 @@ body {
   white-space: nowrap;
 }
 
-/* ── Phase 6: Top status bar (Komodor signature) ──
+/* ── Top status bar ──
  * Compact horizontal strip below the header showing the four most-important
  * "is the cluster healthy?" signals at a glance:
  *   - Cluster health (0-100)
@@ -1191,7 +1191,7 @@ body {
 .status-chip--blue  { background: rgba(106, 215, 255, 0.14); color: var(--accent); border: 1px solid rgba(106, 215, 255, 0.3); }
 .status-chip--brand { background: rgba(0, 217, 197, 0.14); color: var(--brand); border: 1px solid rgba(0, 217, 197, 0.3); }
 
-/* Komodor-style brand glow on the header brand mark. */
+/* Brand glow on the header brand mark. */
 .header-brand {
   color: var(--brand);
   text-shadow: 0 0 14px rgba(0, 217, 197, 0.45);

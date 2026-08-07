@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -21,13 +22,17 @@ import (
 
 	"github.com/exalm-ai/exalm/internal/cliui"
 	"github.com/exalm-ai/exalm/internal/config"
-	"github.com/exalm-ai/exalm/internal/gitprovider"
+	convopkg "github.com/exalm-ai/exalm/internal/convo"
+	"github.com/exalm-ai/exalm/internal/investigate"
 	"github.com/exalm-ai/exalm/internal/llm"
 	"github.com/exalm-ai/exalm/internal/mcp"
+	"github.com/exalm-ai/exalm/internal/metrics"
 	"github.com/exalm-ai/exalm/internal/output"
 	"github.com/exalm-ai/exalm/internal/preflight"
 	"github.com/exalm-ai/exalm/internal/redact"
 	"github.com/exalm-ai/exalm/internal/registry"
+	settingspkg "github.com/exalm-ai/exalm/internal/settings"
+	exassh "github.com/exalm-ai/exalm/internal/ssh"
 	exalmstore "github.com/exalm-ai/exalm/internal/store"
 	"github.com/exalm-ai/exalm/internal/version"
 	"github.com/exalm-ai/exalm/internal/web"
@@ -39,6 +44,7 @@ import (
 	// in registerPlugins() below.
 	awscostplugin "github.com/exalm-ai/exalm/plugins/aws_cost"
 	chaosplugin "github.com/exalm-ai/exalm/plugins/chaos"
+	cloudtrailplugin "github.com/exalm-ai/exalm/plugins/cloudtrail"
 	doraplugin "github.com/exalm-ai/exalm/plugins/dora"
 	eventlogplugin "github.com/exalm-ai/exalm/plugins/eventlog"
 	httplogplugin "github.com/exalm-ai/exalm/plugins/httplog"
@@ -91,6 +97,8 @@ func initStore() *sql.DB {
 	}
 	doraplugin.SetDeployDB(db)
 	incidentplugin.SetIncidentDB(db)
+	convopkg.SetConvoDB(db)
+	settingspkg.SetSettingsDB(db)
 	globalDB = db
 
 	// Best-effort one-time migration from legacy file stores.
@@ -99,6 +107,7 @@ func initStore() *sql.DB {
 	if err == nil {
 		exalmstore.MigrateDeployments(db, filepath.Join(home, ".exalm", "deployments.jsonl")) //nolint:errcheck
 		exalmstore.MigrateIncidents(db, filepath.Join(home, ".exalm", "incidents"))           //nolint:errcheck
+		exalmstore.MigrateSettings(db, filepath.Join(home, ".exalm", "settings.json"))        //nolint:errcheck
 	}
 	return db
 }
@@ -110,6 +119,7 @@ func registerPlugins() {
 	registry.Register(k8splugin.New())
 	registry.Register(tfplugin.New())
 	registry.Register(awscostplugin.New())
+	registry.Register(cloudtrailplugin.New())
 	registry.Register(eventlogplugin.New())
 	registry.Register(iisplugin.New())
 	registry.Register(sysloplugin.New())
@@ -124,10 +134,34 @@ func registerPlugins() {
 // concurrentPlugins lists plugins that accept the shared analyzer flags
 // (--file repeatable, --concurrency, --chunk-size).
 var concurrentPlugins = map[string]bool{
+	"eventlog":   true,
+	"iis":        true,
+	"syslog":     true,
+	"httplog":    true,
+	"cloudtrail": true,
+}
+
+// sshCollectiblePlugins lists concurrentPlugins members that can also
+// collect their input live over SSH (--host and friends). This is narrower
+// than concurrentPlugins: cloudtrail analyzes AWS API activity delivered via
+// S3/NDJSON, not a file tailed from a live host, so it gets the shared
+// chunked-file flags without the SSH remote-collection ones.
+var sshCollectiblePlugins = map[string]bool{
 	"eventlog": true,
 	"iis":      true,
 	"syslog":   true,
 	"httplog":  true,
+}
+
+// investigableAnalyzers lists the log analyzers that build an investigation
+// session and can open the conversational dashboard with --open.
+var investigableAnalyzers = map[string]bool{
+	"eventlog":   true,
+	"iis":        true,
+	"syslog":     true,
+	"httplog":    true,
+	"logs":       true,
+	"cloudtrail": true,
 }
 
 // rootFlags holds top-level persistent flags. Subcommands read from this
@@ -202,12 +236,28 @@ func newMCPCmd(_ *rootFlags) *cobra.Command {
 			if tok == "" {
 				tok = os.Getenv("EXALM_TOKEN")
 			}
-			return runMCPServe(cmd.Context(), sse, allowWrite, tok)
+			reportFile, _ := cmd.Flags().GetString("file")
+			wc := mcpWriteConfig{}
+			wc.kubeconfigPath, _ = cmd.Flags().GetString("kubeconfig")
+			wc.kubeContext, _ = cmd.Flags().GetString("context")
+			wc.host, _ = cmd.Flags().GetString("host")
+			wc.sshUser, _ = cmd.Flags().GetString("ssh-user")
+			wc.sshKey, _ = cmd.Flags().GetString("ssh-key")
+			wc.sshPort, _ = cmd.Flags().GetInt("ssh-port")
+			wc.sshPassword = os.Getenv("EXALM_SSH_PASSWORD")
+			return runMCPServe(cmd.Context(), sse, allowWrite, tok, reportFile, wc)
 		},
 	}
 	serve.Flags().String("sse", "", "if non-empty, serve over SSE on this address (e.g. :7434); otherwise stdio")
 	serve.Flags().Bool("write", false, "enable mutating tools (apply_remediation, open_incident)")
 	serve.Flags().String("token", "", "Bearer token required on every SSE request (default: $EXALM_TOKEN)")
+	serve.Flags().String("file", "", "load findings from a saved report JSON (e.g. `exalm k8s analyze --output json > report.json`) instead of starting empty")
+	serve.Flags().String("kubeconfig", "", "path to kubeconfig for --write's k8s remediation executor (default: standard discovery)")
+	serve.Flags().String("context", "", "kubeconfig context for --write's k8s remediation executor (default: current-context)")
+	serve.Flags().String("host", "", "SSH host for --write's log-analyzer remediation executor (svc-restart, iis-pool-recycle)")
+	serve.Flags().String("ssh-user", "", "SSH username for --host (default: current OS user)")
+	serve.Flags().String("ssh-key", "", "SSH private key path for --host (default: ~/.ssh/id_rsa)")
+	serve.Flags().Int("ssh-port", 22, "SSH port for --host")
 	mcpRoot.AddCommand(serve)
 	return mcpRoot
 }
@@ -233,15 +283,21 @@ func buildPluginCmd(p plugin.Plugin, flags *rootFlags) *cobra.Command {
 			sub.Flags().StringSlice("file", nil, "read input from this file (repeatable, supports globs)")
 			sub.Flags().String("concurrency", "4", "maximum in-flight LLM calls")
 			sub.Flags().String("chunk-size", "", "soft cap per chunk (e.g. 200KB, 1MB)")
-			// SSH remote collection (Phase 2).
-			sub.Flags().String("host", "", "SSH hostname — collect logs directly from this remote host")
-			sub.Flags().String("ssh-user", "", "SSH username (default: current OS user)")
-			sub.Flags().String("ssh-key", "", "path to SSH private key (default: ~/.ssh/id_rsa)")
-			sub.Flags().String("ssh-port", "22", "SSH port (default: 22)")
-			sub.Flags().String("ssh-password", "", "SSH password (prefer EXALM_SSH_PASSWORD env var)")
-			sub.Flags().String("log-lines", "5000", "number of log lines to fetch from remote host")
+			if sshCollectiblePlugins[p.Name()] {
+				// SSH remote collection (Phase 2).
+				sub.Flags().String("host", "", "SSH hostname — collect logs directly from this remote host")
+				sub.Flags().String("ssh-user", "", "SSH username (default: current OS user)")
+				sub.Flags().String("ssh-key", "", "path to SSH private key (default: ~/.ssh/id_rsa)")
+				sub.Flags().String("ssh-port", "22", "SSH port (default: 22)")
+				sub.Flags().String("ssh-password", "", "SSH password (prefer EXALM_SSH_PASSWORD env var)")
+				sub.Flags().String("log-lines", "5000", "number of log lines to fetch from remote host")
+				sub.Flags().String("remote-diag", "", "on-demand SSH diagnostics tier during investigations: off, readonly, full (default: EXALM_REMOTE_DIAG or readonly)")
+			}
 		} else {
 			sub.Flags().String("file", "", "read input from this file instead of stdin")
+		}
+		if investigableAnalyzers[p.Name()] {
+			sub.Flags().Bool("open", false, "open the interactive investigation dashboard after the analysis")
 		}
 		if p.Name() == "httplog" {
 			sub.Flags().String("log-path", "", "custom log path on the remote host (default: /var/log/nginx/access.log)")
@@ -257,6 +313,8 @@ func buildPluginCmd(p plugin.Plugin, flags *rootFlags) *cobra.Command {
 			case "open":
 				sub.Flags().String("title", "", "incident title (required)")
 				sub.Flags().String("severity", "medium", "severity: critical, high, medium, low")
+				sub.Flags().String("namespace", "", "namespace/host scope for cross-referencing investigations")
+				sub.Flags().String("service", "", "affected service/workload name")
 				sub.Flags().String("from-deploy", "", "deployment ID to link as likely cause (from: exalm dora log-deploy)")
 			case "list":
 				sub.Flags().String("status", "", "filter by status: open, closed, mitigated")
@@ -324,7 +382,11 @@ func extractFlags(cmd *cobra.Command, pluginName, subName string) (map[string]st
 			multi["file"] = vs
 			out["file"] = vs[len(vs)-1]
 		}
-		for _, name := range []string{"concurrency", "chunk-size", "host", "ssh-user", "ssh-key", "ssh-port", "ssh-password", "log-lines"} {
+		names := []string{"concurrency", "chunk-size"}
+		if sshCollectiblePlugins[pluginName] {
+			names = append(names, "host", "ssh-user", "ssh-key", "ssh-port", "ssh-password", "log-lines", "remote-diag")
+		}
+		for _, name := range names {
 			if v, err := cmd.Flags().GetString(name); err == nil && v != "" {
 				out[name] = v
 			}
@@ -332,6 +394,11 @@ func extractFlags(cmd *cobra.Command, pluginName, subName string) (map[string]st
 	} else {
 		if v, err := cmd.Flags().GetString("file"); err == nil && v != "" {
 			out["file"] = v
+		}
+	}
+	if investigableAnalyzers[pluginName] {
+		if v, err := cmd.Flags().GetBool("open"); err == nil && v {
+			out["open"] = "true"
 		}
 	}
 
@@ -351,7 +418,7 @@ func extractFlags(cmd *cobra.Command, pluginName, subName string) (map[string]st
 		}
 	}
 	if pluginName == "incident" {
-		for _, name := range []string{"title", "severity", "status", "incident-id", "from-deploy"} {
+		for _, name := range []string{"title", "severity", "namespace", "service", "status", "incident-id", "from-deploy"} {
 			if v, err := cmd.Flags().GetString(name); err == nil && v != "" {
 				out[name] = v
 			}
@@ -499,17 +566,40 @@ func runSubcommand(ctx context.Context, p plugin.Plugin, sc plugin.Subcommand, f
 
 	// k8s analyze/watch: open the web dashboard only when stdout is an
 	// interactive terminal. In CI / pipes / automated runs (no TTY), fall
-	// through to plain markdown output and exit cleanly.
+	// through to plain markdown output and exit cleanly. Log analyzers open
+	// the same dashboard when the user asks with --open.
 	stdoutStat, _ := os.Stdout.Stat()
-	openWeb := p.Name() == "k8s" && (sc.Name == "analyze" || sc.Name == "watch") &&
-		cfg.OutputFormat == "markdown" &&
-		stdoutStat != nil && (stdoutStat.Mode()&os.ModeCharDevice) != 0
+	isTTY := stdoutStat != nil && (stdoutStat.Mode()&os.ModeCharDevice) != 0
+	openWeb := cfg.OutputFormat == "markdown" && isTTY &&
+		((p.Name() == "k8s" && (sc.Name == "analyze" || sc.Name == "watch")) ||
+			pluginFlags["open"] == "true")
 
 	switch {
 	case cfg.OutputFormat == "json":
 		return output.JSON(os.Stdout, report)
 	case cfg.OutputFormat == "web" || openWeb:
-		serveOpts := web.ServeOpts{Port: 7433, OpenBrowser: true}
+		// Hub attach: when `exalm serve` is already running, hand this
+		// analyzer session to it instead of binding a second server. Any
+		// failure (no hub, stale file, rejected snapshot) falls through to
+		// the local server below.
+		if inv, ok := p.(investigable); ok {
+			if session := inv.InvestigationSession(); session != nil {
+				if url, err := tryAttachToHub(session); err == nil {
+					fmt.Fprintf(os.Stderr, "  ⬡ Attached to the running Exalm hub: %s\n", url) //nolint:errcheck
+					web.OpenBrowser(url)
+					return output.Markdown(os.Stdout, report)
+				}
+			}
+		}
+
+		serveOpts := web.ServeOpts{Port: 7433, OpenBrowser: true, Provider: cfg.LLMProvider}
+
+		// Derived metric series (modeled values + real change annotations) for
+		// chart tooltips, drill-down, and the conversation engine's
+		// "is memory the real problem?"-style evidence; a Prometheus backend
+		// can replace this without any caller needing to change.
+		metricsProvider := metrics.NewDerived()
+		serveOpts.Metrics = metricsProvider
 
 		// Inject ApplyFix closure using the k8s client stored on the plugin.
 		if k8sPlug, ok := p.(*k8splugin.Plugin); ok {
@@ -527,9 +617,48 @@ func runSubcommand(ctx context.Context, p plugin.Plugin, sc plugin.Subcommand, f
 			// no cluster connection was made (e.g. --from-file), which keeps the
 			// dashboard footer honest ("static snapshot").
 			serveOpts.RefreshFindings = k8sPlug.RefreshFunc()
+
+			// Supply real per-namespace pod inventory for the dashboard's
+			// namespace selector and pod-derived metrics.
+			serveOpts.PodInfo = func() web.PodInfo {
+				total, unhealthy, byNs := k8sPlug.LastPodInfo()
+				return web.PodInfo{Total: total, Unhealthy: unhealthy, ByNamespace: byNs}
+			}
+
+			// Deep root-cause investigation: deterministic evidence gather +
+			// one redacted LLM synthesis. Reuses the analysis LLM + redactor.
+			serveOpts.Investigate = func(ctx context.Context, findingID string) (*plugin.Investigation, error) {
+				return k8sPlug.Investigate(ctx, findingID, trackedLLM, redactor)
+			}
+
+			// Log viewer access over the already-connected client (read-only).
+			serveOpts.LogFetch = k8sPlug.LogFetch
+
+			// Conversational investigation assistant (the AI Analysis page):
+			// deterministic evidence gathering across the cluster + exactly one
+			// redacted LLM call per turn, persisted across turns and reloads.
+			// Shared with `exalm serve` via buildK8sServeHandlers
+			// (serve_investigate.go) — historical recurrence ("has this
+			// happened before?") reads the incident store through a decoupled
+			// closure so plugins/k8s never imports plugins/incident.
+			buildK8sServeHandlers(&serveOpts, k8sPlug, trackedLLM, redactor, metricsProvider)
+		} else if inv, ok := p.(investigable); ok {
+			// Log analyzers (syslog, httplog, eventlog, iis, logs): the same
+			// conversational copilot over the analysis session's parsed
+			// corpus + the per-analyzer dashboard and drilldown.
+			wired, err := applyAnalyzerServeOpts(&serveOpts, inv, trackedLLM, redactor)
+			if err != nil {
+				return fmt.Errorf("investigation profile: %w", err)
+			}
+			if !wired {
+				fmt.Fprintln(os.Stderr, "note: no analysis session available — the dashboard will be static") //nolint:errcheck
+			}
 		}
 
 		// Inject CreatePR closure if a git provider token and repo are configured.
+		// Shared core with cmd/exalm/serve.go's buildCreatePRFn — this call site
+		// resolves token/repo/baseBranch from plugin flags instead of serve's
+		// dedicated --github-* flags, but builds the closure identically.
 		gpToken := pluginFlags["github-token"]
 		if gpToken == "" {
 			gpToken = os.Getenv("GITHUB_TOKEN")
@@ -538,28 +667,11 @@ func runSubcommand(ctx context.Context, p plugin.Plugin, sc plugin.Subcommand, f
 		if gpRepo == "" {
 			gpRepo = os.Getenv("GITHUB_REPO")
 		}
-		if gpToken != "" && gpRepo != "" {
-			parts := strings.SplitN(gpRepo, "/", 2)
-			if len(parts) == 2 {
-				baseBranch := pluginFlags["github-base-branch"]
-				if baseBranch == "" {
-					baseBranch = "main"
-				}
-				gpOpts := gitprovider.Options{
-					Token:      gpToken,
-					Owner:      parts[0],
-					Repo:       parts[1],
-					BaseBranch: baseBranch,
-				}
-				gp, err := gitprovider.NewFromFlags(pluginFlags["git-provider"], gpOpts)
-				if err != nil {
-					return fmt.Errorf("git provider: %w", err)
-				}
-				serveOpts.CreatePR = func(ctx context.Context, r plugin.Report) (string, error) {
-					return gp.CreateFixPR(ctx, r)
-				}
-			}
+		createPR, err := buildCreatePRFnFromParts(pluginFlags["git-provider"], gpToken, gpRepo, pluginFlags["github-base-branch"])
+		if err != nil {
+			return fmt.Errorf("git provider: %w", err)
 		}
+		serveOpts.CreatePR = createPR
 
 		return web.Serve(ctx, report, serveOpts)
 	default:
@@ -610,11 +722,34 @@ func buildVersionString() string {
 // runMCPServe boots the MCP server. Stdio is the MCP-spec default transport
 // used when an LLM client (e.g. Claude Desktop) launches Exalm as a child
 // process. SSE mode is useful when running Exalm as a long-lived sidecar.
-func runMCPServe(ctx context.Context, sseAddr string, allowWrite bool, token string) error {
-	// Empty report; in production this would be wired to a watch loop that
-	// keeps the MCP server's view fresh. For now we expose an empty surface
-	// that tests + manual handshakes can exercise.
-	srv := mcp.NewServer(plugin.Report{Title: "exalm-mcp", Summary: "MCP server (empty report)"}, allowWrite)
+//
+// reportFile, when set, loads a real plugin.Report snapshot (the same JSON
+// shape any plugin writes via --output json) so the read tools expose actual
+// findings instead of an empty surface. A live watch-mode source (mirroring
+// serveOpts.ReportUpdates for the web dashboard) is deferred — read-only
+// file-backed snapshots are this phase's scope.
+//
+// When allowWrite is set, apply_remediation is wired to the same
+// k8splugin.ApplyRemediation executor the web dashboard's ApplyFix uses
+// (main.go/serve.go), via a fresh kubeconfig-discovered client — no cluster
+// connection is required to start the server (read tools work regardless);
+// a missing/invalid kubeconfig just leaves apply_remediation reporting "not
+// configured", the same graceful degradation the dashboard already uses
+// when no cluster is reachable.
+func runMCPServe(ctx context.Context, sseAddr string, allowWrite bool, token string, reportFile string, wc mcpWriteConfig) error {
+	report := plugin.Report{Title: "exalm-mcp", Summary: "no report loaded — pass --file <report.json> (from `exalm <plugin> ... --output json`) to expose real findings"}
+	if reportFile != "" {
+		loaded, err := loadReportFile(reportFile)
+		if err != nil {
+			return fmt.Errorf("load report file: %w", err)
+		}
+		report = loaded
+	}
+	srv := mcp.NewServer(report, allowWrite)
+
+	if allowWrite {
+		wireMCPApplyHandler(wc)
+	}
 
 	if sseAddr != "" {
 		mux := http.NewServeMux()
@@ -646,6 +781,87 @@ func runMCPServe(ctx context.Context, sseAddr string, allowWrite bool, token str
 
 	fmt.Fprintln(os.Stderr, "exalm mcp: stdio mode (one JSON-RPC request per line)") //nolint:errcheck // startup info to stderr
 	return mcp.ServeStdio(srv, os.Stdin, os.Stdout)
+}
+
+// mcpWriteConfig carries the connection config `mcp serve --write` needs to
+// build its remediation executors: a kubeconfig for k8s remediation kinds and
+// an SSH host for the log-analyzer remediation kinds (svc-restart-*,
+// iis-pool-recycle).
+type mcpWriteConfig struct {
+	kubeconfigPath, kubeContext        string
+	host, sshUser, sshKey, sshPassword string
+	sshPort                            int
+}
+
+// wireMCPApplyHandler registers the apply_remediation executor, routing by
+// remediation Kind: SSH kinds (a log-analyzer's proposed shell fix) go through
+// the allowlisted SSH remediator against --host; everything else goes through
+// the k8s ApplyRemediation executor (the same one the web dashboard uses).
+// Each executor is built only when its connection config is present — building
+// them never dials (both are lazy), so read tools always work; a kind whose
+// executor is unavailable reports a clear error at call time rather than at
+// startup, mirroring the graceful degradation the k8s-only wiring already had.
+func wireMCPApplyHandler(wc mcpWriteConfig) {
+	var k8sApply func(context.Context, plugin.RemediationAction) error
+	if cs, err := k8splugin.NewClient(wc.kubeconfigPath, wc.kubeContext); err == nil {
+		k8sApply = func(ctx context.Context, a plugin.RemediationAction) error {
+			return k8splugin.ApplyRemediation(ctx, cs, a)
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "  ⚠️  MCP write mode: k8s executor unavailable (%v); k8s remediation kinds will error until a kubeconfig is available.\n", err) //nolint:errcheck // startup warning
+	}
+
+	var sshApply func(context.Context, plugin.RemediationAction) error
+	if wc.host != "" {
+		rp := &investigate.RemoteParams{Host: wc.host, User: wc.sshUser, KeyPath: wc.sshKey, Port: wc.sshPort, Password: wc.sshPassword}
+		sshApply = investigate.SSHRemediator(rp, true)
+	}
+
+	if k8sApply == nil && sshApply == nil {
+		fmt.Fprintln(os.Stderr, "  ⚠️  MCP write mode: no executor configured — pass --kubeconfig (k8s) and/or --host (log analyzers). apply_remediation will report \"not configured\".") //nolint:errcheck // startup warning
+		return
+	}
+
+	mcp.SetApplyHandler(func(a plugin.RemediationAction) error {
+		ctx := context.Background()
+		if exassh.IsRemediationKind(a.Kind) {
+			if sshApply == nil {
+				return fmt.Errorf("remediation %q needs an SSH host: start `mcp serve --write --host <host>`", a.Kind)
+			}
+			return sshApply(ctx, a)
+		}
+		if k8sApply == nil {
+			return fmt.Errorf("remediation %q needs a reachable kubeconfig", a.Kind)
+		}
+		return k8sApply(ctx, a)
+	})
+	fmt.Fprintln(os.Stderr, "  ⬡ MCP write mode: remediation executor connected — apply_remediation is live.") //nolint:errcheck // startup info
+}
+
+// maxMCPReportFileBytes bounds --file so a mistakenly huge path doesn't stall
+// startup decoding it; a findings snapshot has no legitimate reason to
+// approach this.
+const maxMCPReportFileBytes = 32 << 20 // 32MiB
+
+func loadReportFile(path string) (plugin.Report, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return plugin.Report{}, err
+	}
+	if info.Size() > maxMCPReportFileBytes {
+		return plugin.Report{}, fmt.Errorf("%s is %d bytes, exceeds the %d byte limit for --file", path, info.Size(), maxMCPReportFileBytes)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return plugin.Report{}, err
+	}
+	defer f.Close() //nolint:errcheck // read-only fd, close error not actionable
+
+	var report plugin.Report
+	if err := json.NewDecoder(f).Decode(&report); err != nil {
+		return plugin.Report{}, fmt.Errorf("parse %s as report JSON: %w", path, err)
+	}
+	return report, nil
 }
 
 // newWebhookCmd returns the `exalm webhook` command group, which currently

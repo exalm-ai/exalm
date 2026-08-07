@@ -1,17 +1,20 @@
 package mcp
 
-// Built-in tool catalogue. Each tool is a thin wrapper over an Exalm internal
-// API: the read tools query the current Report, the write tools forward to
-// handlers registered by the CLI (e.g. ApplyRemediation, the incident store).
+// Built-in tool catalogue. Each tool is a thin wrapper over internal/service:
+// the read tools query a service.FindingsService built from the server's
+// live report, and the write tool goes through service.RemediationService
+// so the batch-ordering/error-shape policy is defined once, not duplicated
+// across MCP, the web /api/fix handlers, and any future REST surface.
 //
 // Schemas are kept inline as JSON-string literals so this file doesn't need a
 // JSON-schema library. They're tested in server_test.go.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
-	"strings"
 
+	"github.com/exalm-ai/exalm/internal/service"
 	"github.com/exalm-ai/exalm/pkg/plugin"
 )
 
@@ -79,21 +82,12 @@ func toolListFindings(s *Server, raw json.RawMessage) (interface{}, error) {
 			return nil, err
 		}
 	}
-	r := s.getReport()
-	out := make([]plugin.Finding, 0, len(r.Findings))
-	for _, f := range r.Findings {
-		if args.Severity != "" && string(f.Severity) != args.Severity {
-			continue
-		}
-		if args.Category != "" && f.Category != args.Category {
-			continue
-		}
-		if args.Namespace != "" && !strings.Contains(f.Title, args.Namespace+"/") {
-			continue
-		}
-		out = append(out, f)
-	}
-	return out, nil
+	findings := service.NewFindingsService(s.getReport).List(service.FindingsFilter{
+		Severity:  args.Severity,
+		Category:  args.Category,
+		Namespace: args.Namespace,
+	})
+	return findings, nil
 }
 
 func toolGetFinding(s *Server, raw json.RawMessage) (interface{}, error) {
@@ -106,52 +100,49 @@ func toolGetFinding(s *Server, raw json.RawMessage) (interface{}, error) {
 	if args.Title == "" {
 		return nil, errors.New("title required")
 	}
-	r := s.getReport()
-	for _, f := range r.Findings {
-		if f.Title == args.Title {
-			return f, nil
-		}
+	f, ok := service.NewFindingsService(s.getReport).Get(args.Title)
+	if !ok {
+		return nil, errors.New("finding not found: " + args.Title)
 	}
-	return nil, errors.New("finding not found: " + args.Title)
+	return f, nil
 }
 
 func toolReportSummary(s *Server, _ json.RawMessage) (interface{}, error) {
-	r := s.getReport()
-	counts := map[string]int{"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
-	for _, f := range r.Findings {
-		if _, ok := counts[string(f.Severity)]; ok {
-			counts[string(f.Severity)]++
-		}
-	}
+	sum := service.NewFindingsService(s.getReport).Summary()
 	return map[string]interface{}{
-		"title":   r.Title,
-		"summary": r.Summary,
-		"counts":  counts,
-		"total":   len(r.Findings),
+		"title":   sum.Title,
+		"summary": sum.Summary,
+		"counts":  sum.Counts,
+		"total":   sum.Total,
 	}, nil
 }
 
 func toolListRemediable(s *Server, _ json.RawMessage) (interface{}, error) {
-	r := s.getReport()
-	out := make([]plugin.Finding, 0)
-	for _, f := range r.Findings {
-		if f.Remediation != nil {
-			out = append(out, f)
-		}
-	}
-	return out, nil
+	return service.NewFindingsService(s.getReport).Remediable(), nil
 }
 
 // ── Write tools ───────────────────────────────────────────────────────────
 
 // applyHandler is the function the CLI provides to actually execute a fix.
-// Set via SetApplyHandler before serving. nil = "not configured" → returns error.
+// Set via SetApplyHandler before serving. nil = "not configured" → returns
+// error (checked inside applyRemediationFn, which adapts it to the
+// service.RemediationService signature).
 var applyHandler func(plugin.RemediationAction) error
 
 // SetApplyHandler registers the production remediation executor. Pass nil to
 // reset (useful for tests).
 func SetApplyHandler(h func(plugin.RemediationAction) error) {
 	applyHandler = h
+}
+
+// applyRemediationFn adapts the package-level applyHandler (checked fresh on
+// every call, so tests can swap it between calls) to the context-taking
+// signature service.RemediationService expects.
+func applyRemediationFn(_ context.Context, a plugin.RemediationAction) error {
+	if applyHandler == nil {
+		return errors.New("apply handler not configured at server startup")
+	}
+	return applyHandler(a)
 }
 
 func toolApplyRemediation(s *Server, raw json.RawMessage) (interface{}, error) {
@@ -164,21 +155,10 @@ func toolApplyRemediation(s *Server, raw json.RawMessage) (interface{}, error) {
 	if args.Title == "" {
 		return nil, errors.New("title required")
 	}
-	if applyHandler == nil {
-		return nil, errors.New("apply handler not configured at server startup")
+	findings := service.NewFindingsService(s.getReport)
+	remediation := service.NewRemediationService(findings, s.getReport, applyRemediationFn)
+	if err := remediation.Apply(context.Background(), args.Title); err != nil {
+		return nil, err
 	}
-	r := s.getReport()
-	for _, f := range r.Findings {
-		if f.Title != args.Title {
-			continue
-		}
-		if f.Remediation == nil {
-			return nil, errors.New("finding has no remediation")
-		}
-		if err := applyHandler(*f.Remediation); err != nil {
-			return nil, err
-		}
-		return map[string]interface{}{"ok": true, "title": args.Title}, nil
-	}
-	return nil, errors.New("finding not found: " + args.Title)
+	return map[string]interface{}{"ok": true, "title": args.Title}, nil
 }

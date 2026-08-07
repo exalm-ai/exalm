@@ -6,22 +6,18 @@ package k8s
 // match is found, finding.LikelyCause is populated with a ChangeRef so the
 // dashboard can show "Likely caused by deploy 12m ago by alice".
 //
-// Competitive gap:
-//   - Komodor strength #1: "Change-correlation engine is best-in-class for K8s:
-//     most cluster incidents are change-induced and this is Komodor's core thesis."
-//     Exalm needs an equivalent.
-//   - OpenObserve opportunity #4 (HIGH): "Change-correlation engine to suppress
-//     deployment-induced anomalies." We don't suppress (the user still wants to
-//     see the failure) but we annotate, which is the same signal in a different
-//     form.
+// Rationale: most cluster incidents are change-induced, so tying a failure to
+// the recent change most likely responsible is high-signal RCA. Exalm
+// annotates (rather than suppresses) the failure — the operator still wants to
+// see it — but points at the probable trigger.
 //
-// Correlation rules (Exalm's first cut):
+// Correlation rules (first cut):
 //   1. Parse the finding title for "<namespace>/<name>" (pod or workload).
 //   2. Query the changestore for events in (Deployment, StatefulSet, DaemonSet,
 //      ConfigMap, Secret, RoleBinding) affecting that name or its owner
 //      workload, within ChangeCorrelationWindow (default 30 minutes).
 //   3. If any match, the newest one becomes LikelyCause. Older matches do not
-//      "compete" — recency is the strongest predictor per Komodor's thesis.
+//      "compete" — recency is the strongest predictor of causation.
 //
 // The engine is non-destructive: it returns a new slice of findings with
 // LikelyCause set where applicable, leaving the input slice untouched.
@@ -35,9 +31,9 @@ import (
 )
 
 // ChangeCorrelationWindow is how far back the correlator looks for a recent
-// change that could have caused the finding. Default 30 minutes matches
-// Komodor's empirical default; long enough to catch a slow-rolling deploy,
-// short enough to avoid false positives on unrelated activity.
+// change that could have caused the finding. Default 30 minutes is a practical
+// balance: long enough to catch a slow-rolling deploy, short enough to avoid
+// false positives on unrelated activity.
 const ChangeCorrelationWindow = 30 * time.Minute
 
 // correlationKinds is the set of K8s object kinds we treat as causal candidates.

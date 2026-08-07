@@ -41,6 +41,16 @@ func (f *restLogFetcher) Tail(ctx context.Context, ns, pod, container string, li
 	return string(b), nil
 }
 
+// NewClient builds a kubernetes.Interface using standard kubeconfig
+// discovery, for callers outside this package that need a live client
+// without running a full plugin subcommand (e.g. cmd/exalm wiring the MCP
+// server's apply_remediation executor). Same discovery order and behavior
+// as the internal newKubeClient it wraps: explicit path > KUBECONFIG env >
+// ~/.kube/config > in-cluster.
+func NewClient(kubeconfigPath, contextName string) (kubernetes.Interface, error) {
+	return newKubeClient(kubeconfigPath, contextName)
+}
+
 // newKubeClient builds a kubernetes.Interface using standard kubeconfig
 // discovery: explicit path > KUBECONFIG env > ~/.kube/config > in-cluster.
 func newKubeClient(kubeconfigPath, contextName string) (kubernetes.Interface, error) {

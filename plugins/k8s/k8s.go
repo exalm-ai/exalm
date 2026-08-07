@@ -13,6 +13,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/exalm-ai/exalm/internal/investigate"
 	"github.com/exalm-ai/exalm/pkg/plugin"
 )
 
@@ -34,9 +35,19 @@ type Plugin struct {
 	mu sync.Mutex
 	// lastCS / lastOpts capture the most recent analyze/watch run so RefreshFunc
 	// can re-collect findings (no LLM) for the dashboard's auto-refresh.
-	lastCS   kubernetes.Interface
-	lastOpts CollectOpts
-	watchCh  chan plugin.Report // non-nil during watch subcommand
+	lastCS       kubernetes.Interface
+	lastOpts     CollectOpts
+	lastSnapshot Snapshot           // most recent collected state; feeds the dashboard pod inventory
+	watchCh      chan plugin.Report // non-nil during watch subcommand
+
+	// eng is the generic investigation engine (internal/investigate) built
+	// from the k8s profile on first use. It owns the per-conversation
+	// evidence cache, so it must be a single long-lived instance. Guarded by
+	// p.mu; see profile.go.
+	eng *investigate.Engine
+	// incidentHistory is the optional decoupled incident source for
+	// "has this happened before?" answers (see history.go). Guarded by p.mu.
+	incidentHistory IncidentHistoryFn
 }
 
 // New returns a production-configured k8s plugin.
@@ -110,6 +121,7 @@ func (p *Plugin) analyze(ctx context.Context, args plugin.RunArgs) (plugin.Repor
 	if err != nil {
 		return plugin.Report{}, fmt.Errorf("collect cluster state: %w", err)
 	}
+	p.setLastSnapshot(snapshot) // capture pod inventory for dashboard
 
 	// CRITICAL: redact before any data leaves the process.
 	formatted := Format(snapshot, MaxInputBytes)
@@ -244,6 +256,7 @@ func (p *Plugin) watch(ctx context.Context, args plugin.RunArgs) (plugin.Report,
 	if err != nil {
 		return plugin.Report{}, fmt.Errorf("collect cluster state: %w", err)
 	}
+	p.setLastSnapshot(snapshot) // capture pod inventory for dashboard
 
 	// Run LLM once for the initial narrative.
 	formatted := Format(snapshot, MaxInputBytes)
@@ -297,6 +310,32 @@ func (p *Plugin) setLastOpts(opts CollectOpts) {
 	p.lastOpts = opts
 }
 
+// setLastSnapshot stores the most recent collected snapshot for pod-inventory
+// queries from the dashboard.
+func (p *Plugin) setLastSnapshot(snap Snapshot) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.lastSnapshot = snap
+}
+
+// LastPodInfo returns the cluster pod inventory from the most recent collection:
+// total pods, unhealthy total, and a per-namespace pod count. Returns zeros and
+// a nil map when no collection has happened yet.
+func (p *Plugin) LastPodInfo() (total, unhealthy int, byNamespace map[string]int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	snap := p.lastSnapshot
+	// Copy the map so callers can't mutate plugin state.
+	var byNs map[string]int
+	if snap.PodsByNamespace != nil {
+		byNs = make(map[string]int, len(snap.PodsByNamespace))
+		for k, v := range snap.PodsByNamespace {
+			byNs[k] = v
+		}
+	}
+	return snap.TotalPods, snap.UnhealthyTotal, byNs
+}
+
 // RefreshFunc returns a closure that re-collects cluster state and returns
 // freshly enriched findings, reusing the client and options from the most
 // recent analyze/watch run. It deliberately does NOT call the LLM — only the
@@ -319,6 +358,7 @@ func (p *Plugin) RefreshFunc() func(ctx context.Context) ([]plugin.Finding, erro
 		if err != nil {
 			return nil, fmt.Errorf("refresh: %w", err)
 		}
+		p.setLastSnapshot(snapshot) // keep dashboard pod inventory fresh
 		return BuildAndEnrichFindings(snapshot), nil
 	}
 }
@@ -348,6 +388,7 @@ func (p *Plugin) startWatchLoop(cs kubernetes.Interface, lf logFetcher, opts Col
 			if err != nil {
 				continue
 			}
+			p.setLastSnapshot(snap) // keep dashboard pod inventory fresh
 			report := plugin.Report{
 				Title:    "Kubernetes watch",
 				Summary:  fmt.Sprintf("Watching %s — live refresh.", opts.Namespace),

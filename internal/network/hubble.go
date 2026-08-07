@@ -3,16 +3,15 @@
 // network drops, DNS failures, and CNI policy denials show up alongside
 // application errors in the same finding.
 //
-// Competitive gap:
-//   - OpenObserve weakness #3: "No eBPF or network-layer visibility: cannot
-//     detect TCP retransmits, DNS failures, Cilium policy drops, or inter-pod
-//     network flow data." Neither OpenObserve nor Komodor has this layer.
-//   - Komodor weakness #3: "No eBPF or network-layer visibility."
-//
-// This module ships ADAPTER + UNIT TESTS only. Production runtime activation
-// requires Cilium + Hubble on the cluster; the adapter degrades gracefully
-// when Hubble's gRPC endpoint is unreachable (Dial returns an error and the
-// CLI proceeds without network evidence).
+// EXPERIMENTAL — NOT WIRED. This package ships the ADAPTER + UNIT TESTS only
+// and is not referenced by any command: the production gRPC client to Hubble
+// Relay is deferred (the Cilium API dependency is intentionally not added
+// yet). The correlation shape is final; the live wire path is stubbed. It is
+// not part of the supported feature set today. When Hubble support lands,
+// callers swap the stub dial for the real gRPC dial and the correlation logic
+// works unchanged. The adapter degrades gracefully when the endpoint is
+// unreachable (Dial returns an error and the CLI proceeds without network
+// evidence).
 //
 // The FlowProvider interface lets us inject a mock provider in tests so the
 // correlation logic is exercised without a live cluster.

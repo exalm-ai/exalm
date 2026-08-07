@@ -1,0 +1,154 @@
+package investigate
+
+// logsession_test.go — corpus bounds/truncation, query/window/vocabulary,
+// and generic focus resolution.
+
+import (
+	"strings"
+	"testing"
+	"time"
+)
+
+func sessionFixture() *LogSession {
+	s := NewLogSession("syslog")
+	src := s.AddSource(SourceDesc{Path: "/var/log/syslog"})
+	base := time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC)
+	s.Append(
+		LogEvent{At: base, Severity: "info", Scope: "web-01", Unit: "nginx.service", Message: "started", Raw: "raw1", Source: src},
+		LogEvent{At: base.Add(1 * time.Minute), Severity: "err", Scope: "web-01", Unit: "nginx.service", Code: "500", Message: "upstream timed out", Raw: "raw2", Source: src},
+		LogEvent{At: base.Add(2 * time.Minute), Severity: "crit", Scope: "web-01", Unit: "kernel", Message: "Out of memory: Killed process 1234", Raw: "raw3", Source: src},
+		LogEvent{At: base.Add(3 * time.Minute), Severity: "warn", Scope: "db-01", Unit: "postgres.service", Message: "checkpoint slow", Raw: "raw4", Source: src},
+	)
+	return s
+}
+
+func TestLogSession_QueryFiltersAndPagination(t *testing.T) {
+	s := sessionFixture()
+
+	got, total := s.Query(LogQuery{Severity: "err"})
+	if total != 1 || len(got) != 1 || got[0].Code != "500" {
+		t.Errorf("severity filter: total=%d got=%+v", total, got)
+	}
+	got, total = s.Query(LogQuery{Unit: "nginx.service"})
+	if total != 2 {
+		t.Errorf("unit filter: total=%d", total)
+	}
+	got, total = s.Query(LogQuery{Contains: "out of memory"})
+	if total != 1 || !strings.Contains(got[0].Message, "Killed process") {
+		t.Errorf("contains filter: total=%d got=%+v", total, got)
+	}
+	// Pagination: total counts all matches; Limit/Offset slice the page.
+	got, total = s.Query(LogQuery{Scope: "web-01", Limit: 2, Offset: 1})
+	if total != 3 || len(got) != 2 {
+		t.Errorf("pagination: total=%d page=%d", total, len(got))
+	}
+	// Time range.
+	base := time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC)
+	_, total = s.Query(LogQuery{From: base.Add(90 * time.Second), To: base.Add(4 * time.Minute)})
+	if total != 2 {
+		t.Errorf("time filter: total=%d", total)
+	}
+}
+
+func TestLogSession_QueryStampsCorpusIndex(t *testing.T) {
+	s := sessionFixture()
+	got, _ := s.Query(LogQuery{Scope: "web-01", Offset: 1})
+	if len(got) != 2 || got[0].Index != 1 || got[1].Index != 2 {
+		t.Errorf("indices should be corpus positions, got %+v", got)
+	}
+}
+
+func TestLogSession_Around(t *testing.T) {
+	s := sessionFixture()
+	base := time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC)
+
+	// Index anchor: 1 each side of event 2, anchor included, indices stamped.
+	got := s.Around(2, time.Time{}, 1)
+	if len(got) != 3 || got[0].Index != 1 || got[1].Index != 2 || got[2].Index != 3 {
+		t.Errorf("index anchor: %+v", got)
+	}
+
+	// Window clamps at the corpus edges.
+	got = s.Around(0, time.Time{}, 5)
+	if len(got) != 4 || got[0].Index != 0 {
+		t.Errorf("edge clamp: len=%d %+v", len(got), got)
+	}
+
+	// Time anchor: first event at or after ts.
+	got = s.Around(-1, base.Add(90*time.Second), 1)
+	if len(got) != 3 || got[1].Index != 2 {
+		t.Errorf("time anchor should land on the 12:02 event, got %+v", got)
+	}
+
+	// No anchor: index out of range with zero time.
+	if got = s.Around(99, time.Time{}, 1); got != nil {
+		t.Errorf("out-of-range idx should yield nil, got %+v", got)
+	}
+	// No anchor: time past every event.
+	if got = s.Around(-1, base.Add(time.Hour), 1); got != nil {
+		t.Errorf("future ts should yield nil, got %+v", got)
+	}
+
+	// Untimestamped corpus + time anchor cannot resolve.
+	u := NewLogSession("logs")
+	u.Append(LogEvent{Raw: "a"}, LogEvent{Raw: "b"})
+	if got = u.Around(-1, base, 1); got != nil {
+		t.Errorf("untimestamped corpus with ts anchor should yield nil, got %+v", got)
+	}
+	// …but an index anchor still works there.
+	if got = u.Around(1, time.Time{}, 1); len(got) != 2 || got[1].Index != 1 {
+		t.Errorf("untimestamped corpus with idx anchor: %+v", got)
+	}
+}
+
+func TestLogSession_WindowAndVocabularyAndRange(t *testing.T) {
+	s := sessionFixture()
+	base := time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC)
+
+	win := s.Window(base.Add(2*time.Minute), time.Minute, time.Minute, 10)
+	if len(win) != 3 { // 12:01, 12:02, 12:03
+		t.Errorf("window: %d events", len(win))
+	}
+
+	units, scopes := s.Vocabulary()
+	if len(units) != 3 || units[0] != "kernel" {
+		t.Errorf("units: %v", units)
+	}
+	if len(scopes) != 2 || scopes[0] != "db-01" {
+		t.Errorf("scopes: %v", scopes)
+	}
+
+	from, to := s.TimeRange()
+	if !from.Equal(base) || !to.Equal(base.Add(3*time.Minute)) {
+		t.Errorf("range: %v → %v", from, to)
+	}
+}
+
+func TestLogSession_CapsDropOldest(t *testing.T) {
+	s := NewLogSession("logs")
+	for i := 0; i < MaxSessionEvents+50; i++ {
+		s.Append(LogEvent{Message: "m", Raw: "r"})
+	}
+	if s.Len() != MaxSessionEvents {
+		t.Errorf("event cap: %d", s.Len())
+	}
+	if s.Truncated() != 50 {
+		t.Errorf("truncated: %d", s.Truncated())
+	}
+}
+
+func TestResolveFocusFromVocabulary(t *testing.T) {
+	s := sessionFixture()
+	if got := ResolveFocusFromVocabulary("", "why is nginx.service failing?", s); got != "db-01/nginx.service" && !strings.HasSuffix(got, "/nginx.service") {
+		t.Errorf("unit mention: %q", got)
+	}
+	if got := ResolveFocusFromVocabulary("web-01/nginx.service", "what happened before?", s); got != "web-01/nginx.service" {
+		t.Errorf("pronoun follow-up must keep focus: %q", got)
+	}
+	if got := ResolveFocusFromVocabulary("", "is db-01 healthy?", s); got != "db-01" {
+		t.Errorf("scope mention: %q", got)
+	}
+	if got := ResolveFocusFromVocabulary("prev", "nothing matches", nil); got != "prev" {
+		t.Errorf("nil session: %q", got)
+	}
+}

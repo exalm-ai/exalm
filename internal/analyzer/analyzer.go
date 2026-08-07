@@ -66,6 +66,13 @@ type Spec struct {
 	// IIS W3C into a more readable form. If nil, raw text is used.
 	Parse func(chunk []byte) (string, error)
 
+	// OnChunk, when non-nil, observes every raw chunk as it is collected
+	// (source path or "stdin", raw bytes) BEFORE Parse/Redact/LLM. Plugins
+	// use it to build their in-memory investigation session corpus in the
+	// same pass — it must not mutate data and has no effect on the analysis
+	// output.
+	OnChunk func(source string, data []byte)
+
 	// MaxRetries caps the number of LLM retries per chunk on retryable errors.
 	// Default: 5.
 	MaxRetries int
@@ -109,6 +116,11 @@ func Analyze(ctx context.Context, s Spec) (plugin.Report, error) {
 	}
 	if len(chunks) == 0 {
 		return plugin.Report{}, errors.New("no input: pass --file <path> or pipe data to stdin")
+	}
+	if s.OnChunk != nil {
+		for _, c := range chunks {
+			s.OnChunk(c.Source, c.Data)
+		}
 	}
 
 	results, err := mapChunks(ctx, s, chunks)

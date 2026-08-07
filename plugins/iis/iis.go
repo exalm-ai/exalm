@@ -4,8 +4,10 @@ package iis
 
 import (
 	"context"
+	"sync"
 
 	"github.com/exalm-ai/exalm/internal/analyzer"
+	"github.com/exalm-ai/exalm/internal/investigate"
 	exassh "github.com/exalm-ai/exalm/internal/ssh"
 	"github.com/exalm-ai/exalm/pkg/plugin"
 )
@@ -14,7 +16,10 @@ import (
 // a busy site for several hours.
 const MaxInputBytes = 1024 * 1024
 
-type Plugin struct{}
+type Plugin struct {
+	mu          sync.Mutex
+	lastSession *investigate.LogSession
+}
 
 func New() *Plugin { return &Plugin{} }
 
@@ -31,19 +36,40 @@ func (p *Plugin) Subcommands() []plugin.Subcommand {
 		{
 			Name:        "analyze",
 			Description: "Analyze IIS W3C access logs from --file (repeatable, supports globs) or stdin",
-			Run:         analyze,
+			Run:         p.analyze,
+		},
+		{
+			Name:        "fix",
+			Description: "Analyze, then apply proposed IIS app-pool recycle fixes over SSH (needs --host; --apply to execute)",
+			Run:         p.fix,
 		},
 	}
 }
 
-func analyze(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) {
+// fix analyzes to surface findings, then drives the shared interactive fix
+// flow: it lists the auto-applicable app-pool recycle fixes and, with --apply,
+// prompts and executes each confirmed one over SSH (PowerShell) against --host.
+func (p *Plugin) fix(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) {
+	rp := sessionRemoteParams(args, args.Flags["log-dir"])
+	rep, err := p.analyze(ctx, args)
+	if err != nil {
+		return plugin.Report{}, err
+	}
+	return investigate.RunFixSubcommand(ctx, args, rep, "iis fix", rp)
+}
+
+func (p *Plugin) analyze(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) {
+	session := investigate.NewLogSession("iis")
+
 	// Phase 2: SSH remote collection.
 	// Connects to a Windows IIS host via SSH and tails the latest W3C log file.
 	logDir := args.Flags["log-dir"]
+	remoteHost := ""
 	if rem, err := exassh.CollectIfNeeded(ctx, args,
 		exassh.IISLogCmd(logDir, exassh.LogLinesFromArgs(args, 5000))); err != nil {
 		return plugin.Report{}, err
 	} else if rem != nil {
+		remoteHost = rem.Host
 		args.Stdin = rem.Reader
 		args.FlagsMulti = map[string][]string{} // clear --file; use stdin only
 		if args.Flags == nil {
@@ -52,11 +78,17 @@ func analyze(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) {
 		args.Flags["file"] = "" // suppress SourcesFromArgs
 	}
 
+	if rp := sessionRemoteParams(args, logDir); rp != nil {
+		session.SSH = rp
+		session.DiagTier = args.Flags["remote-diag"]
+	}
+
 	title := "IIS access log analysis"
 	if h := args.Flags["host"]; h != "" {
 		title = "IIS access log analysis — " + h
 	}
 
+	srcIdx := map[string]int{}
 	spec := analyzer.Spec{
 		Sources:       analyzer.SourcesFromArgs(args),
 		Stdin:         args.Stdin,
@@ -70,6 +102,26 @@ func analyze(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) {
 		Redactor:      args.Redactor,
 		Progress:      args.Stderr,
 		Parse:         parseW3C,
+		OnChunk: func(source string, data []byte) {
+			idx, ok := srcIdx[source]
+			if !ok {
+				d := investigate.SourceDesc{Path: source}
+				if remoteHost != "" {
+					d = investigate.SourceDesc{Host: remoteHost, Channel: logDir}
+				}
+				idx = session.AddSource(d)
+				srcIdx[source] = idx
+			}
+			session.Append(parseEvents(idx, data)...)
+		},
 	}
-	return analyzer.Analyze(ctx, spec)
+	rep, err := analyzer.Analyze(ctx, spec)
+	if err != nil {
+		return plugin.Report{}, err
+	}
+	session.Stats = buildStats(session)
+	p.setSession(session)
+	rep.Findings = investigate.FindingsFrom(iisProfile(), session, investigate.Target{},
+		investigate.FindingSource("iis", remoteHost, session))
+	return rep, nil
 }

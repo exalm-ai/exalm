@@ -27,6 +27,7 @@ import (
 	"github.com/exalm-ai/exalm/internal/llm"
 	"github.com/exalm-ai/exalm/internal/preflight"
 	"github.com/exalm-ai/exalm/internal/redact"
+	"github.com/exalm-ai/exalm/internal/settings"
 	"github.com/exalm-ai/exalm/internal/web"
 	"github.com/exalm-ai/exalm/pkg/plugin"
 	k8splugin "github.com/exalm-ai/exalm/plugins/k8s"
@@ -145,11 +146,28 @@ func runServe(ctx context.Context, root *rootFlags, f *serveCLIFlags) error {
 			dashToken = os.Getenv("EXALM_TOKEN")
 		}
 		noK8sOpts := web.ServeOpts{
-			Port:        f.port,
-			BindAddr:    f.bind,
-			OpenBrowser: f.openBrowser,
-			Token:       dashToken,
-			CreatePR:    buildCreatePRFn(f),
+			Port:           f.port,
+			BindAddr:       f.bind,
+			OpenBrowser:    f.openBrowser,
+			Token:          dashToken,
+			CreatePR:       buildCreatePRFn(f),
+			Settings:       settings.NewStore(),
+			Dashboards:     dashboardRegistry(false),
+			Incidents:      incidentsStatsFn(),
+			IncidentAction: incidentActionFn(),
+		}
+		// Best-effort LLM for ingested-session chat: without a configured
+		// provider the investigation engine falls back to its deterministic
+		// sectioned replies, so the hub still works fully offline.
+		var hubLLM plugin.LLMClient
+		if c, err := llm.NewFromConfig(cfg); err == nil {
+			hubLLM = c
+		}
+		cleanupHub, err := applyHubServeOpts(&noK8sOpts, hubLLM, redact.New(cfg.OptionalRedactions...))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "exalm serve: hub ingest disabled: %v\n", err) //nolint:errcheck
+		} else {
+			defer cleanupHub()
 		}
 		fmt.Fprintf(os.Stderr, "exalm serve: --no-k8s mode — dashboard starting on http://localhost:%d\n", f.port) //nolint:errcheck // startup info to stderr
 		return web.Serve(ctx, plugin.Report{}, noK8sOpts)
@@ -229,10 +247,20 @@ func runServe(ctx context.Context, root *rootFlags, f *serveCLIFlags) error {
 	}
 
 	serveOpts := web.ServeOpts{
-		Port:        f.port,
-		BindAddr:    f.bind,
-		OpenBrowser: f.openBrowser,
-		Token:       dashToken,
+		Port:           f.port,
+		BindAddr:       f.bind,
+		OpenBrowser:    f.openBrowser,
+		Token:          dashToken,
+		Settings:       settings.NewStore(),
+		Dashboards:     dashboardRegistry(true),
+		Incidents:      incidentsStatsFn(),
+		IncidentAction: incidentActionFn(),
+	}
+	// Multi-dashboard hub: analyzer --open runs attach their sessions here.
+	if cleanupHub, err := applyHubServeOpts(&serveOpts, llmClient, redactor); err != nil {
+		fmt.Fprintf(os.Stderr, "exalm serve: hub ingest disabled: %v\n", err) //nolint:errcheck
+	} else {
+		defer cleanupHub()
 	}
 	if k8sCh := k8sPlug.WatchReportCh(); k8sCh != nil {
 		mergedCh := make(chan plugin.Report, 1)
@@ -247,6 +275,32 @@ func runServe(ctx context.Context, root *rootFlags, f *serveCLIFlags) error {
 			return k8splugin.ApplyRemediation(ctx, cs, action)
 		}
 	}
+
+	// Supply real per-namespace pod inventory for the dashboard's namespace
+	// selector and pod-derived metrics.
+	serveOpts.PodInfo = func() web.PodInfo {
+		total, unhealthy, byNs := k8sPlug.LastPodInfo()
+		return web.PodInfo{Total: total, Unhealthy: unhealthy, ByNamespace: byNs}
+	}
+
+	// Deep root-cause investigation: deterministic evidence gather + one
+	// redacted LLM synthesis. Reuses the watch LLM + redactor.
+	serveOpts.Investigate = func(ctx context.Context, findingID string) (*plugin.Investigation, error) {
+		return k8sPlug.Investigate(ctx, findingID, llmClient, redactor)
+	}
+
+	// Log viewer access over the already-connected client (read-only).
+	serveOpts.LogFetch = k8sPlug.LogFetch
+
+	// Conversational investigation assistant (the dashboard's AI chat):
+	// deterministic evidence gathering across the cluster + exactly one
+	// redacted LLM call per turn, persisted across turns and reloads.
+	// `exalm serve` previously left this unwired — findings and remediation
+	// worked, but the chat route always returned 503. Shared with
+	// cmd/exalm/main.go's --output web wiring via buildK8sServeHandlers
+	// (serve_investigate.go) — no metrics provider here, matching the prior
+	// behavior of this call site.
+	buildK8sServeHandlers(&serveOpts, k8sPlug, llmClient, redactor, nil)
 
 	// Inject CreatePR closure if a git provider token and repo are configured.
 	serveOpts.CreatePR = buildCreatePRFn(f)
@@ -377,30 +431,44 @@ func buildCreatePRFn(f *serveCLIFlags) func(context.Context, plugin.Report) (str
 	if repo == "" {
 		repo = os.Getenv("GITHUB_REPO")
 	}
-	if token == "" || repo == "" {
+	fn, err := buildCreatePRFnFromParts(f.gitProvider, token, repo, f.githubBaseBranch)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "exalm serve: git provider setup failed: %v\n", err) //nolint:errcheck // warning to stderr; returns nil
 		return nil
+	}
+	return fn
+}
+
+// buildCreatePRFnFromParts builds the CreatePR closure once token/repo/
+// baseBranch/provider have been resolved. Shared by buildCreatePRFn (serve's
+// own --github-* flags) and cmd/exalm/main.go's per-plugin --output web
+// wiring (which resolves the same values from plugin flags) — previously an
+// inline copy of this exact logic. Returns (nil, nil) when the provider is
+// not fully configured (no token/repo) — that is not an error, just "no PR
+// support configured."
+func buildCreatePRFnFromParts(gitProviderName, token, repo, baseBranch string) (func(context.Context, plugin.Report) (string, error), error) {
+	if token == "" || repo == "" {
+		return nil, nil
 	}
 	parts := strings.SplitN(repo, "/", 2)
 	if len(parts) != 2 {
-		return nil
+		return nil, nil
 	}
-	baseBranch := f.githubBaseBranch
 	if baseBranch == "" {
 		baseBranch = "main"
 	}
-	gp, err := gitprovider.NewFromFlags(f.gitProvider, gitprovider.Options{
+	gp, err := gitprovider.NewFromFlags(gitProviderName, gitprovider.Options{
 		Token:      token,
 		Owner:      parts[0],
 		Repo:       parts[1],
 		BaseBranch: baseBranch,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "exalm serve: git provider setup failed: %v\n", err) //nolint:errcheck // warning to stderr; returns nil
-		return nil
+		return nil, err
 	}
 	return func(ctx context.Context, r plugin.Report) (string, error) {
 		return gp.CreateFixPR(ctx, r)
-	}
+	}, nil
 }
 
 // Compile-time checks: both plugin types must satisfy plugin.Plugin.

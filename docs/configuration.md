@@ -23,6 +23,7 @@ Exalm resolves configuration in the following order (highest precedence first):
 | `EXALM_PROMETHEUS_URL` | no | — | Prometheus base URL for SLO error-budget data |
 | `GITHUB_TOKEN` | for PR creation | — | Git provider token (also `--github-token`) |
 | `GITHUB_REPO` | for PR creation | — | Repo for fix PRs: `owner/repo` (also `--github-repo`) |
+| `EXALM_REMOTE_DIAG` | no | `readonly` | Remote diagnostics tier during AI investigations: `off`, `readonly`, `full` (also `--remote-diag`) |
 
 ---
 
@@ -61,12 +62,37 @@ These flags are available on every subcommand.
 
 ---
 
+## Log analyzer investigation flags
+
+`syslog analyze`, `httplog analyze`, `eventlog summarize`, `iis analyze`, and
+`logs summarize` share these flags, in addition to the SSH remote-collection flags
+documented in the [README](../README.md#ssh-remote-log-collection).
+
+| Flag | Default | Description |
+|---|---|---|
+| `--open` | `false` | Open the AI investigation dashboard after the analysis |
+| `--remote-diag` | `readonly` (or `EXALM_REMOTE_DIAG`) | Remote diagnostics tier during the investigation: `off`, `readonly`, `full` |
+
+`readonly` allows disk/memory/uptime, service status, and journal/event-log excerpts;
+`full` additionally allows auth logs, login history, firewall state, certificate expiry,
+and scheduled tasks. Every command comes from the fixed allowlist in
+`internal/ssh/diagnostics.go` — the LLM never chooses or writes a command, and `off`
+disables remote commands entirely.
+
+---
+
 ## `exalm mcp serve` flags
 
 | Flag | Default | Description |
 |---|---|---|
 | `--sse` | — | If set, serve over HTTP/SSE on this address (e.g. `:7434`); otherwise stdio |
-| `--write` | `false` | Enable mutating MCP tools (`apply_remediation`, `open_incident`) |
+| `--write` | `false` | Enable mutating MCP tools (`apply_remediation`) |
+| `--token` | `$EXALM_TOKEN` | Bearer token required on every SSE request |
+| `--file` | — | Load findings from a saved report JSON (e.g. `exalm k8s analyze --output json > report.json`) instead of starting empty |
+| `--kubeconfig` | standard discovery | Kubeconfig for `--write`'s k8s remediation executor |
+| `--context` | current-context | Kubeconfig context for `--write`'s k8s remediation executor |
+
+See the [MCP usage guide](mcp.md) for a step-by-step walkthrough.
 
 ---
 

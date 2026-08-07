@@ -178,6 +178,98 @@ construct either. This is the architectural guarantee that all LLM calls pass th
 
 ---
 
+## Investigation framework
+
+`internal/investigate` is the generic AI investigation engine shared by every analyzer
+(Kubernetes is the reference implementation; syslog, httplog, eventlog, iis, logs, and cloudtrail
+plug in the same way). Each conversation turn runs one deterministic pipeline:
+
+```
+focus resolution → intent classification (regex) → symptom-driven plan
+→ collector execution (per-conversation cache, E1..En citation labels)
+→ hypothesis ranking → evidence-quality confidence → prevention
+→ answer-mode routing (fact-shaped vs open-ended question, in code)
+→ ONE redacted LLM call (temperature pinned) → persisted transcript (convo store)
+```
+
+Answer-mode routing (`questionmode.go`) is deterministic like the rest of the pipeline:
+fact-shaped questions ("what is the memory limit?", "is there…", "how many…") get a per-turn
+`ANSWER MODE: direct` directive injected next to the question — scope check first (unrelated
+questions get a fixed redirect), then a cited 1-3 sentence answer with the reply template
+suppressed. Open-ended questions ("why is X failing?") keep the full sectioned answer. The
+directive lives in the enriched turn rather than the system prompt because small local models
+follow adjacent instructions but ignore distant mode descriptions once the conversation history
+is full of template-shaped replies (verified live against phi4-mini:3.8b).
+
+A domain supplies a `Profile`: its symptom catalog (what an experienced operator checks first
+per failure mode, with candidate causes), resource-graph edges, question-intent patterns,
+collectors, confidence rules, prevention catalog, cache TTLs, and prompt wording (built from
+shared skeletons that keep the citation/redaction/RCA discipline identical everywhere). The
+engine owns everything else. Adding a future analyzer (Azure, VMware, PostgreSQL, Docker, …) means
+writing a Profile — no engine, web, or UI code. `plugins/cloudtrail` is the second worked example
+after Kubernetes, built entirely from `Profile` fields with zero engine changes.
+
+**Trust model, enforced in the engine:** exactly one redacted `llm.Complete()` per turn; the
+LLM never chooses collectors or commands (plans come solely from the symptom/intent tables);
+every message passes the Redactor before the call; secrets are never collected (metadata only);
+the no-LLM fallback renders the same sectioned, cited answer deterministically.
+
+Log analyzers additionally build a bounded in-memory `LogSession` during analysis (parsed,
+normalized events — never persisted) that feeds the corpus collectors ("what happened
+before?"), the per-analyzer dashboard stats, and the chart-to-log drilldown.
+
+**Remote diagnostics** (`internal/ssh/diagnostics.go`) are the only path from an investigation
+to remote command execution: a fixed, reviewed, read-only allowlist keyed by collector name,
+tier-gated (`off` / `readonly` default / `full` opt-in via `EXALM_REMOTE_DIAG` or
+`--remote-diag`), with the single parameterized slot validated against a strict character
+class — refused, never sanitized. The `full` tier unlocks security-sensitive *reads* (auth
+logs, login history, firewall state, certificate expiry, scheduled tasks); no tier can read
+credential material.
+
+---
+
+## Dashboard platform
+
+The web UI is a plugin-registered dashboard platform, not a fixed page set.
+
+**Registry** (`internal/web/dashboards.go`): every dashboard is a `DashboardDesc`
+(id, name, icon, category, AI/timeline/remediation capability flags, widget list).
+Platform built-ins (Kubernetes, DORA, Timeline, Incidents) plus one descriptor per
+log-analyzer plugin, derived from the plugin registry at serve time — adding an analyzer
+plugin adds its dashboard with zero web-layer changes. `GET /api/dashboards` serves the
+list; the SPA builds its navigation from it (a payload without the registry falls back
+to the legacy single-dashboard nav, so `--open` without a hub is unchanged).
+
+**Settings** (`internal/settings`, `~/.exalm/settings.json`): per-dashboard
+enable/disable (+ Enable All) and a global AI-features toggle, persisted atomically and
+edited from the dashboard's Settings page (`GET/PUT /api/settings`). Disabled dashboards
+disappear from navigation and their scoped routes 404; a settings file that disables
+everything degrades to enable-all rather than bricking the UI.
+
+**Scoped routes**: `/api/dashboards/{id}/{stats,logs,chat,logs/analyze}` dispatch per
+dashboard; the pre-platform aliases (`/api/analyzer/*`, `/api/chat`) remain
+byte-compatible.
+
+**Hub** (`internal/web/{sessions,ingest}.go`, `cmd/exalm/serve_hub.go`): `exalm serve`
+hosts every dashboard in one process. It writes a per-run discovery record
+(`~/.exalm/hub.json`, 0600: port + random secret + pid, removed on shutdown); analyzer
+`--open` runs probe `/healthz` for `"hub":true` and POST their parsed corpus as an
+explicit `SessionSnapshot` to `/api/ingest/session`. The ingest endpoint is
+loopback-only, requires the secret in the `X-Exalm-Ingest` header (constant-time
+compare; the custom header doubles as CSRF protection), and caps the body. The hub
+reconstructs a full investigation engine from the plugin registry's profile, so chat,
+drilldown, and stats on ingested sessions run the same deterministic pipeline.
+`RemoteParams.Password` is `json:"-"`, so credentials never cross the wire — ingested
+sessions run **without** remote SSH diagnostics by construction. Any attach failure
+falls back to the analyzer's own local server.
+
+**Frontend** (`internal/web/static/`): `widgets.js` is the single chart library
+(timelines, bar lists, counters, donut, tooltips); every drillable chart opens a menu —
+*Show related logs* (corpus drilldown) or *✦ Investigate* (seeds the AI chat with the
+clicked slice). Chat sessions are keyed per dashboard.
+
+---
+
 ## SSH client
 
 `internal/ssh` provides the SSH transport for all remote log plugins.

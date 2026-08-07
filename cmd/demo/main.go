@@ -8,17 +8,22 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/exalm-ai/exalm/internal/metrics"
 	"github.com/exalm-ai/exalm/internal/web"
 	"github.com/exalm-ai/exalm/pkg/plugin"
+	"github.com/exalm-ai/exalm/plugins/k8s"
 )
 
 func main() {
 	report := plugin.Report{
 		Title:   "Exalm live dashboard — demo cluster",
-		Summary: "Analysed 3 namespaces · 12 nodes · 4 critical · 3 high · 2 medium · 1 info",
+		Summary: "Analysed 165 pods (14 unhealthy) across 6 namespaces using ollama.",
 		Raw: `## VERDICT
 **4 critical issues** require immediate attention, including a CrashLoopBackOff in production
 and a PVC approaching capacity.
@@ -153,6 +158,13 @@ and a PVC approaching capacity.
 		},
 	}
 
+	// Classify the hand-built findings so the demo exercises the explainability
+	// UI (confidence, temporary vs root-cause fixes, evidence) exactly as the
+	// real k8s pipeline would via BuildAndEnrichFindings.
+	for i := range report.Findings {
+		k8s.Classify(&report.Findings[i])
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -166,27 +178,305 @@ and a PVC approaching capacity.
 		case <-time.After(8 * time.Second):
 			updated := report
 			updated.Summary = "Live update: 5 critical · 3 high · 2 medium · 1 info"
-			updated.Findings = append(updated.Findings, plugin.Finding{
+			nf := plugin.Finding{
 				Severity:   plugin.SeverityCritical,
 				Category:   "Pods",
 				Title:      "NEW: OOMKilled: prod/analytics-worker-2",
 				Detail:     "analytics-worker-2 was OOMKilled 3 minutes ago. RSS peaked at 1.8 Gi against a 1 Gi limit.",
 				Suggestion: "Increase memory limit to 2 Gi or optimise the batch processing job.",
 				Source:     "k8s/prod-cluster",
-			})
+			}
+			k8s.Classify(&nf)
+			updated.Findings = append(append([]plugin.Finding{}, report.Findings...), nf)
 			updates <- updated
 		}
 	}()
 
-	fmt.Fprintf(os.Stderr, "Demo dashboard: http://localhost:7433\n") //nolint:errcheck // startup info to stderr
-	fmt.Fprintf(os.Stderr, "Press Ctrl-C to stop.\n")                 //nolint:errcheck // startup info to stderr
+	// PORT overrides the default so the demo can run beside a real exalm
+	// serve instance (e.g. in preview harnesses).
+	port := 7433
+	if p := os.Getenv("PORT"); p != "" {
+		if n, err := strconv.Atoi(p); err == nil && n > 0 {
+			port = n
+		}
+	}
+	fmt.Fprintf(os.Stderr, "Demo dashboard: http://localhost:%d\n", port) //nolint:errcheck // startup info to stderr
+	fmt.Fprintf(os.Stderr, "Press Ctrl-C to stop.\n")                     //nolint:errcheck // startup info to stderr
+
+	// Synthetic pod inventory + a stubbed fix so the demo exercises the full
+	// dashboard (namespace selector, pod-derived metrics, Fix flow).
+	podInfo := web.PodInfo{
+		Total:     165,
+		Unhealthy: 14,
+		ByNamespace: map[string]int{
+			"prod": 92, "staging": 34, "monitoring": 18, "analytics": 12, "data": 6, "cluster": 3,
+		},
+	}
+
+	// Stub investigation so the demo exercises the explainability UI. Mirrors
+	// what the k8s plugin's deterministic engine would return.
+	investigate := func(_ context.Context, id string) (*plugin.Investigation, error) {
+		var f *plugin.Finding
+		for i := range report.Findings {
+			if report.Findings[i].ID() == id {
+				f = &report.Findings[i]
+				break
+			}
+		}
+		if f == nil {
+			return nil, fmt.Errorf("finding %q not found", id)
+		}
+		var temp, root []plugin.RemediationAction
+		for _, fx := range f.Fixes {
+			if fx.FixType == "root-cause" {
+				root = append(root, fx)
+			} else {
+				temp = append(temp, fx)
+			}
+		}
+		return &plugin.Investigation{
+			Summary:    "Synthesized for the demo: " + f.Detail + " The evidence and recent change correlation point to a configuration cause, so a restart only mitigates the symptom.",
+			RootCause:  f.RootCause,
+			Confidence: f.Confidence,
+			Steps: []plugin.InvestigationStep{
+				{Label: "Pod status & container state inspected", Status: "done", Detail: f.Title},
+				{Label: "Container logs inspected (current + previous)", Status: "done"},
+				{Label: "Warning events inspected", Status: "done"},
+				{Label: "Owning workload inspected", Status: "done"},
+				{Label: "Recent changes correlated", Status: "done", Detail: "linked to a recent deploy"},
+				{Label: "Prometheus metrics inspected", Status: "unavailable", Detail: "no metrics backend wired"},
+			},
+			Evidence:       f.Evidence,
+			TemporaryFixes: temp,
+			RootCauseFixes: root,
+		}, nil
+	}
+
+	converse, getConversation := newDemoConverse(report.Findings)
 
 	if err := web.Serve(ctx, report, web.ServeOpts{
-		Port:          7433,
+		Port:          port,
 		OpenBrowser:   false,
 		ReportUpdates: updates,
+		Provider:      "ollama",
+		PodInfo:       func() web.PodInfo { return podInfo },
+		ApplyFix: func(context.Context, plugin.RemediationAction) error {
+			time.Sleep(400 * time.Millisecond) // simulate the apply latency
+			return nil
+		},
+		Investigate: investigate,
+		LogFetch: func(_ context.Context, ns, pod, container string, previous bool, tail int) (string, error) {
+			head := "2026-06-23T12:20:46Z INFO  starting " + pod + " (container=" + container + ")\n"
+			if previous {
+				head = "2026-06-23T11:58:02Z INFO  previous run of " + pod + "\n"
+			}
+			return head +
+				"2026-06-23T12:20:47Z WARN  memory usage 298Mi approaching limit 256Mi\n" +
+				"2026-06-23T12:20:48Z ERROR OOMKilled: container exceeded memory limit\n" +
+				"2026-06-23T12:20:49Z INFO  restarting...\n", nil
+		},
+		Metrics:         metrics.NewDerived(),
+		Converse:        converse,
+		GetConversation: getConversation,
+		AnalyzeLogLine: func(_ context.Context, req web.LogAnalyzeRequest) (string, error) {
+			time.Sleep(300 * time.Millisecond) // simulate LLM latency
+			return "## Root Cause Analysis\nThe line `" + strings.TrimSpace(req.Message) + "` matches an out-of-memory pattern: the container's working set exceeded its 256 Mi limit and the kernel OOM killer terminated it.\n\n" +
+				"## Impact Assessment\nUser-facing: the pod (" + req.Namespace + "/" + req.Pod + ") restarts on every OOM, dropping in-flight requests and removing itself from Service endpoints until the readiness probe passes again.\n\n" +
+				"## Remediation Steps\n1. `kubectl patch deployment payment-api -n " + req.Namespace + " --type=merge -p '{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"payment-api\",\"resources\":{\"limits\":{\"memory\":\"512Mi\"}}}]}}}}'`\n2. `kubectl rollout status deployment/payment-api -n " + req.Namespace + "`\n\n" +
+				"## Prevention\nSet requests=limits for memory, alert at 80% of the limit, and load-test memory headroom before raising traffic.", nil
+		},
 	}); err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintln(os.Stderr, "serve error:", err) //nolint:errcheck // fatal error to stderr before exit
 		os.Exit(1)
 	}
+}
+
+// newDemoConverse simulates the k8s plugin's conversation engine so the demo
+// exercises the chat workspace end to end (multi-turn history, steps,
+// evidence, timeline, suggestions, persistence across reloads) without a
+// real cluster or LLM. Conversations live in memory for the process
+// lifetime, keyed by a generated id, mirroring internal/convo.Store.
+func newDemoConverse(findings []plugin.Finding) (
+	func(context.Context, web.ConverseRequest) (*plugin.Conversation, error),
+	func(context.Context, string) (*plugin.Conversation, error),
+) {
+	var mu sync.Mutex
+	convos := map[string]*plugin.Conversation{}
+	var seq int64
+
+	findingFor := func(id string) *plugin.Finding {
+		for i := range findings {
+			if findings[i].ID() == id {
+				return &findings[i]
+			}
+		}
+		for i := range findings {
+			if findings[i].Severity == plugin.SeverityCritical {
+				return &findings[i]
+			}
+		}
+		return &findings[0]
+	}
+
+	focusFor := func(f *plugin.Finding) string {
+		if f.Remediation != nil && f.Remediation.Namespace != "" && f.Remediation.Name != "" {
+			return f.Remediation.Namespace + "/" + f.Remediation.Name
+		}
+		return ""
+	}
+
+	statusFor := func(cached bool) string {
+		if cached {
+			return "cached"
+		}
+		return "done"
+	}
+
+	replyFor := func(lower string, f *plugin.Finding) string {
+		switch {
+		case strings.Contains(lower, "previous log"):
+			return "Here are the previous container logs [E1] for **" + f.Title + "** — the pod was OOMKilled just before this restart; working set peaked at 310 Mi against a 256 Mi limit [E2]."
+		case strings.Contains(lower, "deploy"):
+			return "Yes — a deployment rolled out about an hour before the first crash [E3]. The new image raised steady-state memory use without a matching limit increase [E2], which is the likely trigger."
+		case strings.Contains(lower, "rca") || strings.Contains(lower, "postmortem") || strings.Contains(lower, "incident report"):
+			return "## SUMMARY\n" + f.Detail + "\n\n## ROOT CAUSE\n" + f.RootCause + " [E1] [E2]\n\n## RESOLUTION\n" + f.Suggestion + "\n\n## PREVENTION\nAlert on memory usage above 80% of the limit before it OOMs."
+		case strings.Contains(lower, "fix") || strings.Contains(lower, "remediat"):
+			return "Recommended fix: " + f.Suggestion + " Grounded in the OOM evidence [E1] and the workload's current limits [E2]."
+		case strings.Contains(lower, "database") || strings.Contains(lower, "db"):
+			return "No direct evidence of a database dependency in the logs or events gathered so far for **" + f.Title + "** — this looks contained to the pod's own memory usage [E1]."
+		default:
+			return "**Root cause** — the container was OOMKilled [E1]: its working set peaks above the 256 Mi limit [E2], and this recurred after the v2.3.1 deploy [E3]. This has happened before with the same symptom [E4].\n\n**Immediate mitigation** — restart buys time but the OOM will recur (temporary).\n\n**Root-cause fix** — raise the memory limit to 512 Mi.\n\n**Prevention** — alert at 80% of the limit."
+		}
+	}
+
+	steps := []plugin.InvestigationStep{
+		{Label: "Pod status & container state inspected", Status: "done"},
+		{Label: "Container logs inspected (current + previous)", Status: "done"},
+		{Label: "Warning events inspected", Status: "done"},
+		{Label: "Recent changes correlated", Status: "done", Detail: "linked to a recent deploy"},
+		{Label: "Prometheus metrics inspected", Status: "unavailable", Detail: "no metrics backend wired"},
+	}
+
+	// The executed investigation plan (what the deterministic planner chose
+	// and why) — the second turn onward marks repeat collectors as cached.
+	planFor := func(turn int) []plugin.PlanStep {
+		cached := turn > 1
+		return []plugin.PlanStep{
+			{ID: "p1", Collector: "previous-logs", Target: "prod/payment-api", Edge: "pod→logs",
+				Reason: "reason=OOMKilled ⇒ the previous container's logs show why the last run exited", Status: statusFor(cached), FromCache: cached},
+			{ID: "p2", Collector: "owner-chain", Target: "prod/payment-api", Edge: "pod→ownerDeployment",
+				Reason: "reason=OOMKilled ⇒ check the workload's memory limits and requests", Status: statusFor(cached), FromCache: cached},
+			{ID: "p3", Collector: "change-history", Target: "prod/payment-api", Edge: "resource→changes",
+				Reason: "a deploy shortly before the first OOM is the likely trigger", Status: "done"},
+			{ID: "p4", Collector: "node-detail", Target: "prod/payment-api", Edge: "pod→node",
+				Reason: "node memory pressure can evict/kill pods independently of limits", Status: "done"},
+			{ID: "p5", Collector: "history", Target: "prod/payment-api", Edge: "resource→history",
+				Reason: "prior investigations and incidents show whether this has happened before", Status: "done"},
+		}
+	}
+
+	demoEvidence := func(f *plugin.Finding, now time.Time) []plugin.EvidenceItem {
+		evid := []plugin.EvidenceItem{
+			{Kind: "log", Source: "payment-api (previous)", Label: "E1", Edge: "pod→logs",
+				Excerpt: "OOMKilled: container exceeded memory limit (working set peaked at 310Mi vs 256Mi limit)",
+				Anchor:  "kubectl logs payment-api -n prod --previous", CollectedAt: now},
+			{Kind: "config", Source: "deployment/payment-api", Label: "E2", Edge: "pod→ownerDeployment",
+				Excerpt: "ready 1/3 · strategy=RollingUpdate · memLimits=true (256Mi) · probes: app readiness (initialDelay=5s)",
+				Anchor:  "kubectl describe deployment payment-api -n prod", CollectedAt: now},
+			{Kind: "change", Source: "Deployment/payment-api", Label: "E3", Edge: "resource→changes",
+				Excerpt: "updated by ci-bot, 1h ago (image v2.3.0 → v2.3.1)", CollectedAt: now},
+			{Kind: "history", Source: "conversations/prod/payment-api", Label: "E4", Edge: "resource→history",
+				Excerpt: "investigated 2 time(s) before; last on Monday — concluded: memory limit too low (SAME symptom — recurring)", CollectedAt: now},
+		}
+		evid = append(evid, f.Evidence...)
+		return evid
+	}
+
+	hypotheses := []plugin.Hypothesis{
+		{Title: "Memory limit too low for the workload's real usage", Score: 85,
+			Rationale: "supported by [E1], [E2]", EvidenceFor: []string{"E1", "E2"}},
+		{Title: "Memory regression introduced by the v2.3.1 deploy", Score: 70,
+			Rationale:   "supported by [E3] but the limit was already marginal before the deploy",
+			EvidenceFor: []string{"E3"}, EvidenceAgainst: []string{"E4"}},
+		{Title: "Node memory pressure (not the container's own limit)", Score: 25,
+			Rationale: "weakened by [E1] — kept only as a fallback", EvidenceAgainst: []string{"E1"}},
+	}
+
+	prevention := []plugin.RemediationAction{
+		{Kind: "advice", FixType: "prevention", Risk: "low",
+			Description: "Set memory requests and limits on every container (enforce with a namespace LimitRange) and alert when working-set exceeds 80% of the limit."},
+	}
+
+	timelineFor := func() []plugin.TimelineEvent {
+		now := time.Now()
+		return []plugin.TimelineEvent{
+			{At: now.Add(-27 * time.Minute), Label: "Deployment updated", Severity: "info", Source: "change"},
+			{At: now.Add(-26 * time.Minute), Label: "Pod created", Severity: "info", Source: "pod"},
+			{At: now.Add(-25 * time.Minute), Label: "Readiness probe failed", Severity: "medium", Source: "event"},
+			{At: now.Add(-24 * time.Minute), Label: "Restart", Severity: "high", Source: "pod"},
+			{At: now.Add(-23 * time.Minute), Label: "CrashLoopBackOff", Severity: "critical", Source: "event"},
+			{At: now.Add(-22 * time.Minute), Label: "OOMKilled", Severity: "critical", Source: "event"},
+			{At: now.Add(-21 * time.Minute), Label: "Restart", Severity: "high", Source: "pod"},
+		}
+	}
+
+	suggestions := []string{"Show me the previous logs", "Is this related to the last deployment?", "Generate an RCA", "Suggest a permanent fix"}
+
+	converse := func(_ context.Context, req web.ConverseRequest) (*plugin.Conversation, error) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		conv := convos[req.ConversationID]
+		if conv == nil {
+			seq++
+			conv = &plugin.Conversation{
+				ID: fmt.Sprintf("demo-%d", seq), FindingID: req.FindingID, Namespace: req.Namespace,
+				CreatedAt: time.Now(),
+			}
+		}
+		f := findingFor(req.FindingID)
+		if conv.Focus == "" {
+			conv.Focus = focusFor(f)
+		}
+
+		now := time.Now()
+		conv.Messages = append(conv.Messages, plugin.ConversationMessage{Role: "user", Content: req.Message, At: now})
+		turn := 0
+		for _, m := range conv.Messages {
+			if m.Role == "user" {
+				turn++
+			}
+		}
+		conv.Messages = append(conv.Messages, plugin.ConversationMessage{
+			Role:           "assistant",
+			Content:        replyFor(strings.ToLower(req.Message), f),
+			At:             now,
+			Confidence:     "high",
+			Score:          85,
+			ScoreRationale: "a recorded change landed shortly before the first failure — strong temporal correlation; corroborated across 4 evidence kinds",
+			Steps:          steps,
+			Evidence:       demoEvidence(f, now),
+			Fixes:          f.Fixes,
+			Timeline:       timelineFor(),
+			Suggestions:    suggestions,
+			Plan:           planFor(turn),
+			Hypotheses:     hypotheses,
+			Prevention:     prevention,
+		})
+		conv.UpdatedAt = now
+		convos[conv.ID] = conv
+		return conv, nil
+	}
+
+	get := func(_ context.Context, id string) (*plugin.Conversation, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		conv, ok := convos[id]
+		if !ok {
+			return nil, fmt.Errorf("conversation %q not found", id)
+		}
+		return conv, nil
+	}
+
+	return converse, get
 }

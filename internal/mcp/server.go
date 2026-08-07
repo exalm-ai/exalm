@@ -2,13 +2,6 @@
 // findings, remediation actions, change store, and incident store as
 // structured tools that any MCP-compatible LLM agent can call.
 //
-// Competitive gap:
-//   - OpenObserve (HIGH opp #5): "Kubernetes MCP server companion to OO's
-//     telemetry MCP server" — OO has an MCP for telemetry but no K8s tools.
-//   - Komodor (HIGH opp #1): "MCP server wrapping Komodor's REST API as
-//     structured tools" — Komodor has zero MCP layer; integration is
-//     REST-only.
-//
 // Exalm's MCP exposes BOTH telemetry findings AND the remediation action
 // surface, enabling closed-loop agentic SRE workflows. Read tools are
 // always available; write tools require --mcp-write at server startup

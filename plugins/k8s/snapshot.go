@@ -11,16 +11,22 @@ import "time"
 // Plain Go types only — no k8s API imports, keeping the formatter
 // and most tests free of client-go.
 type Snapshot struct {
-	Namespace     string // empty = cluster-wide
-	TotalPods     int
-	UnhealthyPods []PodSummary
-	Events        []EventSummary
-	NodeIssues    []NodeIssue
-	Deployments   []DeploymentSummary
-	HPAs          []HPASummary
-	Quotas        []QuotaSummary
-	PVCIssues     []PVCIssue
-	ServiceIssues []ServiceIssue
+	Namespace string // empty = cluster-wide
+	TotalPods int
+	// PodsByNamespace counts every pod (healthy or not) per namespace. Used by
+	// the dashboard's namespace selector and pod-derived metrics.
+	PodsByNamespace map[string]int
+	// UnhealthyTotal is the count of all unhealthy pods before UnhealthyPods is
+	// capped to MaxPods, so the dashboard can show a true cluster figure.
+	UnhealthyTotal int
+	UnhealthyPods  []PodSummary
+	Events         []EventSummary
+	NodeIssues     []NodeIssue
+	Deployments    []DeploymentSummary
+	HPAs           []HPASummary
+	Quotas         []QuotaSummary
+	PVCIssues      []PVCIssue
+	ServiceIssues  []ServiceIssue
 
 	// Phase 1 extended analyzers
 	IngressIssues       []IngressHealth
@@ -139,7 +145,12 @@ type EventSummary struct {
 	Message   string
 	Count     int32
 	LastSeen  string
-	Density   float64 // events per second (Count / window); >1 = spike
+	// LastSeenAt is the real timestamp LastSeen was rendered from, kept
+	// alongside the human string so callers needing exact chronology (e.g.
+	// the conversation engine's investigation timeline) don't have to parse
+	// "5m ago" back into a duration.
+	LastSeenAt time.Time
+	Density    float64 // events per second (Count / window); >1 = spike
 }
 
 // NodeIssue records a node with at least one unhealthy condition.

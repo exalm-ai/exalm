@@ -456,10 +456,13 @@ helm upgrade exalm ./deploy/helm/exalm-agent \
 
 ### LLM call times out
 
-The default `WriteTimeout` on the web server is 30 seconds. LLM calls on
-Ollama with large models can exceed this. Use the CLI (`exalm k8s analyze`)
-instead of the dashboard for long-running analyses, or increase the timeout
-by rebuilding with a patched `WriteTimeout`.
+LLM-bound dashboard routes (chat, log-line analysis, deep investigation)
+extend their own write deadline to 10 minutes, so slow local models no
+longer hit the server-wide 30-second `WriteTimeout` (which still protects
+every other route against slow-client attacks). If a turn exceeds even
+that, the reply falls back to the deterministic evidence summary — check
+`ollama ps` and consider a smaller or non-reasoning model; reasoning
+models can spend the entire token budget thinking before any output.
 
 ### SSH: `known_hosts mismatch`
 

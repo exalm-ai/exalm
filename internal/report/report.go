@@ -1,0 +1,163 @@
+// Package report renders a persisted investigation conversation as a
+// standalone report — Markdown or HTML — for download/handoff (incident
+// report, RCA document). Transport-independent: takes only *plugin.
+// Conversation (+ an analyzer label for HTML), returns a string. PDF is
+// intentionally the browser's job (the HTML report ships @media print
+// styles) — no PDF dependency here.
+//
+// Extracted from internal/web (chat_export.go, chat_export_html.go) as part
+// of the platform service-layer consolidation: this is the reusable core a
+// future ReportService (CLI/REST/MCP) wraps, not a web-specific renderer.
+package report
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/exalm-ai/exalm/pkg/plugin"
+)
+
+// Markdown renders the full investigation as plain Markdown: an executive
+// summary, then per-turn — the answer, the executed plan, hypotheses,
+// evidence with anchors, confidence, fixes, and prevention.
+func Markdown(c *plugin.Conversation) string {
+	var b strings.Builder
+	b.WriteString("# Investigation report\n\n")
+	if c.Focus != "" {
+		fmt.Fprintf(&b, "**Focus resource:** `%s`  \n", c.Focus)
+	}
+	if c.Namespace != "" {
+		fmt.Fprintf(&b, "**Namespace scope:** `%s`  \n", c.Namespace)
+	}
+	fmt.Fprintf(&b, "**Conversation:** %s  \n", c.ID)
+	if !c.CreatedAt.IsZero() {
+		fmt.Fprintf(&b, "**Started:** %s · **Last updated:** %s  \n",
+			c.CreatedAt.UTC().Format("2006-01-02 15:04 UTC"), c.UpdatedAt.UTC().Format("2006-01-02 15:04 UTC"))
+	}
+
+	// Executive summary — the latest conclusions, before the full technical
+	// transcript.
+	if last := lastAssistantMsg(c); last != nil {
+		b.WriteString("\n## Executive summary\n\n")
+		if len(last.Hypotheses) > 0 {
+			fmt.Fprintf(&b, "- **Root cause (most likely):** %s\n", last.Hypotheses[0].Title)
+		}
+		if last.Score > 0 {
+			fmt.Fprintf(&b, "- **Confidence:** %d%% — %s\n", last.Score, last.ScoreRationale)
+		}
+		if c.Fingerprint != "" {
+			fmt.Fprintf(&b, "- **Symptom:** `%s`\n", strings.SplitN(c.Fingerprint, "\x1f", 2)[0])
+		}
+		fmt.Fprintf(&b, "- **Investigation turns:** %d\n", len(c.Messages)/2)
+	}
+	b.WriteString("\n---\n")
+
+	for _, m := range c.Messages {
+		if m.Role == "user" {
+			fmt.Fprintf(&b, "\n## Question\n\n> %s\n", strings.ReplaceAll(strings.TrimSpace(m.Content), "\n", "\n> "))
+			continue
+		}
+
+		b.WriteString("\n## Answer")
+		if m.Score > 0 {
+			fmt.Fprintf(&b, " — confidence %d%%", m.Score)
+		} else if m.Confidence != "" {
+			fmt.Fprintf(&b, " — confidence %s", m.Confidence)
+		}
+		b.WriteString("\n\n")
+		b.WriteString(strings.TrimSpace(m.Content))
+		b.WriteString("\n")
+		if m.ScoreRationale != "" {
+			fmt.Fprintf(&b, "\n_Confidence rationale: %s_\n", m.ScoreRationale)
+		}
+
+		if len(m.Plan) > 0 {
+			b.WriteString("\n### Investigation plan\n\n| Step | Collector | Edge | Status | Why |\n|---|---|---|---|---|\n")
+			for _, ps := range m.Plan {
+				status := ps.Status
+				if ps.FromCache {
+					status += " (cached)"
+				}
+				fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n", ps.ID, ps.Collector, ps.Edge, status, ps.Reason)
+			}
+		}
+
+		if len(m.Hypotheses) > 0 {
+			b.WriteString("\n### Hypotheses considered\n\n")
+			for i, h := range m.Hypotheses {
+				fmt.Fprintf(&b, "%d. **%s** (score %d) — %s", i+1, h.Title, h.Score, h.Rationale)
+				if len(h.EvidenceFor) > 0 {
+					fmt.Fprintf(&b, " · for: %s", strings.Join(h.EvidenceFor, ", "))
+				}
+				if len(h.EvidenceAgainst) > 0 {
+					fmt.Fprintf(&b, " · against: %s", strings.Join(h.EvidenceAgainst, ", "))
+				}
+				b.WriteString("\n")
+			}
+		}
+
+		if len(m.Evidence) > 0 {
+			b.WriteString("\n### Evidence\n\n")
+			for _, e := range m.Evidence {
+				label := e.Label
+				if label == "" {
+					label = "•"
+				}
+				fmt.Fprintf(&b, "- **[%s]** (%s / %s", label, e.Kind, e.Source)
+				if e.Edge != "" {
+					fmt.Fprintf(&b, ", edge `%s`", e.Edge)
+				}
+				b.WriteString(") ")
+				if e.FromCache {
+					b.WriteString("(cached) ")
+				}
+				b.WriteString(strings.ReplaceAll(e.Excerpt, "\n", " "))
+				if e.Anchor != "" {
+					fmt.Fprintf(&b, "\n  - reproduce: `%s`", e.Anchor)
+				}
+				b.WriteString("\n")
+			}
+		}
+
+		writeFixSection := func(title string, fixes []plugin.RemediationAction) {
+			if len(fixes) == 0 {
+				return
+			}
+			fmt.Fprintf(&b, "\n### %s\n\n", title)
+			for _, fx := range fixes {
+				fmt.Fprintf(&b, "- %s", fx.Description)
+				if fx.KubectlCmd != "" {
+					fmt.Fprintf(&b, "\n  - `%s`", fx.KubectlCmd)
+				}
+				b.WriteString("\n")
+			}
+		}
+		temp, root := plugin.SplitFixesByType(m.Fixes)
+		writeFixSection("Immediate mitigation (temporary)", temp)
+		writeFixSection("Root-cause fix", root)
+		writeFixSection("Prevention", m.Prevention)
+
+		if len(m.Timeline) > 0 {
+			b.WriteString("\n### Timeline\n\n")
+			for _, ev := range m.Timeline {
+				fmt.Fprintf(&b, "- `%s` %s", ev.At.Format("15:04:05"), ev.Label)
+				if ev.Detail != "" {
+					fmt.Fprintf(&b, " — %s", ev.Detail)
+				}
+				b.WriteString("\n")
+			}
+		}
+		b.WriteString("\n---\n")
+	}
+	b.WriteString("\n_Generated by Exalm — evidence excerpts are redacted before storage._\n")
+	return b.String()
+}
+
+func lastAssistantMsg(c *plugin.Conversation) *plugin.ConversationMessage {
+	for i := len(c.Messages) - 1; i >= 0; i-- {
+		if c.Messages[i].Role == "assistant" {
+			return &c.Messages[i]
+		}
+	}
+	return nil
+}

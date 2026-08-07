@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 150" width="560" height="150" role="img" aria-label="exalm">
+  <title>exalm</title>
+  <defs>
+    <linearGradient id="exalmGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7b5bff"/>
+      <stop offset="1" stop-color="#14b8a6"/>
+    </linearGradient>
+  </defs>
+  <!-- Badge: an investigation lens over a signal pulse -->
+  <rect x="10" y="15" width="120" height="120" rx="28" fill="url(#exalmGrad)"/>
+  <!-- signal pulse -->
+  <path d="M34 78 h14 l10 -26 l14 46 l10 -24 h18"
+        fill="none" stroke="#ffffff" stroke-width="7"
+        stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>
+  <!-- lens -->
+  <circle cx="92" cy="60" r="20" fill="none" stroke="#ffffff" stroke-width="7" opacity="0.95"/>
+  <line x1="106" y1="74" x2="120" y2="88" stroke="#ffffff" stroke-width="7" stroke-linecap="round" opacity="0.95"/>
+  <!-- Wordmark -->
+  <text x="158" y="97"
+        font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+        font-size="82" font-weight="700" letter-spacing="-2"
+        fill="url(#exalmGrad)">exalm</text>
+</svg>

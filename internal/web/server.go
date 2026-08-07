@@ -14,15 +14,21 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/exalm-ai/exalm/internal/changestore"
+	"github.com/exalm-ai/exalm/internal/investigate"
+	"github.com/exalm-ai/exalm/internal/metrics"
+	"github.com/exalm-ai/exalm/internal/remediation"
+	"github.com/exalm-ai/exalm/internal/report"
+	"github.com/exalm-ai/exalm/internal/settings"
+	"github.com/exalm-ai/exalm/internal/timeline"
 	"github.com/exalm-ai/exalm/pkg/plugin"
 	dorapkg "github.com/exalm-ai/exalm/plugins/dora"
-	incidentpkg "github.com/exalm-ai/exalm/plugins/incident"
 )
 
 //go:embed templates static
@@ -71,6 +77,91 @@ type ServeOpts struct {
 	// is nil.
 	RefreshInterval time.Duration
 
+	// PodInfo, when non-nil, supplies real per-namespace pod inventory for the
+	// dashboard's namespace selector and pod-derived metrics. Nil => the
+	// dashboard still renders with those metrics at zero.
+	PodInfo func() PodInfo
+
+	// Provider names the LLM in use (e.g. "ollama", "claude") for the dashboard
+	// scope line. When empty it is inferred from the report summary.
+	Provider string
+
+	// Investigate, when non-nil, runs a deep root-cause investigation for a
+	// finding id and returns the result. Nil => /api/findings/{id}/investigate
+	// returns 503 and the UI hides the Investigate button.
+	Investigate func(ctx context.Context, findingID string) (*plugin.Investigation, error)
+
+	// LogFetch, when non-nil, returns a container's log tail for the log viewer.
+	// previous selects the last-terminated container's logs. Nil => /api/logs 503.
+	LogFetch func(ctx context.Context, namespace, pod, container string, previous bool, tail int) (string, error)
+
+	// Converse, when non-nil, runs one turn of a multi-turn investigation chat
+	// (the AI Analysis page). Nil => POST /api/chat returns 503 and the UI
+	// falls back to the static, non-conversational narrative.
+	Converse func(ctx context.Context, req ConverseRequest) (*plugin.Conversation, error)
+
+	// GetConversation, when non-nil, loads a previously persisted conversation
+	// by id (used to resume a chat after a page reload). Nil => GET
+	// /api/chat/{id} returns 503.
+	GetConversation func(ctx context.Context, id string) (*plugin.Conversation, error)
+
+	// AnalyzeLogLine, when non-nil, runs a one-shot AI analysis of a single
+	// log entry (the log viewer's "✦ Analyze line" action). Nil => POST
+	// /api/logs/analyze returns 503.
+	AnalyzeLogLine func(ctx context.Context, req LogAnalyzeRequest) (string, error)
+
+	// Analyzer names the log analyzer serving this dashboard ("syslog",
+	// "httplog", "eventlog", "iis", "logs"). Empty for the k8s dashboard —
+	// the payload stays byte-compatible for existing consumers.
+	Analyzer string
+	// AnalyzerStats, when non-nil, returns the analyzer-typed stats payload
+	// driving the per-analyzer dashboard panels.
+	AnalyzerStats func() any
+	// LogQuery, when non-nil, serves the chart-to-log drilldown over the
+	// analyzer session's parsed corpus. Nil => GET /api/analyzer/logs 503s.
+	LogQuery func(ctx context.Context, req LogQueryRequest) (LogQueryResponse, error)
+
+	// Settings, when non-nil, persists user dashboard preferences and
+	// enables GET/PUT /api/settings. Nil => /api/settings returns 503 and
+	// every dashboard is treated as enabled (legacy single-dashboard mode).
+	Settings *settings.Store
+
+	// Dashboards is the dashboard registry: every dashboard this server can
+	// show, driving the SPA's navigation. Nil/empty => legacy
+	// single-dashboard mode (payload omits the `dashboards` array and the
+	// frontend falls back to its hardcoded navigation).
+	Dashboards []DashboardDesc
+
+	// Incidents, when non-nil, returns the incidents-dashboard stats payload
+	// (GET /api/dashboards/incidents/stats). Nil => 503.
+	Incidents func() any
+
+	// IncidentAction, when non-nil, executes one incident lifecycle action
+	// (POST /api/dashboards/incidents/action). The closure is supplied by
+	// cmd/exalm so this package stays decoupled from plugins/incident.
+	// Nil => the action route responds 503.
+	IncidentAction func(ctx context.Context, req IncidentActionRequest) (any, error)
+
+	// Sessions, when non-nil, makes this server a multi-dashboard hub:
+	// analyzer sessions attach at runtime (POST /api/ingest/session) and the
+	// per-dashboard routes resolve against the registry. Nil => legacy
+	// single-dashboard mode.
+	Sessions *SessionRegistry
+	// IngestAuth is the per-run shared secret required in the X-Exalm-Ingest
+	// header. Empty disables the ingest endpoint entirely.
+	IngestAuth string
+	// ProfileLookup resolves an analyzer name to its investigation profile
+	// (closure over the plugin registry, supplied by cmd/exalm).
+	ProfileLookup func(analyzer string) (investigate.Profile, bool)
+	// BuildSessionHandlers constructs the per-session closures (chat, line
+	// analysis, log query) for an ingested session. Supplied by cmd/exalm,
+	// which owns the LLM client, redactor, and stores.
+	BuildSessionHandlers func(session *investigate.LogSession, profile investigate.Profile) (SessionHandlers, error)
+
+	// Metrics, when non-nil, supplies metric series for chart tooltips and
+	// drill-down. Nil => /api/metrics returns an empty series set.
+	Metrics metrics.Provider
+
 	// CollectedAt is the timestamp of the initial report collection.
 	// Used as the anchor point for the cross-signal correlation timeline.
 	CollectedAt time.Time
@@ -117,9 +208,12 @@ func RequireToken(h http.Handler, token string, publicPaths ...string) http.Hand
 }
 
 // requireToken is the dashboard-specific wrapper: /healthz and /metrics are
-// always public so Kubernetes probes and Prometheus scraping work without auth.
+// always public so Kubernetes probes and Prometheus scraping work without
+// auth, and /api/ingest/session carries its own stronger gate (loopback-only
+// + per-run shared secret from 0600 hub.json) so analyzer --open runs can
+// attach without knowing the dashboard token.
 func requireToken(h http.Handler, token string) http.Handler {
-	return RequireToken(h, token, "/healthz", "/metrics")
+	return RequireToken(h, token, "/healthz", "/metrics", "/api/ingest/session")
 }
 
 // requireCSRF returns an HTTP middleware that rejects mutating requests (POST,
@@ -173,6 +267,31 @@ func isLocalhostOrigin(origin string) bool {
 // client could pile up goroutines and exhaust the LLM API quota.
 const maxConcurrentFixes = 3
 
+// maxConcurrentChats is the analogous concurrency gate for POST /api/chat —
+// each turn also proxies an LLM request.
+const maxConcurrentChats = 3
+
+// ConverseRequest is the body of POST /api/chat.
+type ConverseRequest struct {
+	ConversationID string `json:"conversationId,omitempty"`
+	FindingID      string `json:"findingId,omitempty"`
+	Namespace      string `json:"namespace,omitempty"`
+	Message        string `json:"message"`
+}
+
+// LogAnalyzeRequest is the body of POST /api/logs/analyze — one log entry
+// plus whatever context the log viewer already holds.
+type LogAnalyzeRequest struct {
+	Namespace string `json:"namespace,omitempty"`
+	Pod       string `json:"pod,omitempty"`
+	Container string `json:"container,omitempty"`
+	Severity  string `json:"severity,omitempty"`
+	Source    string `json:"source,omitempty"`
+	Labels    string `json:"labels,omitempty"`
+	Message   string `json:"message"`
+	Context   string `json:"context,omitempty"`
+}
+
 // liveServer holds runtime state for a running dashboard.
 type liveServer struct {
 	mu              sync.RWMutex
@@ -181,11 +300,33 @@ type liveServer struct {
 	applyFix        func(ctx context.Context, action plugin.RemediationAction) error
 	createPR        func(ctx context.Context, report plugin.Report) (string, error)
 	refreshFindings func(ctx context.Context) ([]plugin.Finding, error)
+	podInfoFn       func() PodInfo
+	investigateFn   func(ctx context.Context, findingID string) (*plugin.Investigation, error)
+	logFetchFn      func(ctx context.Context, namespace, pod, container string, previous bool, tail int) (string, error)
+	converseFn      func(ctx context.Context, req ConverseRequest) (*plugin.Conversation, error)
+	getConvoFn      func(ctx context.Context, id string) (*plugin.Conversation, error)
+	logAnalyzeFn    func(ctx context.Context, req LogAnalyzeRequest) (string, error)
+	analyzer        string
+	analyzerStatsFn func() any
+	logQueryFn      func(ctx context.Context, req LogQueryRequest) (LogQueryResponse, error)
+	settings        *settings.Store
+	dashboards      []DashboardDesc
+	incidentsFn     func() any
+	incidentActFn   func(ctx context.Context, req IncidentActionRequest) (any, error)
+	sessions        *SessionRegistry
+	ingestAuth      string
+	profileLookupFn func(analyzer string) (investigate.Profile, bool)
+	buildHandlersFn func(session *investigate.LogSession, profile investigate.Profile) (SessionHandlers, error)
+	port            int
+	metrics         metrics.Provider
+	provider        string
 	autoRefresh     bool // true when a live refresh source (ReportUpdates or RefreshFindings) is wired
 	tmpl            *template.Template
 	startTime       time.Time
 	reportCount     int64         // accessed atomically
 	fixSem          chan struct{} // concurrency gate for /api/fix and /api/fix-all
+	investigateSem  chan struct{} // concurrency gate for /api/findings/{id}/investigate (LLM-backed)
+	chatSem         chan struct{} // concurrency gate for POST /api/chat (LLM-backed)
 }
 
 func (s *liveServer) getReport() plugin.Report {
@@ -245,10 +386,32 @@ func Serve(ctx context.Context, report plugin.Report, opts ServeOpts) error {
 		applyFix:        opts.ApplyFix,
 		createPR:        opts.CreatePR,
 		refreshFindings: opts.RefreshFindings,
+		podInfoFn:       opts.PodInfo,
+		investigateFn:   opts.Investigate,
+		logFetchFn:      opts.LogFetch,
+		converseFn:      opts.Converse,
+		getConvoFn:      opts.GetConversation,
+		logAnalyzeFn:    opts.AnalyzeLogLine,
+		analyzer:        opts.Analyzer,
+		analyzerStatsFn: opts.AnalyzerStats,
+		logQueryFn:      opts.LogQuery,
+		settings:        opts.Settings,
+		dashboards:      opts.Dashboards,
+		incidentsFn:     opts.Incidents,
+		incidentActFn:   opts.IncidentAction,
+		sessions:        opts.Sessions,
+		ingestAuth:      opts.IngestAuth,
+		profileLookupFn: opts.ProfileLookup,
+		buildHandlersFn: opts.BuildSessionHandlers,
+		port:            opts.Port,
+		metrics:         opts.Metrics,
+		provider:        opts.Provider,
 		autoRefresh:     opts.ReportUpdates != nil || opts.RefreshFindings != nil,
 		tmpl:            tmpl,
 		startTime:       time.Now(),
 		fixSem:          make(chan struct{}, maxConcurrentFixes),
+		investigateSem:  make(chan struct{}, maxConcurrentFixes),
+		chatSem:         make(chan struct{}, maxConcurrentChats),
 	}
 
 	mux := http.NewServeMux()
@@ -256,6 +419,23 @@ func Serve(ctx context.Context, report plugin.Report, opts ServeOpts) error {
 	mux.HandleFunc("/timeline", srv.handleTimeline)
 	mux.HandleFunc("/dora", srv.handleDORAPage)
 	mux.HandleFunc("/api/report", srv.handleReportJSON)
+	mux.HandleFunc("/api/dashboard", srv.handleDashboardJSON)
+	mux.HandleFunc("/api/findings/", srv.handleFinding)
+	mux.HandleFunc("/api/logs", srv.handleLogs)
+	mux.HandleFunc("/api/logs/analyze", srv.handleLogAnalyze)
+	mux.HandleFunc("/api/analyzer/stats", srv.handleAnalyzerStats)
+	mux.HandleFunc("/api/analyzer/logs", srv.handleAnalyzerLogs)
+	mux.HandleFunc("/api/settings", srv.handleSettings)
+	mux.HandleFunc("/api/dashboards", srv.handleDashboardsJSON)
+	mux.HandleFunc("GET /api/dashboards/{id}/stats", srv.handleDashStats)
+	mux.HandleFunc("GET /api/dashboards/{id}/logs", srv.handleDashLogs)
+	mux.HandleFunc("POST /api/dashboards/{id}/chat", srv.handleDashChat)
+	mux.HandleFunc("POST /api/dashboards/{id}/logs/analyze", srv.handleDashLogAnalyze)
+	mux.HandleFunc("POST /api/dashboards/incidents/action", srv.handleIncidentAction)
+	mux.HandleFunc("/api/ingest/session", srv.handleIngestSession)
+	mux.HandleFunc("/api/metrics", srv.handleMetricsJSON)
+	mux.HandleFunc("/api/chat", srv.handleChat)
+	mux.HandleFunc("/api/chat/", srv.handleGetConversation)
 	mux.HandleFunc("/api/fix", srv.handleFix)
 	mux.HandleFunc("/api/fix-all", srv.handleFixAll)
 	mux.HandleFunc("/api/create-pr", srv.handleCreatePR)
@@ -443,13 +623,398 @@ func buildTemplateData(r plugin.Report, hasApplyFix, hasCreatePR bool) templateD
 	}
 }
 
+// indexData is injected into the redesigned single-page dashboard template.
+// The findings/namespaces/etc. are delivered as an embedded JSON blob so the
+// page paints instantly without a fetch round-trip; the client then polls
+// /api/dashboard for live updates.
+type indexData struct {
+	Title         string
+	AutoRefresh   bool
+	HasApplyFix   bool
+	HasCreatePR   bool
+	DashboardJSON template.JS
+}
+
+// podInfo invokes the optional pod-inventory provider, returning nil when none
+// is wired (e.g. --from-file, non-k8s sources).
+func (s *liveServer) podInfo() *PodInfo {
+	if s.podInfoFn == nil {
+		return nil
+	}
+	pi := s.podInfoFn()
+	return &pi
+}
+
+// attachAnalyzer stamps the analyzer name + stats onto the payload (no-op
+// for the k8s dashboard, keeping its payload byte-compatible).
+func (s *liveServer) attachAnalyzer(p *dashboardPayload) {
+	p.Analyzer = s.analyzer
+	if s.analyzerStatsFn != nil {
+		p.Stats = s.analyzerStatsFn()
+	}
+	// Registry mode: embed the settings-filtered dashboard list + the global
+	// AI toggle. Legacy mode (no registry) omits both — byte-compatible.
+	if len(s.dashboards) > 0 {
+		p.Dashboards = s.enabledDashboards()
+		ai := s.currentSettings().SupportsAI
+		p.SupportsAI = &ai
+	}
+}
+
 func (s *liveServer) handleDashboard(w http.ResponseWriter, _ *http.Request) {
 	report := s.getReport()
-	data := buildTemplateData(report, s.applyFix != nil, s.createPR != nil)
-	data.AutoRefresh = s.autoRefresh
+	payload := buildDashboard(report, s.podInfo(), s.provider, s.autoRefresh)
+	s.attachAnalyzer(&payload)
+	blob, err := json.Marshal(payload)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	data := indexData{
+		Title:         report.Title,
+		AutoRefresh:   s.autoRefresh,
+		HasApplyFix:   s.applyFix != nil,
+		HasCreatePR:   s.createPR != nil,
+		DashboardJSON: template.JS(blob), //nolint:gosec // G203: payload is our own marshaled struct, not user HTML
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.tmpl.Execute(w, data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// handleDashboardJSON serves the dashboard data contract consumed by the
+// front-end on its refresh poll.
+func (s *liveServer) handleDashboardJSON(w http.ResponseWriter, _ *http.Request) {
+	report := s.getReport()
+	payload := buildDashboard(report, s.podInfo(), s.provider, s.autoRefresh)
+	s.attachAnalyzer(&payload)
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// handleFindingFix applies the remediation for a single finding referenced by
+// its stable id: POST /api/findings/{id}/fix. Shares the fix concurrency gate.
+// handleFinding dispatches the /api/findings/{id}[/fix|/investigate] routes by
+// suffix and method:
+//
+//	GET  /api/findings/{id}             → full finding detail (classification + evidence)
+//	POST /api/findings/{id}/fix         → apply the primary remediation
+//	POST /api/findings/{id}/investigate → run a deep root-cause investigation
+func (s *liveServer) handleFinding(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/findings/")
+	switch {
+	case strings.HasSuffix(rest, "/fix"):
+		s.doFix(w, r, strings.TrimSuffix(rest, "/fix"))
+	case strings.HasSuffix(rest, "/investigate"):
+		s.doInvestigate(w, r, strings.TrimSuffix(rest, "/investigate"))
+	default:
+		s.doFindingDetail(w, r, rest)
+	}
+}
+
+// findByID returns a pointer to the finding with the given id in the current
+// report, or nil.
+func (s *liveServer) findByID(id string) *plugin.Finding {
+	report := s.getReport()
+	for i := range report.Findings {
+		if report.Findings[i].ID() == id {
+			return &report.Findings[i]
+		}
+	}
+	return nil
+}
+
+// doFindingDetail serves the full finding (incl. evidence + classification).
+func (s *liveServer) doFindingDetail(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	f := s.findByID(id)
+	if f == nil {
+		http.Error(w, "finding not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(f) //nolint:errcheck
+}
+
+// doFix applies a single finding's primary remediation.
+func (s *liveServer) doFix(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.applyFix == nil {
+		http.Error(w, "fix not available", http.StatusServiceUnavailable)
+		return
+	}
+	if id == "" {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	select {
+	case s.fixSem <- struct{}{}:
+		defer func() { <-s.fixSem }()
+	default:
+		http.Error(w, "too many concurrent fix requests", http.StatusTooManyRequests)
+		return
+	}
+
+	f := s.findByID(id)
+	if f == nil || f.Remediation == nil {
+		http.Error(w, "finding not found or has no remediation", http.StatusNotFound)
+		return
+	}
+
+	if err := s.applyFix(r.Context(), *f.Remediation); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()}) //nolint:errcheck
+		return
+	}
+
+	// Re-collect so the next dashboard poll reflects the post-fix state.
+	s.refreshOnce(r.Context())
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "fixed"}) //nolint:errcheck
+}
+
+// doInvestigate runs a deep root-cause investigation for a finding. Gated by a
+// dedicated concurrency semaphore because it makes an LLM call.
+func (s *liveServer) doInvestigate(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.investigateFn == nil {
+		http.Error(w, "investigation not available", http.StatusServiceUnavailable)
+		return
+	}
+	if id == "" {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	extendWriteDeadline(w, llmHandlerTimeout)
+
+	select {
+	case s.investigateSem <- struct{}{}:
+		defer func() { <-s.investigateSem }()
+	default:
+		http.Error(w, "too many concurrent investigations", http.StatusTooManyRequests)
+		return
+	}
+
+	inv, err := s.investigateFn(r.Context(), id)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()}) //nolint:errcheck
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	// Normalize to the same camelCase shape the dashboard uses, so the front-end
+	// handles one fix/evidence shape everywhere.
+	json.NewEncoder(w).Encode(toInvestigationResp(inv)) //nolint:errcheck
+}
+
+// investigationResp is the front-end shape of an Investigation (camelCase,
+// dashFix/dashEvidence) matching the dashboard's contract.
+type investigationResp struct {
+	Summary        string                     `json:"summary"`
+	RootCause      string                     `json:"rootCause"`
+	Confidence     string                     `json:"confidence"`
+	Steps          []plugin.InvestigationStep `json:"steps"`
+	Evidence       []dashEvidence             `json:"evidence"`
+	TemporaryFixes []dashFix                  `json:"temporaryFixes"`
+	RootCauseFixes []dashFix                  `json:"rootCauseFixes"`
+}
+
+func toInvestigationResp(inv *plugin.Investigation) investigationResp {
+	if inv == nil {
+		return investigationResp{}
+	}
+	return investigationResp{
+		Summary:        inv.Summary,
+		RootCause:      inv.RootCause,
+		Confidence:     inv.Confidence,
+		Steps:          inv.Steps,
+		Evidence:       mapEvidence(inv.Evidence),
+		TemporaryFixes: mapFixes(inv.TemporaryFixes),
+		RootCauseFixes: mapFixes(inv.RootCauseFixes),
+	}
+}
+
+// handleChat runs one turn of a multi-turn investigation conversation (the AI
+// Analysis page). Gated by chatSem because, like investigate, it proxies an
+// LLM request.
+func (s *liveServer) handleChat(w http.ResponseWriter, r *http.Request) {
+	s.serveChat(w, r, s.converseFn)
+}
+
+// llmHandlerTimeout is how long an LLM-bound handler may take to respond,
+// replacing the server-wide 30s WriteTimeout for just those routes. Local
+// Ollama models on modest hardware (especially reasoning models) routinely
+// need minutes per turn; 30s silently killed the connection mid-inference
+// and the browser saw an empty reply.
+const llmHandlerTimeout = 10 * time.Minute
+
+// extendWriteDeadline pushes this response's write deadline past the global
+// srv.WriteTimeout (Slowloris protection, which stays in place for every
+// other route). Only the WRITE side is extended: chat/analysis bodies are
+// capped at 16-64KB, so the global 10s ReadTimeout already covers them, and
+// extending reads would let a slow client hold an LLM route's connection for
+// minutes before the concurrency semaphore even sees it. Best-effort:
+// httptest recorders and exotic writers don't support deadlines, and a
+// handler must not fail because of that.
+func extendWriteDeadline(w http.ResponseWriter, d time.Duration) {
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(d))
+}
+
+// serveChat runs one conversation turn through the given converse closure —
+// shared by the legacy /api/chat route and the per-dashboard scoped routes.
+func (s *liveServer) serveChat(w http.ResponseWriter, r *http.Request, converse func(ctx context.Context, req ConverseRequest) (*plugin.Conversation, error)) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if converse == nil {
+		http.Error(w, "chat not available", http.StatusServiceUnavailable)
+		return
+	}
+	extendWriteDeadline(w, llmHandlerTimeout)
+
+	var req ConverseRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 16*1024) // a chat message is small
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Message) == "" {
+		http.Error(w, "message is required", http.StatusBadRequest)
+		return
+	}
+
+	select {
+	case s.chatSem <- struct{}{}:
+		defer func() { <-s.chatSem }()
+	default:
+		http.Error(w, "too many concurrent chat requests", http.StatusTooManyRequests)
+		return
+	}
+
+	conv, err := converse(r.Context(), req)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()}) //nolint:errcheck
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(mapConversation(conv)) //nolint:errcheck
+}
+
+// handleLogAnalyze runs a one-shot AI analysis of a single log entry:
+// POST /api/logs/analyze. Shares the chat concurrency gate — it proxies an
+// LLM request of the same class.
+func (s *liveServer) handleLogAnalyze(w http.ResponseWriter, r *http.Request) {
+	s.serveLogAnalyze(w, r, s.logAnalyzeFn)
+}
+
+// serveLogAnalyze runs the one-shot line analysis through the given closure —
+// shared by the legacy route and the per-dashboard scoped routes.
+func (s *liveServer) serveLogAnalyze(w http.ResponseWriter, r *http.Request, analyze func(ctx context.Context, req LogAnalyzeRequest) (string, error)) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if analyze == nil {
+		http.Error(w, "log analysis not available", http.StatusServiceUnavailable)
+		return
+	}
+	extendWriteDeadline(w, llmHandlerTimeout)
+	var req LogAnalyzeRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024) // one line + bounded context
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Message) == "" {
+		http.Error(w, "message is required", http.StatusBadRequest)
+		return
+	}
+	select {
+	case s.chatSem <- struct{}{}:
+		defer func() { <-s.chatSem }()
+	default:
+		http.Error(w, "too many concurrent analysis requests", http.StatusTooManyRequests)
+		return
+	}
+	analysis, err := analyze(r.Context(), req)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()}) //nolint:errcheck
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"analysis": analysis}) //nolint:errcheck
+}
+
+// handleGetConversation loads a previously persisted conversation by id
+// (GET /api/chat/{id}) or exports it as a downloadable report
+// (GET /api/chat/{id}/export?format=md|json).
+func (s *liveServer) handleGetConversation(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.getConvoFn == nil {
+		http.Error(w, "chat not available", http.StatusServiceUnavailable)
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/chat/")
+	export := false
+	if rest, ok := strings.CutSuffix(id, "/export"); ok {
+		id, export = rest, true
+	}
+	if id == "" || strings.Contains(id, "/") {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	conv, err := s.getConvoFn(r.Context(), id)
+	if err != nil {
+		http.Error(w, "conversation not found", http.StatusNotFound)
+		return
+	}
+
+	if !export {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(mapConversation(conv)) //nolint:errcheck
+		return
+	}
+	switch format := r.URL.Query().Get("format"); format {
+	case "", "md":
+		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+		w.Header().Set("Content-Disposition", `attachment; filename="investigation-`+id+`.md"`)
+		fmt.Fprint(w, report.Markdown(conv)) //nolint:errcheck
+	case "json":
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Disposition", `attachment; filename="investigation-`+id+`.json"`)
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		enc.Encode(mapConversation(conv)) //nolint:errcheck
+	case "html":
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Content-Disposition", `attachment; filename="investigation-`+id+`.html"`)
+		fmt.Fprint(w, report.HTML(conv, s.analyzer)) //nolint:errcheck
+	default:
+		http.Error(w, "unsupported format (use md, json, or html)", http.StatusBadRequest)
 	}
 }
 
@@ -460,8 +1025,77 @@ func (s *liveServer) handleReportJSON(w http.ResponseWriter, _ *http.Request) {
 	w.Write(payload) //nolint:errcheck
 }
 
+// handleLogs serves a container's log tail for the log viewer:
+//
+//	GET /api/logs?ns=<ns>&pod=<pod>&container=<c>&previous=<bool>&tail=<n>
+//
+// Read-only; uses the injected LogFetch closure (the already-connected client).
+func (s *liveServer) handleLogs(w http.ResponseWriter, r *http.Request) {
+	if s.logFetchFn == nil {
+		http.Error(w, "log access not available", http.StatusServiceUnavailable)
+		return
+	}
+	q := r.URL.Query()
+	ns, pod, container := q.Get("ns"), q.Get("pod"), q.Get("container")
+	if pod == "" {
+		http.Error(w, "pod is required", http.StatusBadRequest)
+		return
+	}
+	previous := q.Get("previous") == "true"
+	tail := 500
+	if v := q.Get("tail"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 5000 {
+			tail = n
+		}
+	}
+	out, err := s.logFetchFn(r.Context(), ns, pod, container, previous, tail)
+	w.Header().Set("Content-Type", "application/json")
+	resp := map[string]any{"namespace": ns, "pod": pod, "container": container, "previous": previous, "lines": out}
+	if err != nil {
+		resp["error"] = err.Error()
+	}
+	json.NewEncoder(w).Encode(resp) //nolint:errcheck
+}
+
+// handleMetricsJSON serves metric series for chart tooltips/drill-down:
+//
+//	GET /api/metrics?ns=<ns|all>&name=<resource>&window=<1h|24h|7d>
+//
+// Distinct from /metrics (Prometheus text). Returns [] when no provider wired.
+func (s *liveServer) handleMetricsJSON(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if s.metrics == nil {
+		w.Write([]byte("[]")) //nolint:errcheck
+		return
+	}
+	q := r.URL.Query()
+	ns := q.Get("ns")
+	window := parseSinceDuration(q.Get("window"), 24*time.Hour)
+	// Magnitude hint: number of findings in scope, so the derived series scales
+	// with the current problem load.
+	report := s.getReport()
+	mag := 0
+	for _, f := range report.Findings {
+		if ns == "" || ns == "all" || strings.Contains(f.Title, ns) {
+			mag++
+		}
+	}
+	series, err := s.metrics.Series(r.Context(), metrics.Query{
+		Namespace: ns, Name: q.Get("name"), Window: window, Now: time.Now(), Magnitude: mag,
+	})
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()}) //nolint:errcheck
+		return
+	}
+	if series == nil {
+		series = []metrics.Series{}
+	}
+	json.NewEncoder(w).Encode(series) //nolint:errcheck
+}
+
 // handleChangesJSON returns recent cluster change events for the
-// Komodor-style change timeline. Reads directly from the default changestore;
+// change timeline. Reads directly from the default changestore;
 // if the store is missing or empty, returns []. Bounded to ~500 events for
 // payload sanity.
 //
@@ -488,24 +1122,6 @@ func (s *liveServer) handleChangesJSON(w http.ResponseWriter, r *http.Request) {
 	w.Write(payload) //nolint:errcheck
 }
 
-// ── Timeline types ────────────────────────────────────────────────────────────
-
-// TimelineEvent is a single coloured event on the cross-signal SVG timeline.
-type TimelineEvent struct {
-	At       string `json:"at"` // ISO8601
-	Label    string `json:"label"`
-	Severity string `json:"severity"` // "critical","high","medium","low","info","iac"
-	Source   string `json:"source"`   // "finding","iac","incident"
-	Detail   string `json:"detail"`
-}
-
-// TimelineData is the JSON payload served by /api/timeline.
-type TimelineData struct {
-	StartISO string          `json:"start"` // earliest event ISO8601
-	EndISO   string          `json:"end"`   // now ISO8601
-	Events   []TimelineEvent `json:"events"`
-}
-
 // handleTimeline renders the timeline.html template.
 func (s *liveServer) handleTimeline(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -519,103 +1135,23 @@ func (s *liveServer) handleTimeline(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
-// handleTimelineJSON builds and serves the TimelineData JSON payload.
-func (s *liveServer) handleTimelineJSON(w http.ResponseWriter, _ *http.Request) {
+// handleTimelineJSON builds and serves the timeline.Data JSON payload.
+// The 4-source merge (current findings, snapshot history, incidents, IaC
+// changes) lives in internal/timeline — this handler just gathers the two
+// pieces of server state the aggregator doesn't own (the current report and
+// the in-memory snapshot history) and encodes the result.
+func (s *liveServer) handleTimelineJSON(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	now := time.Now().UTC()
-	start := now.Add(-7 * 24 * time.Hour)
-
-	var events []TimelineEvent
-
-	// ── 1. Findings from the current report ──────────────────────────────────
-	report := s.getReport()
-	for _, f := range report.Findings {
-		sev := string(f.Severity)
-		if f.Category == "IaC" || f.Source == "iac" {
-			sev = "iac"
-		}
-		ev := TimelineEvent{
-			At:       now.Format(time.RFC3339),
-			Label:    f.Title,
-			Severity: sev,
-			Source:   "finding",
-			Detail:   f.Detail,
-		}
-		events = append(events, ev)
-	}
-
-	// ── 2. Findings from snapshot history ────────────────────────────────────
 	s.mu.RLock()
-	snapshots := s.snapshotHistory
+	history := s.snapshotHistory
 	s.mu.RUnlock()
-	for _, snap := range snapshots {
-		ts := snap.CollectedAt
-		if ts.Before(start) {
-			start = ts
-		}
-		for _, f := range snap.Report.Findings {
-			sev := string(f.Severity)
-			if f.Category == "IaC" || f.Source == "iac" {
-				sev = "iac"
-			}
-			ev := TimelineEvent{
-				At:       ts.Format(time.RFC3339),
-				Label:    f.Title,
-				Severity: sev,
-				Source:   "finding",
-				Detail:   f.Detail,
-			}
-			events = append(events, ev)
-		}
+	snapshots := make([]timeline.Snapshot, len(history))
+	for i, snap := range history {
+		snapshots[i] = timeline.Snapshot{CollectedAt: snap.CollectedAt, Report: snap.Report}
 	}
 
-	// ── 3. Incidents from the incident store ─────────────────────────────────
-	store := incidentpkg.NewFileStore()
-	incidents, err := store.QueryByDateRange(context.Background(), start, now)
-	if err == nil {
-		for _, inc := range incidents {
-			sev := string(inc.Severity)
-			if sev == "" {
-				sev = "info"
-			}
-			label := fmt.Sprintf("[%s] %s", inc.ID, inc.Title)
-			detail := fmt.Sprintf("Status: %s | Opened: %s", inc.Status, inc.OpenedAt.Format(time.RFC3339))
-			events = append(events, TimelineEvent{
-				At:       inc.OpenedAt.Format(time.RFC3339),
-				Label:    label,
-				Severity: sev,
-				Source:   "incident",
-				Detail:   detail,
-			})
-		}
-	}
-
-	// ── 4. IaC changes from the changestore ──────────────────────────────────
-	cs, err := changestore.Open("")
-	if err == nil {
-		changes, err := cs.All(start)
-		if err == nil {
-			for _, c := range changes {
-				events = append(events, TimelineEvent{
-					At:       c.Timestamp.Format(time.RFC3339),
-					Label:    fmt.Sprintf("%s %s/%s", c.Kind, c.Namespace, c.Name),
-					Severity: "iac",
-					Source:   "iac",
-					Detail:   fmt.Sprintf("Action: %s | Actor: %s", c.Action, c.Actor),
-				})
-			}
-		}
-	}
-
-	data := TimelineData{
-		StartISO: start.Format(time.RFC3339),
-		EndISO:   now.Format(time.RFC3339),
-		Events:   events,
-	}
-	if data.Events == nil {
-		data.Events = []TimelineEvent{}
-	}
+	data := timeline.Aggregate(r.Context(), s.getReport(), snapshots, time.Now().UTC())
 	payload, _ := json.Marshal(data)
 	w.Write(payload) //nolint:errcheck
 }
@@ -820,15 +1356,10 @@ func remediationJSON(r *plugin.RemediationAction) template.HTMLAttr {
 	return template.HTMLAttr(strings.ReplaceAll(string(b), "'", "&#39;"))
 }
 
-// fixAllResult is one entry in the /api/fix-all response array.
-type fixAllResult struct {
-	Title string `json:"title"`
-	OK    bool   `json:"ok"`
-	Error string `json:"error,omitempty"`
-}
-
 // handleFixAll applies all remediable findings from the current report.
-// Safe order: rollout-restart → resume-cronjob → delete-pod.
+// Safe order: rollout-restart → resume-cronjob → delete-pod. Ordering,
+// batching, and per-item result collection live in internal/remediation —
+// this handler is decode-gate → call → encode.
 // Shares the same fixSem semaphore as handleFix — fix-all counts as one slot.
 func (s *liveServer) handleFixAll(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -848,42 +1379,8 @@ func (s *liveServer) handleFixAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	report := s.getReport()
-	kindOrder := map[string]int{"rollout-restart": 0, "resume-cronjob": 1, "delete-pod": 2}
-	order := func(k string) int {
-		if v, ok := kindOrder[k]; ok {
-			return v
-		}
-		return 99
-	}
-
-	type fixable struct {
-		title  string
-		action plugin.RemediationAction
-	}
-	var items []fixable
-	for _, f := range report.Findings {
-		if f.Remediation != nil {
-			items = append(items, fixable{title: f.Title, action: *f.Remediation})
-		}
-	}
-	// Sort by kind order (restarts before deletes).
-	for i := 1; i < len(items); i++ {
-		for j := i; j > 0 && order(items[j].action.Kind) < order(items[j-1].action.Kind); j-- {
-			items[j], items[j-1] = items[j-1], items[j]
-		}
-	}
-
-	results := make([]fixAllResult, 0, len(items))
-	for _, item := range items {
-		res := fixAllResult{Title: item.title}
-		if err := s.applyFix(r.Context(), item.action); err != nil {
-			res.Error = err.Error()
-		} else {
-			res.OK = true
-		}
-		results = append(results, res)
-	}
+	items := remediation.OrderForBatch(remediation.FixableFromReport(s.getReport()))
+	results := remediation.ApplyAll(r.Context(), items, s.applyFix)
 
 	// Re-collect once after applying the batch so the dashboard reflects the
 	// new cluster state on the next poll. Best-effort.
@@ -897,7 +1394,13 @@ func (s *liveServer) handleFixAll(w http.ResponseWriter, r *http.Request) {
 func (s *liveServer) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	uptime := int64(time.Since(s.startTime).Seconds()) //nolint:gosec // G115: uptime in seconds; truncation is intentional
 	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprintf(w, `{"status":"ok","uptime_seconds":%d}`, uptime) //nolint:errcheck // health response; client disconnect is harmless
+	// "hub":true tells analyzer --open runs this server accepts session
+	// ingest, distinguishing an Exalm hub from any other listener on 7433.
+	hub := ""
+	if s.sessions != nil && s.ingestAuth != "" {
+		hub = `,"hub":true`
+	}
+	fmt.Fprintf(w, `{"status":"ok","uptime_seconds":%d%s}`, uptime, hub) //nolint:errcheck // health response; client disconnect is harmless
 }
 
 // handleMetrics returns Prometheus text format metrics.
@@ -923,6 +1426,10 @@ func (s *liveServer) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprintf(w, "# TYPE go_goroutines gauge\n")                                                      //nolint:errcheck
 	fmt.Fprintf(w, "go_goroutines %d\n", goroutines)                                                    //nolint:errcheck
 }
+
+// OpenBrowser attempts to open url in the system browser. Best-effort only.
+// Exported for the hub attach flow in cmd/exalm.
+func OpenBrowser(url string) { openBrowser(url) }
 
 // openBrowser attempts to open url in the system browser. Best-effort only.
 func openBrowser(url string) {
