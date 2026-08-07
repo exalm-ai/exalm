@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300" role="img" aria-label="exalm — privacy-first AI ops: cluster and logs, redacted, analyzed by your LLM, into findings and fixes">
+  <title>exalm — privacy-first AI ops</title>
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7b5bff"/>
+      <stop offset="1" stop-color="#14b8a6"/>
+    </linearGradient>
+    <style>
+      .node { fill: #111c31; stroke: #27384f; stroke-width: 1.5; }
+      .lbl  { fill: #e8eef6; font-family: 'Segoe UI','Helvetica Neue',Arial,sans-serif; font-weight: 600; }
+      .sub  { fill: #8294aa; font-family: 'Segoe UI','Helvetica Neue',Arial,sans-serif; font-weight: 500; }
+      .flow { stroke: #3a4a68; stroke-width: 2; fill: none; }
+    </style>
+  </defs>
+
+  <!-- banner backdrop: keeps text on dark so it reads on both GitHub themes -->
+  <rect x="0" y="0" width="1200" height="300" rx="20" fill="#0a0e1a"/>
+
+  <!-- wordmark + tagline -->
+  <text x="48" y="70" font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif" font-size="52" font-weight="700" letter-spacing="-1.5" fill="url(#g)">exalm</text>
+  <text x="50" y="102" class="sub" font-size="17">Privacy-first AI ops — your logs, your LLM, your machine.</text>
+
+  <!-- pipeline -->
+  <g transform="translate(48,150)">
+    <!-- node 1: sources -->
+    <rect class="node" x="0" y="0" width="210" height="96" rx="14"/>
+    <text class="lbl" x="105" y="42" font-size="17" text-anchor="middle">Kubernetes + Logs</text>
+    <text class="sub" x="105" y="66" font-size="13" text-anchor="middle">syslog · nginx · IIS · events</text>
+
+    <!-- arrow -->
+    <path class="flow" d="M218 48 h44" marker-end="url(#arrow)"/>
+
+    <!-- node 2: redact -->
+    <rect class="node" x="270" y="0" width="200" height="96" rx="14" stroke="url(#g)" stroke-width="2"/>
+    <text class="lbl" x="370" y="42" font-size="17" text-anchor="middle">🔒 Redact</text>
+    <text class="sub" x="370" y="66" font-size="13" text-anchor="middle">secrets stripped locally</text>
+
+    <path class="flow" d="M478 48 h44" marker-end="url(#arrow)"/>
+
+    <!-- node 3: LLM -->
+    <rect class="node" x="530" y="0" width="200" height="96" rx="14"/>
+    <text class="lbl" x="630" y="42" font-size="17" text-anchor="middle">Your LLM</text>
+    <text class="sub" x="630" y="66" font-size="13" text-anchor="middle">Claude · GPT · local Ollama</text>
+
+    <path class="flow" d="M738 48 h44" marker-end="url(#arrow)"/>
+
+    <!-- node 4: findings -->
+    <rect class="node" x="790" y="0" width="262" height="96" rx="14"/>
+    <text class="lbl" x="921" y="42" font-size="17" text-anchor="middle">Findings + Fixes</text>
+    <text class="sub" x="921" y="66" font-size="13" text-anchor="middle">evidence · root cause · remediation</text>
+  </g>
+
+  <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0 0 L10 5 L0 10 z" fill="#3a4a68"/>
+  </marker>
+</svg>

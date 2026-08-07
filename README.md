@@ -24,16 +24,42 @@ It reads Kubernetes cluster state, Linux and Windows logs, AWS cost anomalies, T
 
 **Single static binary. No agents. No cloud account required.**
 
+<div align="center">
+
+<img src="docs/assets/hero.svg" alt="exalm pipeline: Kubernetes and logs, redacted locally, analyzed by your LLM, into findings and fixes" width="820" />
+
+</div>
+
 ---
 
-## Screenshots
+## See it in action
 
-> _Terminal recordings and dashboard screenshots are coming with the v0.1.0-beta release._
-> _[Star the repo](https://github.com/exalm-ai/exalm) to be notified._
+Exalm runs as a CLI or opens a local web dashboard (`--output web`) with a
+findings panel, a log explorer, timelines, and a conversational AI
+investigation workspace.
 
-<!-- TODO: add terminal recording GIF of `exalm k8s analyze` output -->
-<!-- TODO: add screenshot of DORA web dashboard at /dora -->
-<!-- TODO: add screenshot of cross-signal timeline at /timeline -->
+<!--
+  The demo GIF and dashboard screenshots are generated reproducibly from the
+  real tool (no mockups) — see docs/screenshots.md. After running the commands
+  there, uncomment the two lines below and commit the generated assets:
+
+  ![exalm CLI demo](docs/assets/demo.gif)
+  ![exalm dashboard](docs/assets/dashboard.png)
+-->
+
+**Generate the visuals** (deterministic, no API key — uses the mock provider):
+
+```bash
+# Terminal GIF of `exalm syslog analyze` (Charm vhs)
+vhs docs/assets/demo.tape                       # → docs/assets/demo.gif
+
+# Dashboard PNG (shot-scraper / Playwright)
+EXALM_LLM_PROVIDER=mock exalm syslog analyze --file examples/syslog/wsl-live-session.jsonl --output web &
+shot-scraper http://localhost:7433 -o docs/assets/dashboard.png --width 1360 --wait 1500 --retina
+```
+
+Full guide, alternatives (asciinema, silicon), and the recommended shot list:
+[docs/screenshots.md](docs/screenshots.md).
 
 ---
 
