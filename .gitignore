@@ -37,6 +37,11 @@ needed installation.txt
 COMPETITIVE_GAPS.md
 ROADMAP.md
 docs/LAUNCH_CONTENT.md
+docs/platform-review.md
+HANDOFF.md
+
+# Local test/run artifacts
+report.json
 
 # Local design handoff materials (not part of the codebase)
 /Log analyzer dashboard redesign/
