@@ -294,7 +294,14 @@ func firstSentence(s string) string {
 
 // rootOf builds the root-cause line, enriching with change-correlation when set.
 func rootOf(f plugin.Finding) string {
-	root := strings.TrimSpace(f.Detail)
+	// Prefer the explicit root cause (set by classify.go for k8s and by the
+	// analyzer findings promoter) so the dashboard's "Likely cause" line shows
+	// the underlying cause, not a repeat of the observed detail. Fall back to
+	// Detail only when no root cause was derived.
+	root := strings.TrimSpace(f.RootCause)
+	if root == "" {
+		root = strings.TrimSpace(f.Detail)
+	}
 	if f.LikelyCause != nil {
 		lc := f.LikelyCause
 		ago := humanizeAgo(lc.AgoSeconds)

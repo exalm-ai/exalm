@@ -22,7 +22,7 @@
 
   var THEMES = {
     dark: {
-      '--bg': '#070b14', '--panel': '#0e1626', '--panel2': '#131f33', '--border': '#1f2c44',
+      '--bg': '#070b14', '--panel': '#111c31', '--panel2': '#18263e', '--border': '#27384f',
       '--sidebar': '#0a1120', '--track': '#17243a', '--code': '#070c15', '--codeFg': '#9fb6cf', '--scroll': '#243348',
       '--fg': '#e8eef6', '--body': '#c2cfde', '--muted': '#8294aa', '--faint': '#5b6c83',
       '--accent': '#22b8e6', '--accentGlow': 'rgba(34,184,230,.45)', '--accentSoft': 'rgba(34,184,230,.14)',
