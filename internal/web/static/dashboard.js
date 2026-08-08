@@ -414,8 +414,14 @@
     }).join('');
     return html;
   }
+  // analyzerNiceName maps an analyzer id to a human label for the brand /
+  // header, so a syslog dashboard doesn't say "K8s Analyzer".
+  function analyzerNiceName(a) {
+    return { syslog: 'Syslog', httplog: 'HTTP', eventlog: 'Windows Events', iis: 'IIS', logs: 'Logs', cloudtrail: 'CloudTrail' }[a] ||
+      (a ? a.charAt(0).toUpperCase() + a.slice(1) : '');
+  }
   function sidebar() {
-    var subtitle = dashList() ? 'Observability' : 'K8s Analyzer';
+    var subtitle = dashList() ? 'Observability' : (data.analyzer ? analyzerNiceName(data.analyzer) + ' Analyzer' : 'K8s Analyzer');
     return '<aside class="ex-sidebar" style="width:230px;flex:none;background:var(--sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow-y:auto;">' +
       '<div style="display:flex;align-items:center;gap:10px;padding:18px 16px 16px;">' +
       '<div style="width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,var(--accent),#7b5bff);display:flex;align-items:center;justify-content:center;box-shadow:0 0 16px var(--accentGlow);"><div style="width:11px;height:11px;border-radius:3px;background:#fff;"></div></div>' +
@@ -452,7 +458,7 @@
   // ── Top bar (page title + shared controls) ──
   function topbar(v) {
     var meta = {
-      dashboard: ['Dashboard', 'Cluster health and findings overview'],
+      dashboard: ['Dashboard', data.analyzer ? 'Findings and signals overview' : 'Cluster health and findings overview'],
       explorer: ['Log Explorer', 'Search and filter all findings'],
       ai: ['AI Analysis', 'LLM-powered root-cause analysis'],
       alerts: ['Alerts', 'Critical and high-severity findings'],
@@ -572,19 +578,19 @@
     });
     var cards = sorted.map(function (f) {
       var m = sevMeta(f.sev);
-      var chip = '<span style="font-size:9px;font-weight:700;letter-spacing:.5px;padding:2px 7px;border-radius:5px;color:' + m.c + ';background:' + m.soft + ';border:1px solid ' + m.line + ';white-space:nowrap;">' + m.label + '</span>';
-      var conf = f.confidence ? '<span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:' + confColor(f.confidence) + ';">' + esc(f.confidence) + ' confidence</span>' : '';
-      var fixTag = f.fix ? '<span style="font-size:9px;font-weight:700;letter-spacing:.4px;color:var(--accent);">FIX AVAILABLE</span>' : '';
+      var chip = '<span class="ex-chip" style="color:' + m.c + ';background:' + m.soft + ';border:1px solid ' + m.line + ';">' + m.label + '</span>';
+      var conf = f.confidence ? '<span class="ex-tag" style="color:' + confColor(f.confidence) + ';">' + esc(f.confidence) + ' confidence</span>' : '';
+      var fixTag = f.fix ? '<span class="ex-tag" style="color:var(--accent);">FIX AVAILABLE</span>' : '';
       var body = '';
-      if (f.reason) body += '<div style="font-size:12px;color:var(--muted);margin-top:5px;">' + esc(f.reason) + '</div>';
-      if (f.root) body += '<div style="font-size:11.5px;color:var(--faint);margin-top:3px;"><b style="color:var(--muted);">Likely cause:</b> ' + esc(f.root) + '</div>';
-      if (f.suggestion) body += '<div style="font-size:11.5px;color:var(--good);margin-top:4px;">💡 ' + esc(f.suggestion) + '</div>';
-      return '<div data-act="remediate" data-id="' + esc(f.id) + '" class="ex-row" title="Open remediation details" style="background:var(--panel);border:1px solid var(--border);border-left:3px solid ' + m.c + ';border-radius:12px;padding:14px 16px;margin-bottom:10px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,.18);">' +
+      if (f.reason) body += '<div class="ex-find-meta" style="color:var(--muted);">' + esc(f.reason) + '</div>';
+      if (f.root) body += '<div class="ex-find-meta" style="color:var(--faint);"><b style="color:var(--muted);">Likely cause:</b> ' + esc(f.root) + '</div>';
+      if (f.suggestion) body += '<div class="ex-find-meta" style="color:var(--good);">💡 ' + esc(f.suggestion) + '</div>';
+      return '<div data-act="remediate" data-id="' + esc(f.id) + '" class="ex-row ex-card" title="Open remediation details" style="border-left:3px solid ' + m.c + ';margin-bottom:10px;cursor:pointer;">' +
         '<div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;">' + chip + conf + fixTag + '</div>' +
-        '<div style="font-size:13px;font-weight:600;color:var(--fg);margin-top:6px;">' + esc(f.title) + '</div>' + body + '</div>';
+        '<div class="ex-find-title">' + esc(f.title) + '</div>' + body + '</div>';
     }).join('');
     return '<details open style="margin-bottom:14px;">' +
-      '<summary style="cursor:pointer;font-size:10.5px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--faint);padding:4px 0;">Findings (' + fs.length + ')</summary>' +
+      '<summary class="ex-sec-label" style="cursor:pointer;padding:4px 0;">Findings (' + fs.length + ')</summary>' +
       '<div style="margin-top:8px;">' + cards + '</div></details>';
   }
 

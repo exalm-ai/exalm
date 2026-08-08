@@ -40,6 +40,16 @@
     /* Row / card hover (findings, Log Explorer rows, alert cards): a subtle
        lift + brighter border reads as interactive without being noisy. */
     .ex-row:hover { border-color: var(--accentSoft, #2a3a55) !important; box-shadow: 0 6px 22px rgba(0,0,0,.28) !important; transform: translateY(-1px); }
+    /* ── Reusable component classes ──
+       A small utility layer replacing the most-repeated inline-style patterns,
+       so the look is tuned in one place. Per-instance colors (severity, etc.)
+       still ride on inline CSS custom properties. */
+    .ex-sec-label { font-size: 10.5px; font-weight: 700; letter-spacing: .7px; text-transform: uppercase; color: var(--faint); }
+    .ex-card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; box-shadow: 0 1px 2px rgba(0,0,0,.18); }
+    .ex-chip { font-size: 9px; font-weight: 700; letter-spacing: .5px; padding: 2px 8px; border-radius: 5px; white-space: nowrap; text-transform: uppercase; line-height: 1.5; }
+    .ex-tag { font-size: 9px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase; }
+    .ex-find-title { font-size: 13px; font-weight: 600; color: var(--fg); margin-top: 7px; line-height: 1.35; }
+    .ex-find-meta { font-size: 11.5px; margin-top: 4px; line-height: 1.5; }
     /* Sidebar nav hover. */
     .ex-sidebar nav button:hover { color: var(--fg) !important; }
     /* Responsive: collapse the multi-column page grids. */
