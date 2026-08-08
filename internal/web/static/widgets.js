@@ -53,7 +53,7 @@
     }).join('');
     var first = buckets[0].t, last = buckets[buckets.length - 1].t;
     return '<div style="display:flex;align-items:flex-end;gap:2px;height:68px;">' + bars + '</div>' +
-      '<div style="display:flex;justify-content:space-between;font-family:\'IBM Plex Mono\',monospace;font-size:10px;color:var(--faint);margin-top:4px;"><span>' + esc(first) + '</span><span>' + esc(last) + '</span></div>';
+      '<div style="display:flex;justify-content:space-between;font-family:var(--font-mono),monospace;font-size:10px;color:var(--faint);margin-top:4px;"><span>' + esc(first) + '</span><span>' + esc(last) + '</span></div>';
   }
 
   // barList: horizontal top-N; click drills into that name.
@@ -141,7 +141,7 @@
     var rows = v.NS.slice().sort(function (a, b) { return b.findings - a.findings; }).slice(0, 9).map(function (n) {
       var active = state.selectedNs === n.key;
       return '<button data-act="ns-select" data-ns="' + esc(n.key) + '" style="display:flex;align-items:center;gap:10px;width:100%;border:none;background:transparent;cursor:pointer;padding:3px 0;">' +
-        '<span style="width:120px;text-align:right;font-family:\'IBM Plex Mono\',monospace;font-size:11px;color:' + (active ? 'var(--accent)' : 'var(--muted)') + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(n.key) + '</span>' +
+        '<span style="width:120px;text-align:right;font-family:var(--font-mono),monospace;font-size:11px;color:' + (active ? 'var(--accent)' : 'var(--muted)') + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(n.key) + '</span>' +
         '<span style="flex:1;height:14px;background:var(--track);border-radius:4px;overflow:hidden;"><span style="display:block;height:100%;width:' + Math.max(4, (n.findings / max) * 100) + '%;background:' + n.color + ';border-radius:4px;transition:width .3s;"></span></span>' +
         '<span style="width:26px;text-align:left;font-size:11px;font-weight:600;color:var(--fg);">' + n.findings + '</span></button>';
     }).join('');
@@ -166,7 +166,7 @@
       '<div style="display:flex;gap:6px;">' + toggle + '</div></div>' +
       '<div style="display:flex;gap:14px;margin-bottom:8px;">' + legend + '</div>' +
       '<div style="display:flex;align-items:flex-end;gap:3px;height:150px;">' + bars + '</div>' +
-      '<div style="display:flex;justify-content:space-between;margin-top:7px;font-family:\'IBM Plex Mono\',monospace;font-size:10px;color:var(--faint);"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>now</span></div>');
+      '<div style="display:flex;justify-content:space-between;margin-top:7px;font-family:var(--font-mono),monospace;font-size:10px;color:var(--faint);"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>now</span></div>');
   }
 
   // ── Hover tooltips for .ex-chart-bar elements (moved from charts.js) ──
@@ -181,7 +181,7 @@
       'position:fixed;z-index:90;pointer-events:none;display:none;max-width:280px;' +
       'background:var(--panel,#11161f);color:var(--fg,#e6edf3);border:1px solid var(--border,#222b3a);' +
       'border-radius:9px;box-shadow:0 10px 28px rgba(0,0,0,.45);padding:8px 11px;font-size:11.5px;line-height:1.5;' +
-      "font-family:'IBM Plex Sans',system-ui,sans-serif;";
+      "font-family:var(--font-sans),system-ui,sans-serif;";
     document.body.appendChild(tip);
     return tip;
   }
@@ -238,7 +238,7 @@
     menu.style.cssText =
       'position:fixed;z-index:95;min-width:190px;background:var(--panel,#11161f);color:var(--fg,#e6edf3);' +
       'border:1px solid var(--border,#222b3a);border-radius:10px;box-shadow:0 12px 34px rgba(0,0,0,.45);' +
-      "padding:4px;font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:12.5px;";
+      "padding:4px;font-family:var(--font-sans),system-ui,sans-serif;font-size:12.5px;";
     var itemStyle = 'display:block;width:100%;text-align:left;border:none;background:transparent;color:var(--fg);cursor:pointer;font-family:inherit;font-size:12.5px;padding:8px 11px;border-radius:7px;';
     var supportsAI = !(window.__DASH__ && window.__DASH__.supportsAI === false);
 

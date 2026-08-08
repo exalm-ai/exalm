@@ -63,7 +63,7 @@
   }
 
   function chip(text, color) {
-    return '<span style="font-family:\'IBM Plex Mono\',monospace;font-size:9.5px;font-weight:700;padding:1px 6px;border-radius:9px;background:var(--track);color:' + (color || 'var(--accent)') + ';margin-left:6px;">' + esc(text) + '</span>';
+    return '<span style="font-family:var(--font-mono),monospace;font-size:9.5px;font-weight:700;padding:1px 6px;border-radius:9px;background:var(--track);color:' + (color || 'var(--accent)') + ';margin-left:6px;">' + esc(text) + '</span>';
   }
 
   function evidenceNode(item, openKeys) {
@@ -75,8 +75,8 @@
     if (ev.fromCache) flags += chip('cached', 'var(--faint)');
     if (item.isNew) flags += chip('new', 'var(--good)');
     var body = '';
-    if (ev.excerpt) body += '<pre style="margin:4px 0 4px 14px;white-space:pre-wrap;font-family:\'IBM Plex Mono\',monospace;font-size:10.5px;color:var(--codeFg);line-height:1.45;">' + esc(ev.excerpt) + '</pre>';
-    if (ev.anchor) body += '<div style="margin:0 0 4px 14px;display:flex;gap:6px;align-items:center;"><code style="font-family:\'IBM Plex Mono\',monospace;font-size:10px;background:var(--track);padding:2px 6px;border-radius:5px;color:var(--accent);flex:1;overflow:auto;">' + esc(ev.anchor) + '</code><button class="ex-copy" data-copy="' + esc(ev.anchor) + '" style="border:1px solid var(--border);background:var(--panel);color:var(--muted);border-radius:6px;cursor:pointer;font-size:9.5px;padding:2px 7px;">copy</button></div>';
+    if (ev.excerpt) body += '<pre style="margin:4px 0 4px 14px;white-space:pre-wrap;font-family:var(--font-mono),monospace;font-size:10.5px;color:var(--codeFg);line-height:1.45;">' + esc(ev.excerpt) + '</pre>';
+    if (ev.anchor) body += '<div style="margin:0 0 4px 14px;display:flex;gap:6px;align-items:center;"><code style="font-family:var(--font-mono),monospace;font-size:10px;background:var(--track);padding:2px 6px;border-radius:5px;color:var(--accent);flex:1;overflow:auto;">' + esc(ev.anchor) + '</code><button class="ex-copy" data-copy="' + esc(ev.anchor) + '" style="border:1px solid var(--border);background:var(--panel);color:var(--muted);border-radius:6px;cursor:pointer;font-size:9.5px;padding:2px 7px;">copy</button></div>';
     return '<details class="ex-tree-node" data-tree-key="' + esc(key) + '" data-ev-label="' + esc(ev.label || '') + '"' + open + ' style="margin-left:12px;">' +
       nodeSummary('<span style="color:var(--muted);">' + esc(ev.kind || '•') + '</span> ' + esc(ev.source || ''), flags) +
       body + '</details>';

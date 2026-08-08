@@ -21,7 +21,7 @@
       '<div class="ex-ov-backdrop" style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:80;"></div>' +
       '<div role="dialog" aria-modal="true" style="position:fixed;z-index:81;top:50%;left:50%;transform:translate(-50%,-50%);' +
       'width:min(760px,94vw);max-height:88vh;overflow-y:auto;background:var(--panel);border:1px solid var(--border);' +
-      'border-radius:14px;box-shadow:0 24px 60px rgba(0,0,0,.5);color:var(--fg);font-family:\'IBM Plex Sans\',system-ui,sans-serif;">' +
+      'border-radius:14px;box-shadow:0 24px 60px rgba(0,0,0,.5);color:var(--fg);font-family:var(--font-sans),system-ui,sans-serif;">' +
       '<div style="display:flex;align-items:center;gap:10px;padding:15px 18px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--panel);z-index:1;">' +
       '<div style="flex:1;font-size:14px;font-weight:700;">' + title + '</div>' +
       '<button class="ex-ov-close" style="border:1px solid var(--border);background:var(--panel2);color:var(--fg);border-radius:8px;cursor:pointer;font-size:13px;padding:4px 10px;">✕</button></div>' +
@@ -60,7 +60,7 @@
     var body =
       '<div style="' + card + 'margin-bottom:14px;"><div style="' + lbl + '">Problem summary</div>' +
       '<div style="font-size:13px;margin-top:4px;">' + esc(f.reason || f.title) + '</div>' +
-      '<div style="margin-top:6px;font-size:12px;color:var(--muted);">Impact: <b style="color:' + sevColor(f.sev) + ';">' + esc((f.sev || '').toUpperCase()) + '</b> · namespace <code style="font-family:\'IBM Plex Mono\',monospace;">' + esc(f.nsKey || f.ns) + '</code></div></div>' +
+      '<div style="margin-top:6px;font-size:12px;color:var(--muted);">Impact: <b style="color:' + sevColor(f.sev) + ';">' + esc((f.sev || '').toUpperCase()) + '</b> · namespace <code style="font-family:var(--font-mono),monospace;">' + esc(f.nsKey || f.ns) + '</code></div></div>' +
       '<h4 style="margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--fg);">Why this fix</h4>' +
       '<div style="' + card + 'margin-bottom:14px;font-size:12.5px;">' + esc(f.root || 'Root cause not yet determined — run an investigation.') + '</div>' +
       '<h4 style="margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--fg);">Evidence collected</h4>' +

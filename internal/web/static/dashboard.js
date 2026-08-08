@@ -22,10 +22,10 @@
 
   var THEMES = {
     dark: {
-      '--bg': '#070b14', '--panel': '#111c31', '--panel2': '#18263e', '--border': '#27384f',
-      '--sidebar': '#0a1120', '--track': '#17243a', '--code': '#070c15', '--codeFg': '#9fb6cf', '--scroll': '#243348',
-      '--fg': '#e8eef6', '--body': '#c2cfde', '--muted': '#8294aa', '--faint': '#5b6c83',
-      '--accent': '#22b8e6', '--accentGlow': 'rgba(34,184,230,.45)', '--accentSoft': 'rgba(34,184,230,.14)',
+      '--bg': '#080c15', '--panel': '#152238', '--panel2': '#1d2c46', '--border': '#2a3a57',
+      '--sidebar': '#0a1020', '--track': '#182740', '--code': '#070c15', '--codeFg': '#aabfd8', '--scroll': '#26374f',
+      '--fg': '#eaf0f8', '--body': '#c6d2e2', '--muted': '#93a2be', '--faint': '#6b7a95',
+      '--accent': '#28c0ea', '--accentGlow': 'rgba(40,192,234,.40)', '--accentSoft': 'rgba(40,192,234,.15)',
       '--crit': '#ff5d5d', '--high': '#ff9f45', '--med': '#f5c542', '--low': '#5b9bff', '--good': '#3ddc97',
       '--critSoft': 'rgba(255,93,93,.14)', '--critLine': 'rgba(255,93,93,.3)',
       '--highSoft': 'rgba(255,159,69,.14)', '--highLine': 'rgba(255,159,69,.28)',
@@ -136,7 +136,7 @@
 
   function mdInline(s) {
     s = esc(s);
-    s = s.replace(/`([^`]+)`/g, '<code style="font-family:\'IBM Plex Mono\',monospace;font-size:11.5px;background:var(--track);padding:1px 6px;border-radius:5px;color:var(--accent);">$1</code>');
+    s = s.replace(/`([^`]+)`/g, '<code style="font-family:var(--font-mono),monospace;font-size:11.5px;background:var(--track);padding:1px 6px;border-radius:5px;color:var(--accent);">$1</code>');
     s = s.replace(/\*\*([^*]+)\*\*/g, '<strong style="color:var(--fg)">$1</strong>');
     return s;
   }
@@ -305,7 +305,7 @@
     if (!inc.length) return '<div style="color:var(--muted)">No critical or high incidents in scope.</div>';
     return '<div style="display:flex;flex-direction:column;gap:11px;">' + inc.map(function (f) {
       var m = sevMeta(f.sev);
-      return '<div style="' + box + 'border-left:3px solid ' + m.c + ';"><div style="display:flex;justify-content:space-between;gap:10px;"><strong style="color:var(--fg)">' + esc(f.title) + '</strong><span style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;color:var(--faint);white-space:nowrap;">' + esc(f.restarts !== '—' ? f.restarts + ' restarts' : f.nsKey) + '</span></div><div style="color:var(--muted);margin-top:4px;">' + esc(f.reason) + '</div></div>';
+      return '<div style="' + box + 'border-left:3px solid ' + m.c + ';"><div style="display:flex;justify-content:space-between;gap:10px;"><strong style="color:var(--fg)">' + esc(f.title) + '</strong><span style="font-family:var(--font-mono),monospace;font-size:11px;color:var(--faint);white-space:nowrap;">' + esc(f.restarts !== '—' ? f.restarts + ' restarts' : f.nsKey) + '</span></div><div style="color:var(--muted);margin-top:4px;">' + esc(f.reason) + '</div></div>';
     }).join('') + '</div>';
   }
 
@@ -433,7 +433,7 @@
     var html = '<div style="position:relative;"><button data-act="ns-toggle" style="display:flex;align-items:center;gap:9px;height:34px;padding:0 11px;border-radius:9px;border:1px solid var(--border);background:var(--panel2);color:var(--fg);font-size:12.5px;font-weight:500;cursor:pointer;">' +
       '<span style="width:8px;height:8px;border-radius:2px;background:' + v.nsDot + ';"></span>' +
       '<span style="font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:.5px;">namespace</span>' +
-      '<span style="font-family:\'IBM Plex Mono\',monospace;">' + esc(v.nsLabel) + '</span>' +
+      '<span style="font-family:var(--font-mono),monospace;">' + esc(v.nsLabel) + '</span>' +
       '<span style="font-size:9px;color:var(--faint);transform:' + (state.nsMenuOpen ? 'rotate(180deg)' : 'none') + ';transition:transform .2s;">▾</span></button>';
     if (state.nsMenuOpen) {
       html += '<div style="position:absolute;top:40px;right:0;min-width:230px;background:var(--panel);border:1px solid var(--border);border-radius:10px;box-shadow:0 12px 34px rgba(0,0,0,.45);padding:5px;z-index:50;">';
@@ -441,7 +441,7 @@
         var active = state.selectedNs === n.key;
         html += '<button data-act="ns-select" data-ns="' + esc(n.key) + '" style="display:flex;align-items:center;gap:9px;width:100%;padding:7px 9px;border-radius:7px;border:none;cursor:pointer;background:' + (active ? 'var(--panel2)' : 'transparent') + ';color:var(--fg);">' +
           '<span style="width:8px;height:8px;border-radius:2px;background:' + n.color + ';flex:none;"></span>' +
-          '<span style="flex:1;text-align:left;font-family:\'IBM Plex Mono\',monospace;font-size:12.5px;">' + esc(n.label) + '</span>' +
+          '<span style="flex:1;text-align:left;font-family:var(--font-mono),monospace;font-size:12.5px;">' + esc(n.label) + '</span>' +
           '<span style="font-size:11px;color:var(--muted);">' + n.count + '</span>' + (active ? '<span style="color:var(--accent);font-size:12px;">✓</span>' : '') + '</button>';
       });
       html += '</div>';
@@ -516,7 +516,7 @@
       var status = isFixed ? '<span style="font-size:9.5px;font-weight:700;color:var(--good);background:var(--track);padding:2px 8px;border-radius:20px;">FIXED ✓</span>' : '';
       return '<tr data-act="remediate" data-id="' + esc(f.id) + '" style="cursor:pointer;" class="ex-row">' +
         '<td style="' + td + '"><span style="font-size:9px;font-weight:700;letter-spacing:.5px;padding:2px 7px;border-radius:5px;color:' + m.c + ';background:' + m.soft + ';border:1px solid ' + m.line + ';white-space:nowrap;">' + m.label + '</span></td>' +
-        '<td style="' + td + 'font-family:\'IBM Plex Mono\',monospace;font-size:11px;color:var(--muted);white-space:nowrap;">' + esc(f.ns) + '</td>' +
+        '<td style="' + td + 'font-family:var(--font-mono),monospace;font-size:11px;color:var(--muted);white-space:nowrap;">' + esc(f.ns) + '</td>' +
         '<td style="' + td + 'color:var(--fg);font-size:12.5px;">' + esc(f.title) + (f.reason && f.reason !== f.title ? '<div style="color:var(--faint);font-size:11px;margin-top:2px;">' + esc(f.reason) + '</div>' : '') + '</td>' +
         '<td style="' + td + 'font-size:11.5px;color:var(--muted);">' + esc(f.group) + '</td>' +
         '<td style="' + td + 'text-align:right;white-space:nowrap;">' + status +
@@ -579,7 +579,7 @@
       if (f.reason) body += '<div style="font-size:12px;color:var(--muted);margin-top:5px;">' + esc(f.reason) + '</div>';
       if (f.root) body += '<div style="font-size:11.5px;color:var(--faint);margin-top:3px;"><b style="color:var(--muted);">Likely cause:</b> ' + esc(f.root) + '</div>';
       if (f.suggestion) body += '<div style="font-size:11.5px;color:var(--good);margin-top:4px;">💡 ' + esc(f.suggestion) + '</div>';
-      return '<div data-act="remediate" data-id="' + esc(f.id) + '" class="ex-row" title="Open remediation details" style="background:var(--panel);border:1px solid var(--border);border-left:3px solid ' + m.c + ';border-radius:11px;padding:12px 15px;margin-bottom:9px;cursor:pointer;">' +
+      return '<div data-act="remediate" data-id="' + esc(f.id) + '" class="ex-row" title="Open remediation details" style="background:var(--panel);border:1px solid var(--border);border-left:3px solid ' + m.c + ';border-radius:12px;padding:14px 16px;margin-bottom:10px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,.18);">' +
         '<div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;">' + chip + conf + fixTag + '</div>' +
         '<div style="font-size:13px;font-weight:600;color:var(--fg);margin-top:6px;">' + esc(f.title) + '</div>' + body + '</div>';
     }).join('');
@@ -736,7 +736,7 @@
       '<span style="font-size:9px;font-weight:700;letter-spacing:.5px;padding:2px 7px;border-radius:5px;color:' + m.c + ';background:' + m.soft + ';border:1px solid ' + m.line + ';flex:none;">' + m.label + '</span>' +
       '<div style="flex:1;min-width:0;">' +
       '<div style="font-size:12.5px;font-weight:600;color:var(--fg);">' + esc(inc.title) + '</div>' +
-      '<div style="font-family:\'IBM Plex Mono\',monospace;font-size:10.5px;color:var(--faint);margin-top:2px;">' + esc(inc.id) + ' · ' + esc(inc.status) +
+      '<div style="font-family:var(--font-mono),monospace;font-size:10.5px;color:var(--faint);margin-top:2px;">' + esc(inc.id) + ' · ' + esc(inc.status) +
       (inc.service ? ' · ' + esc(inc.service) : '') + (inc.namespace ? ' · ' + esc(inc.namespace) : '') +
       ' · opened ' + esc(fmtTime(inc.openedAt)) + (inc.closedAt ? ' · closed ' + esc(fmtTime(inc.closedAt)) : '') + '</div>' +
       (links ? '<div style="margin-top:5px;">' + links + '</div>' : '') +
@@ -858,7 +858,7 @@
         '<div style="display:flex;align-items:center;gap:9px;"><span style="font-size:9px;font-weight:700;letter-spacing:.5px;padding:2px 7px;border-radius:5px;color:' + m.c + ';background:' + m.soft + ';border:1px solid ' + m.line + ';">' + m.label + '</span>' +
         (f.confidence ? '<span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:' + confColor(f.confidence) + ';">' + esc(f.confidence) + ' confidence</span>' : '') + '</div>' +
         '<div style="font-size:13.5px;font-weight:600;color:var(--fg);margin-top:7px;">' + esc(f.title) + '</div>' +
-        '<div style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;color:var(--faint);margin-top:4px;">' + esc(f.ns) + '</div></div>';
+        '<div style="font-family:var(--font-mono),monospace;font-size:11px;color:var(--faint);margin-top:4px;">' + esc(f.ns) + '</div></div>';
     }).join('');
     return head + cards;
   }
@@ -981,7 +981,7 @@
   // ── Render shell + page dispatch ──
   function render() {
     var v = computeVals();
-    var shell = '<div style="display:flex;min-height:100vh;background:var(--bg);color:var(--fg);font-family:\'IBM Plex Sans\',system-ui,sans-serif;font-size:14px;">' +
+    var shell = '<div style="display:flex;min-height:100vh;background:var(--bg);color:var(--fg);font-family:var(--font-sans),system-ui,sans-serif;font-size:14px;">' +
       sidebar() +
       '<div style="flex:1;min-width:0;display:flex;flex-direction:column;">' +
       topbar(v) +
@@ -1128,9 +1128,9 @@
     if (!items || !items.length) return '<div style="color:var(--muted);font-size:12.5px;">No evidence captured.</div>';
     var icon = { log: '📝', event: '⚡', metric: '📊', change: '↺' };
     return items.map(function (e) {
-      var anchor = e.anchor ? '<div style="margin-top:5px;display:flex;gap:6px;align-items:center;"><code style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;background:var(--track);padding:2px 7px;border-radius:5px;color:var(--accent);flex:1;overflow:auto;">' + esc(e.anchor) + '</code><button class="ex-copy" data-copy="' + esc(e.anchor) + '" style="border:1px solid var(--border);background:var(--panel);color:var(--muted);border-radius:6px;cursor:pointer;font-size:10px;padding:3px 8px;">copy</button></div>' : '';
+      var anchor = e.anchor ? '<div style="margin-top:5px;display:flex;gap:6px;align-items:center;"><code style="font-family:var(--font-mono),monospace;font-size:11px;background:var(--track);padding:2px 7px;border-radius:5px;color:var(--accent);flex:1;overflow:auto;">' + esc(e.anchor) + '</code><button class="ex-copy" data-copy="' + esc(e.anchor) + '" style="border:1px solid var(--border);background:var(--panel);color:var(--muted);border-radius:6px;cursor:pointer;font-size:10px;padding:3px 8px;">copy</button></div>' : '';
       return '<div style="' + SHARED_CARD + 'margin-bottom:8px;"><div style="display:flex;gap:8px;align-items:center;"><span>' + (icon[e.kind] || '•') + '</span><span style="' + SHARED_LBL + '">' + esc(e.kind) + ' · ' + esc(e.source) + '</span></div>' +
-        (e.excerpt ? '<pre style="margin:6px 0 0;white-space:pre-wrap;font-family:\'IBM Plex Mono\',monospace;font-size:11px;color:var(--codeFg);line-height:1.45;">' + esc(e.excerpt) + '</pre>' : '') +
+        (e.excerpt ? '<pre style="margin:6px 0 0;white-space:pre-wrap;font-family:var(--font-mono),monospace;font-size:11px;color:var(--codeFg);line-height:1.45;">' + esc(e.excerpt) + '</pre>' : '') +
         anchor + '</div>';
     }).join('');
   }
@@ -1139,7 +1139,7 @@
       .filter(function (p) { return p[1]; })
       .map(function (p) { return '<div><div style="' + SHARED_LBL + '">' + p[0] + '</div><div style="font-size:12px;margin-top:1px;">' + esc(p[1]) + '</div></div>'; })
       .join('');
-    var cmd = fx.kubectlCmd ? '<div style="margin-top:8px;display:flex;gap:6px;align-items:center;"><code style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;background:var(--track);padding:3px 8px;border-radius:5px;color:var(--accent);flex:1;overflow:auto;">' + esc(fx.kubectlCmd) + '</code><button class="ex-copy" data-copy="' + esc(fx.kubectlCmd) + '" style="border:1px solid var(--border);background:var(--panel);color:var(--muted);border-radius:6px;cursor:pointer;font-size:10px;padding:3px 8px;">copy</button></div>' : '';
+    var cmd = fx.kubectlCmd ? '<div style="margin-top:8px;display:flex;gap:6px;align-items:center;"><code style="font-family:var(--font-mono),monospace;font-size:11px;background:var(--track);padding:3px 8px;border-radius:5px;color:var(--accent);flex:1;overflow:auto;">' + esc(fx.kubectlCmd) + '</code><button class="ex-copy" data-copy="' + esc(fx.kubectlCmd) + '" style="border:1px solid var(--border);background:var(--panel);color:var(--muted);border-radius:6px;cursor:pointer;font-size:10px;padding:3px 8px;">copy</button></div>' : '';
     var action = fx.applicable
       ? '<button class="ex-apply" data-id="' + esc(findingID) + '" style="margin-top:10px;border:none;background:var(--accent);color:#fff;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;padding:7px 16px;">Apply this fix</button>'
       : '<div style="margin-top:8px;font-size:11.5px;color:var(--muted);">Review and apply manually — Exalm will not auto-execute this change.</div>';

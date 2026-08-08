@@ -46,7 +46,7 @@
     root.style.display = 'block';
     root.innerHTML =
       '<div class="ex-lv-backdrop" style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:85;"></div>' +
-      '<div style="position:fixed;z-index:86;top:0;right:0;height:100vh;width:min(900px,96vw);background:var(--panel);border-left:1px solid var(--border);display:flex;flex-direction:column;color:var(--fg);font-family:\'IBM Plex Sans\',system-ui,sans-serif;box-shadow:-16px 0 40px rgba(0,0,0,.4);">' +
+      '<div style="position:fixed;z-index:86;top:0;right:0;height:100vh;width:min(900px,96vw);background:var(--panel);border-left:1px solid var(--border);display:flex;flex-direction:column;color:var(--fg);font-family:var(--font-sans),system-ui,sans-serif;box-shadow:-16px 0 40px rgba(0,0,0,.4);">' +
       '<div style="display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--border);">' +
       '<span style="font-size:14px;font-weight:700;">▤ Log viewer</span><span style="flex:1;"></span>' +
       '<button class="ex-lv-close" style="border:1px solid var(--border);background:var(--panel2);color:var(--fg);border-radius:8px;cursor:pointer;font-size:13px;padding:4px 10px;">✕</button></div>' +

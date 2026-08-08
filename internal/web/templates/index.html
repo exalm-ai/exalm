@@ -4,22 +4,42 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Exalm — {{.Title}}</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <!-- Fonts: system stacks only. No external requests — matches the
+       privacy-first, works-offline promise. -->
   <style>
+    :root {
+      --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+      --font-mono: ui-monospace, "SFMono-Regular", "SF Mono", "Cascadia Code", "Segoe UI Mono", "Roboto Mono", Consolas, "Liberation Mono", monospace;
+    }
     * { box-sizing: border-box; }
     html, body { margin: 0; padding: 0; }
-    body { font-family: 'IBM Plex Sans', system-ui, sans-serif; }
-    ::-webkit-scrollbar { width: 9px; height: 9px; }
-    ::-webkit-scrollbar-thumb { background: var(--scroll, #2a3343); border-radius: 6px; }
+    body {
+      font-family: var(--font-sans);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      text-rendering: optimizeLegibility;
+      letter-spacing: -0.006em;
+    }
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-thumb { background: var(--scroll, #2a3343); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--muted, #55617a); background-clip: padding-box; }
     ::-webkit-scrollbar-track { background: transparent; }
     @keyframes ex-pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
     @keyframes ex-spin { to { transform: rotate(360deg); } }
+    @keyframes ex-fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
     button { font-family: inherit; }
-    /* Row hover (Log Explorer table rows + Alert cards). */
-    .ex-row { transition: background .12s ease; }
-    .ex-row:hover { background: var(--panel2) !important; }
+    /* Accessible keyboard focus — a crisp ring on any interactive element,
+       suppressed for mouse users. Inline styles rarely set this, so a global
+       rule gives every button/input/row a consistent focus affordance. */
+    :focus-visible { outline: 2px solid var(--accent, #22b8e6); outline-offset: 2px; border-radius: 6px; }
+    [data-act]:focus:not(:focus-visible), button:focus:not(:focus-visible) { outline: none; }
+    /* Elevation: cards/panels read as distinct surfaces above the page. The
+       SPA builds cards with inline styles; these class hooks add depth + a
+       gentle hover lift without touching every builder. */
+    .ex-row { transition: background .14s ease, border-color .14s ease, transform .14s ease, box-shadow .14s ease; }
+    /* Row / card hover (findings, Log Explorer rows, alert cards): a subtle
+       lift + brighter border reads as interactive without being noisy. */
+    .ex-row:hover { border-color: var(--accentSoft, #2a3a55) !important; box-shadow: 0 6px 22px rgba(0,0,0,.28) !important; transform: translateY(-1px); }
     /* Sidebar nav hover. */
     .ex-sidebar nav button:hover { color: var(--fg) !important; }
     /* Responsive: collapse the multi-column page grids. */

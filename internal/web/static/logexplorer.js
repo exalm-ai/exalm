@@ -116,7 +116,7 @@
 
     function shellHTML() {
       return barHTML() +
-        '<div class="ex-le-out" style="max-height:42vh;overflow:auto;font-family:\'IBM Plex Mono\',monospace;font-size:11px;line-height:1.5;background:var(--code);color:var(--codeFg);border-radius:8px;padding:8px 10px;white-space:pre-wrap;"></div>' +
+        '<div class="ex-le-out" style="max-height:42vh;overflow:auto;font-family:var(--font-mono),monospace;font-size:11px;line-height:1.5;background:var(--code);color:var(--codeFg);border-radius:8px;padding:8px 10px;white-space:pre-wrap;"></div>' +
         actionsHTML() +
         '<div class="ex-le-analysis" style="display:none;margin-top:10px;max-height:38vh;overflow-y:auto;background:var(--panel2);border:1px solid var(--accent);border-radius:10px;padding:11px 14px;font-size:12.5px;line-height:1.6;color:var(--body);"></div>';
     }

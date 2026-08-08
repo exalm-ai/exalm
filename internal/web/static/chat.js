@@ -122,7 +122,7 @@
         var col = E.sevColor ? E.sevColor(ev.severity || 'info') : 'var(--muted)';
         return '<div style="position:relative;margin-bottom:11px;">' +
           '<span style="position:absolute;left:-18px;top:3px;width:9px;height:9px;border-radius:50%;background:' + col + ';border:2px solid var(--panel2);"></span>' +
-          '<div style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;color:var(--faint);">' + esc(fmtWhen(ev.at)) + '</div>' +
+          '<div style="font-family:var(--font-mono),monospace;font-size:11px;color:var(--faint);">' + esc(fmtWhen(ev.at)) + '</div>' +
           '<div style="font-size:12.5px;color:var(--fg);font-weight:600;">' + esc(ev.label) + '</div>' +
           (ev.detail ? '<div style="font-size:11.5px;color:var(--muted);margin-top:1px;">' + esc(ev.detail) + '</div>' : '') +
           '</div>';
@@ -149,7 +149,7 @@
         : ps.fromCache ? '<span style="color:var(--faint);" title="served from this conversation\'s evidence cache">↺</span>'
         : ps.status === 'unavailable' ? '<span style="color:var(--faint);">○</span>' : '<span style="color:var(--faint);">–</span>';
       return '<div style="display:flex;gap:8px;align-items:baseline;padding:3px 0;font-size:12px;">' + mark +
-        '<span style="flex:1;"><code style="font-family:\'IBM Plex Mono\',monospace;font-size:10.5px;color:var(--accent);">' + esc(ps.collector) + '</code>' +
+        '<span style="flex:1;"><code style="font-family:var(--font-mono),monospace;font-size:10.5px;color:var(--accent);">' + esc(ps.collector) + '</code>' +
         (ps.edge ? ' <span style="color:var(--faint);font-size:10.5px;">' + esc(ps.edge) + '</span>' : '') +
         (ps.fromCache ? ' <span style="color:var(--faint);font-size:10px;">(cached)</span>' : '') +
         ' <span style="color:var(--muted);">— ' + esc(ps.reason) + '</span></span></div>';
@@ -161,7 +161,7 @@
     return hyps.map(function (h, i) {
       var col = h.score >= 75 ? 'var(--good)' : h.score >= 45 ? 'var(--med)' : 'var(--faint)';
       var cites = function (labels, colr) {
-        return (labels || []).map(function (l) { return '<a class="ex-cite" data-ev="' + esc(l) + '" style="cursor:pointer;color:' + colr + ';font-family:\'IBM Plex Mono\',monospace;font-size:10px;">[' + esc(l) + ']</a>'; }).join(' ');
+        return (labels || []).map(function (l) { return '<a class="ex-cite" data-ev="' + esc(l) + '" style="cursor:pointer;color:' + colr + ';font-family:var(--font-mono),monospace;font-size:10px;">[' + esc(l) + ']</a>'; }).join(' ');
       };
       return '<div style="padding:5px 0;border-bottom:1px solid var(--border);font-size:12px;">' +
         '<div style="display:flex;gap:8px;align-items:center;"><b style="color:var(--fg);">' + (i + 1) + '. ' + esc(h.title) + '</b>' +
@@ -194,7 +194,7 @@
   // that flash the matching evidence node in the tree (or open the details).
   function citeify(html) {
     return html.replace(/\[(E\d+)\]/g, function (_m, label) {
-      return '<a class="ex-cite" data-ev="' + label + '" style="cursor:pointer;color:var(--accent);font-family:\'IBM Plex Mono\',monospace;font-size:11px;background:var(--accentSoft);padding:0 4px;border-radius:5px;">' + label + '</a>';
+      return '<a class="ex-cite" data-ev="' + label + '" style="cursor:pointer;color:var(--accent);font-family:var(--font-mono),monospace;font-size:11px;background:var(--accentSoft);padding:0 4px;border-radius:5px;">' + label + '</a>';
     });
   }
 
