@@ -91,7 +91,8 @@ func TestStatsSummaryCollector(t *testing.T) {
 	s := collectorSession()
 	s.Stats = map[string]int{"errors": 3}
 	col := StatsSummaryCollector("Stats summarized", func(stats any) string {
-		return fmt.Sprintf("errors=%d", stats.(map[string]int)["errors"])
+		m, _ := stats.(map[string]int)
+		return fmt.Sprintf("errors=%d", m["errors"])
 	})
 	_, evid := col(context.Background(), CollectCtx{Facts: s, Red: toyRedactorCorpus{}})
 	if len(evid) != 1 || evid[0].Excerpt != "errors=3" {

@@ -48,7 +48,7 @@ func goldenFixture(t *testing.T) (*Plugin, func() []int) {
 			Message: "Memory cgroup out of memory: Killed process 1234", Count: 3,
 		}},
 	})
-	actionCount := func() []int { return []int{len(cs.Fake.Actions())} }
+	actionCount := func() []int { return []int{len(cs.Actions())} }
 	return p, actionCount
 }
 

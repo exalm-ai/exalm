@@ -20,6 +20,8 @@ linters:
     gosec:
       excludes:
         - G104  # errors unhandled: we use //nolint where intentional
+        - G304  # file inclusion via variable: a CLI legitimately opens user-specified --file paths
+        - G117  # marshaled "secret" field: the hub file intentionally persists a local attach secret
       severity: medium
       confidence: medium
 

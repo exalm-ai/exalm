@@ -29,7 +29,7 @@ func TestLogSession_QueryFiltersAndPagination(t *testing.T) {
 	if total != 1 || len(got) != 1 || got[0].Code != "500" {
 		t.Errorf("severity filter: total=%d got=%+v", total, got)
 	}
-	got, total = s.Query(LogQuery{Unit: "nginx.service"})
+	_, total = s.Query(LogQuery{Unit: "nginx.service"})
 	if total != 2 {
 		t.Errorf("unit filter: total=%d", total)
 	}

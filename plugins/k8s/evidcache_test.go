@@ -47,13 +47,13 @@ func TestConverse_RepeatedQuestionServedFromCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first turn: %v", err)
 	}
-	actionsAfterFirst := len(cs.Fake.Actions())
+	actionsAfterFirst := len(cs.Actions())
 
 	second, err := p.Converse(context.Background(), first.ID, "", "prod", "check the configmaps again", nil, fakeRedactor{}, store, nil)
 	if err != nil {
 		t.Fatalf("second turn: %v", err)
 	}
-	actionsAfterSecond := len(cs.Fake.Actions())
+	actionsAfterSecond := len(cs.Actions())
 
 	if actionsAfterSecond != actionsAfterFirst {
 		t.Errorf("second identical question within TTL must not call the API: actions %d → %d",
@@ -97,13 +97,13 @@ func TestConverse_RefreshBypassesCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first turn: %v", err)
 	}
-	before := len(cs.Fake.Actions())
+	before := len(cs.Actions())
 
 	_, err = p.Converse(context.Background(), first.ID, "", "prod", "refresh the configmaps", nil, fakeRedactor{}, store, nil)
 	if err != nil {
 		t.Fatalf("refresh turn: %v", err)
 	}
-	if after := len(cs.Fake.Actions()); after == before {
+	if after := len(cs.Actions()); after == before {
 		t.Error("an explicit refresh must re-collect (API actions should grow)")
 	}
 }

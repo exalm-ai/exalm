@@ -99,13 +99,6 @@ func syntheticFinding(pod PodSummary, ns, name string) plugin.Finding {
 	}
 }
 
-// splitFocus splits a "namespace/name" focus string. A bare name with no
-// namespace returns ns="".
-func splitFocus(focus string) (ns, name string) {
-	t := investigate.ParseFocus(focus)
-	return t.Scope, t.Name
-}
-
 // resolveFocus decides which resource this turn is about: an explicit mention
 // in the message wins; otherwise the conversation keeps its prior focus
 // (this is what makes "show me the previous logs" resolve to the same pod

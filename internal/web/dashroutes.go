@@ -129,7 +129,7 @@ func (s *liveServer) handleDashChat(w http.ResponseWriter, r *http.Request) {
 	}
 	// The k8s conversation engine and a legacy analyzer engine share
 	// converseFn; only the dashboard the session belongs to may use it.
-	if id != s.analyzer && !(id == "k8s" && s.analyzer == "") {
+	if id != s.analyzer && (id != "k8s" || s.analyzer != "") {
 		http.Error(w, "no session attached to this dashboard", http.StatusServiceUnavailable)
 		return
 	}
@@ -150,7 +150,7 @@ func (s *liveServer) handleDashLogAnalyze(w http.ResponseWriter, r *http.Request
 		s.serveLogAnalyze(w, r, ds.Handlers.AnalyzeLine)
 		return
 	}
-	if id != s.analyzer && !(id == "k8s" && s.analyzer == "") {
+	if id != s.analyzer && (id != "k8s" || s.analyzer != "") {
 		http.Error(w, "no session attached to this dashboard", http.StatusServiceUnavailable)
 		return
 	}

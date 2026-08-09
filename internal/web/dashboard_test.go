@@ -27,8 +27,12 @@ func TestNamespaceOf(t *testing.T) {
 func TestFindingID_StableAndDistinct(t *testing.T) {
 	a := plugin.Finding{Category: "Pods", Title: "CrashLoopBackOff: ns/a", Source: "k8s/c1"}
 	b := plugin.Finding{Category: "Pods", Title: "CrashLoopBackOff: ns/b", Source: "k8s/c1"}
-	if findingID(a) != findingID(a) {
-		t.Error("findingID should be stable for the same finding")
+	// A separately-constructed but identical finding must hash to the same id
+	// (deterministic across re-collections), which is what the fix/investigate
+	// endpoints rely on.
+	aCopy := plugin.Finding{Category: "Pods", Title: "CrashLoopBackOff: ns/a", Source: "k8s/c1"}
+	if findingID(a) != findingID(aCopy) {
+		t.Error("findingID should be stable for identical findings")
 	}
 	if findingID(a) == findingID(b) {
 		t.Error("findingID should differ for different findings")

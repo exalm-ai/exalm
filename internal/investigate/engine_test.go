@@ -19,8 +19,7 @@ import (
 // ── toy domain ──────────────────────────────────────────────────────────────
 
 type toyFacts struct {
-	sick    bool
-	secrets string // planted to prove redaction
+	sick bool
 }
 
 type toyLLM struct {

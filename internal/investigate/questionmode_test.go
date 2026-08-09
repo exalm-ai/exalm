@@ -95,7 +95,7 @@ func TestBuildEnrichedTurn_InjectsDirectiveNextToQuestion(t *testing.T) {
 	qIdx := strings.Index(turn, "QUESTION:")
 	dIdx := strings.Index(turn, "ANSWER MODE: direct")
 	fIdx := strings.Index(turn, "FOCUS RESOURCE:")
-	if !(qIdx < dIdx && dIdx < fIdx) {
+	if qIdx >= dIdx || dIdx >= fIdx {
 		t.Errorf("directive must sit between QUESTION and FOCUS RESOURCE (q=%d d=%d f=%d)", qIdx, dIdx, fIdx)
 	}
 
