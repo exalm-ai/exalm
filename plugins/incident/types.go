@@ -62,8 +62,8 @@ type TimelineEntry struct {
 	// timeline event correlates with a cluster mutation (deploy, RBAC change,
 	// config edit). Populated by Phase 4's change-correlation engine.
 	//
-	// Strength: komodor — "Change timeline: every deploy, config edit, node
-	// event, scaling action, RBAC change captured and overlaid on workload state".
+	// Change timeline: deploys, config edits, node events, scaling actions, and
+	// RBAC changes captured and overlaid on workload state.
 	RelatedChangeID string `json:"related_change_id,omitempty"`
 }
 

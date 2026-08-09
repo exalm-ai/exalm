@@ -1,6 +1,6 @@
-// Strength: komodor — "Native Kubernetes vocabulary throughout: pods, deployments,
-// ReplicaSets, HPAs are first-class data-model objects rather than tags on a
-// generic APM schema." Every collector below speaks K8s natively.
+// analyzers.go speaks native Kubernetes vocabulary throughout: pods,
+// deployments, ReplicaSets, and HPAs are first-class data-model objects, not
+// tags on a generic schema. Every collector below reads Kubernetes natively.
 package k8s
 
 import (

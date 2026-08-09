@@ -27,12 +27,8 @@ type GitHubOpts struct {
 // file containing all findings with suggested fixes, and opens a pull request.
 // Returns the HTML URL of the created PR.
 //
-// Strength: openobserve opportunity #2 — "Runbook executor wired to OO Python
-// Actions ... receives the alert webhook, pulls OO RCA via incident API, selects
-// runbook, executes safe read actions, proposes writes with Slack approval."
-// Exalm's PR-based approval flow (GitHub branch + PR + human review) is the
-// adjacent pattern: every mutation is reviewable in version control before it
-// lands. Slack approval is on the Phase 3 backlog.
+// Exalm's PR-based approval flow (GitHub branch + PR + human review) makes every
+// proposed mutation reviewable in version control before it lands.
 func CreateFixPR(ctx context.Context, opts GitHubOpts, report plugin.Report) (string, error) {
 	if opts.APIURL == "" {
 		opts.APIURL = "https://api.github.com"

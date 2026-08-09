@@ -1,7 +1,7 @@
-// Strength: openobserve — "AGPL-3.0 open source core with BYOB object storage:
-// air-gapped, data-sovereign self-hosted deployments possible." OpenRouter +
-// Ollama (in llm.go) together let Exalm run fully air-gapped (Ollama) or with
-// 100+ models via OpenRouter, matching OO's BYOAI ethos.
+// openrouter.go implements the OpenRouter LLM provider — access to 100+ models
+// through a single API. Paired with the Ollama provider (llm.go), Exalm can run
+// fully air-gapped (Ollama) or against any hosted model (OpenRouter): bring your
+// own AI, self-hosted or not.
 package llm
 
 import (

@@ -15,9 +15,8 @@ import (
 
 // ApplyRemediation executes the k8s API operation described by action.
 //
-// Strength: komodor — "Auto-remediation closes the loop from detection to action".
-// Strength: openobserve — "Python Actions enable custom remediation scripts" (we go further:
-// 8 first-class K8s actions, declarative, no shell execution, audit-logged).
+// Auto-remediation closes the loop from detection to action: 8 first-class,
+// declarative Kubernetes operations — no shell execution.
 func ApplyRemediation(ctx context.Context, cs kubernetes.Interface, a plugin.RemediationAction) error {
 	switch a.Kind {
 	case "rollout-restart":

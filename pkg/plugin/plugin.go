@@ -97,15 +97,14 @@ type Finding struct {
 	// mutation (deploy, RBAC change, config edit) was observed in the 30
 	// minutes preceding this finding's first observation. nil otherwise.
 	//
-	// Strength: komodor — "Change-correlation RCA engine: automatically ties
-	// failures to the recent change most likely to have caused them."
+	// Change-correlation RCA: automatically ties a failure to the recent change
+	// most likely to have caused it.
 	LikelyCause *ChangeRef `json:"likely_cause,omitempty"`
 	// Evidence is the verifiable chain of log lines, metric values, events,
 	// and changes supporting this finding. Populated by internal/evidence.
 	//
-	// Strength: openobserve — "AI SRE Agent shows complete evidence chain ...
-	// verifiable, not a black box." We expose it as first-class data in
-	// every finding, not just in agent text output.
+	// The evidence chain is verifiable, not a black box: it is first-class data
+	// on every finding, not just prose in the agent's text output.
 	Evidence []EvidenceItem `json:"evidence,omitempty"`
 	// Source identifies which plugin or data source produced this finding.
 	// Examples: "k8s/prod-cluster", "logs/app.log", "aws_cost/us-east-1".
