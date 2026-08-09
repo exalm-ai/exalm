@@ -60,7 +60,7 @@ func (p *Plugin) fix(ctx context.Context, args plugin.RunArgs) (plugin.Report, e
 func (p *Plugin) analyze(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) {
 	session := investigate.NewLogSession("syslog")
 
-	// Phase 2: SSH remote collection.
+	// SSH remote collection.
 	remoteHost := ""
 	if rem, err := exassh.CollectIfNeeded(ctx, args,
 		exassh.SyslogCmd(true, exassh.LogLinesFromArgs(args, 5000))); err != nil {

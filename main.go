@@ -196,4 +196,4 @@ Set up Claude (recommended for MVP):
 
 Or pass --provider claude on the command line.
 
-Other providers (OpenAI, Ollama) are stubbed and will be implemented in Phase 2`
+Other providers (OpenAI, Ollama) are stubbed and not yet implemented`

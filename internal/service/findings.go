@@ -1,13 +1,11 @@
-// Package service is the named service layer the platform review called
-// for: interfaces that CLI, web, and MCP all call instead of each
-// re-deriving the same views over plugin.Report. Deliberately narrow —
-// only FindingsService and RemediationService are defined here, because
-// those are the two concrete dependencies Phase 4 (wiring MCP to real
-// services) needs today. internal/report and internal/timeline already
-// expose the reusable core for a future ReportService/TimelineService;
-// wrapping them in an interface with a single caller and no swap need
-// would be exactly the over-engineering the platform review warned
-// against — add those when a second caller actually shows up.
+// Package service is the named service layer: interfaces that CLI, web, and
+// MCP all call instead of each re-deriving the same views over plugin.Report.
+// Deliberately narrow — only FindingsService and RemediationService are
+// defined here, because those are the two concrete dependencies the MCP wiring
+// needs today. internal/report and internal/timeline already expose the
+// reusable core for a future ReportService/TimelineService; wrapping them in an
+// interface with a single caller and no swap need would be over-engineering —
+// add those when a second caller actually shows up.
 package service
 
 import (

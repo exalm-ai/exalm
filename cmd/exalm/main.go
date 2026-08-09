@@ -284,7 +284,7 @@ func buildPluginCmd(p plugin.Plugin, flags *rootFlags) *cobra.Command {
 			sub.Flags().String("concurrency", "4", "maximum in-flight LLM calls")
 			sub.Flags().String("chunk-size", "", "soft cap per chunk (e.g. 200KB, 1MB)")
 			if sshCollectiblePlugins[p.Name()] {
-				// SSH remote collection (Phase 2).
+				// SSH remote collection.
 				sub.Flags().String("host", "", "SSH hostname — collect logs directly from this remote host")
 				sub.Flags().String("ssh-user", "", "SSH username (default: current OS user)")
 				sub.Flags().String("ssh-key", "", "path to SSH private key (default: ~/.ssh/id_rsa)")

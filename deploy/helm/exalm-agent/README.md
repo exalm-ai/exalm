@@ -52,7 +52,7 @@ helm install exalm ./deploy/helm/exalm-agent \
 | `image.repository` | `ghcr.io/exalm-ai/exalm` | Container image repo |
 | `image.tag` | `""` (= `.Chart.AppVersion`) | Container image tag |
 | `image.pullPolicy` | `IfNotPresent` | Pull policy |
-| `replicaCount` | `1` | Phase 1 only supports 1 replica |
+| `replicaCount` | `1` | currently supports 1 replica |
 | `llm.provider` | `ollama` | `claude` / `openai` / `ollama` / `openrouter` |
 | `llm.model` | `""` | Override provider's default model |
 | `llm.apiKey` | `""` | Inline API key → chart creates a Secret |
@@ -72,7 +72,7 @@ helm install exalm ./deploy/helm/exalm-agent \
 | `rbac.allowApply` | `false` | Grant patch verbs for the "Apply Fix" button |
 | `serviceAccount.create` | `true` | Create a dedicated ServiceAccount |
 | `resources.*` | sane defaults | CPU/memory requests + limits |
-| `storage.enabled` | `false` | Stub for LGTM-lite subcharts (Phase 2) |
+| `storage.enabled` | `false` | Stub for LGTM-lite subcharts |
 
 See [`values.yaml`](values.yaml) for the full annotated default set.
 

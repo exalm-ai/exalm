@@ -1,6 +1,6 @@
 package network
 
-// hubble_grpc.go — Phase 5: real Hubble Relay gRPC client.
+// hubble_grpc.go — real Hubble Relay gRPC client.
 //
 // Dependency justification (DEVELOPMENT.md §"Things to NEVER do"):
 //   google.golang.org/grpc is the only protocol Hubble Relay exposes;

@@ -293,7 +293,7 @@ Kubernetes probes and Prometheus scraping without credentials.
 
 ### SQLite (`internal/store`)
 
-Since Phase 6, Exalm uses a SQLite database at `~/.exalm/exalm.db` with
+Exalm uses a SQLite database at `~/.exalm/exalm.db` with
 WAL mode for concurrent reads:
 
 | Table | Contents |

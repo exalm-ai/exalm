@@ -42,7 +42,7 @@ type SLIQuery struct {
 //
 // Single-window legacy view. For Google SRE-style alert tiering (1h/6h/72h
 // burn rates with 14.4/6/1 thresholds), use BurnRates in Snapshot, which is
-// populated by ComputeMultiWindow in burnrate.go (Phase 3).
+// populated by ComputeMultiWindow in burnrate.go.
 type ErrorBudget struct {
 	Spec SLOSpec
 	// Remaining is the fraction of the error budget still available (0.0–1.0).
@@ -53,7 +53,7 @@ type ErrorBudget struct {
 	// >1.0 = over-burning; will exhaust early.
 	//
 	// DEPRECATED: prefer Snapshot.BurnRates (multi-window) over this single
-	// scalar. Retained for back-compat with Phase 1 reports.
+	// scalar. Retained for back-compat with older reports.
 	BurnRate float64
 	// ExhaustionETA is when the budget will be fully consumed if burn continues.
 	ExhaustionETA time.Time

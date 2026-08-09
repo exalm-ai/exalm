@@ -1,6 +1,6 @@
 // Package main — exalm serve subcommand.
 //
-// serve is the Phase 1 "single-tenant local control plane" entry point.
+// serve is the "single-tenant local control plane" entry point.
 // It runs the k8s watch loop (and optionally an SLO check) and serves the
 // live web dashboard without having to pick a plugin-scoped subcommand.
 //
@@ -76,7 +76,7 @@ func newServeCmd(root *rootFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start the live Exalm dashboard (K8s watch + optional SLO)",
-		Long: `serve is the single-tenant control plane entry point for Phase 1.
+		Long: `serve is the single-tenant control plane entry point.
 
 It connects to your Kubernetes cluster, runs a continuous health-check loop,
 and serves the live findings dashboard on localhost:7433 (overridable with --port).

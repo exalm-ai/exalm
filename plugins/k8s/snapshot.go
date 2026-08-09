@@ -28,7 +28,7 @@ type Snapshot struct {
 	PVCIssues      []PVCIssue
 	ServiceIssues  []ServiceIssue
 
-	// Phase 1 extended analyzers
+	// extended analyzers
 	IngressIssues       []IngressHealth
 	ResourceGaps        []ResourceGap
 	UncoveredNamespaces []string // namespaces with pods but no NetworkPolicy
@@ -38,11 +38,11 @@ type Snapshot struct {
 	FailedJobs          []JobIssue
 	CronJobIssues       []CronJobIssue
 
-	// Phase 2 extended analyzers
+	// extended analyzers
 	SelectorMismatches   []SelectorMismatch    // services whose selector matches no running pods
 	CrossNamespaceIssues []CrossNamespaceIssue // cross-namespace connectivity problems
 
-	// Phase 3 IaC change detection
+	// IaC change detection
 	IaCChanges []IaCChange // ArgoCD Application and Helm release change events
 }
 

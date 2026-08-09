@@ -2,7 +2,7 @@
 // reports, and remediations. This is the stable public API surface — types
 // here are versioned and backward-compatible across minor releases.
 //
-// Schema version: v0 (Phase 1). Breaking changes require a new sub-package
+// Schema version: v0. Breaking changes require a new sub-package
 // (schema/v1/) per Go module conventions.
 //
 // External consumers should import this package, not pkg/plugin directly.

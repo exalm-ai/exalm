@@ -374,7 +374,7 @@ func TestFormatHours(t *testing.T) {
 	}
 }
 
-// ─── Phase 4: lead time tests ────────────────────────────────────────────────
+// ─── lead time tests ────────────────────────────────────────────────
 
 func TestCalculateDORA_LeadTimeElite(t *testing.T) {
 	now := time.Now().UTC()

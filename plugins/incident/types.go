@@ -60,7 +60,7 @@ type TimelineEntry struct {
 	Finding *plugin.Finding `json:"finding,omitempty"`
 	// RelatedChangeID links this entry to a changestore.ChangeEvent ID when the
 	// timeline event correlates with a cluster mutation (deploy, RBAC change,
-	// config edit). Populated by Phase 4's change-correlation engine.
+	// config edit). Populated by the change-correlation engine.
 	//
 	// Change timeline: deploys, config edits, node events, scaling actions, and
 	// RBAC changes captured and overlaid on workload state.

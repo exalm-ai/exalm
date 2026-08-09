@@ -19,7 +19,7 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
-# Phase 1 keeps replicaCount=1. Multi-replica leader-elected mode lands in Phase 2.
+# currently keeps replicaCount=1. Multi-replica leader-elected mode is planned.
 replicaCount: 1
 
 # -----------------------------------------------------------------------------
@@ -176,8 +176,8 @@ securityContext:
 # -----------------------------------------------------------------------------
 # Optional: LGTM-lite (Loki + Prometheus + Grafana) subcharts
 # -----------------------------------------------------------------------------
-# Phase 1: dashboard does NOT yet query these — they install alongside so the
-# environment is ready for Phase 2 LogQL/PromQL widgets.
+# The dashboard does NOT yet query these — they install alongside so the
+# environment is ready for future LogQL/PromQL widgets.
 #
 # To enable, uncomment the dependencies in Chart.yaml, then:
 #   helm dependency update deploy/helm/exalm-agent

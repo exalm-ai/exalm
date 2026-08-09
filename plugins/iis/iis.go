@@ -61,7 +61,7 @@ func (p *Plugin) fix(ctx context.Context, args plugin.RunArgs) (plugin.Report, e
 func (p *Plugin) analyze(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) {
 	session := investigate.NewLogSession("iis")
 
-	// Phase 2: SSH remote collection.
+	// SSH remote collection.
 	// Connects to a Windows IIS host via SSH and tails the latest W3C log file.
 	logDir := args.Flags["log-dir"]
 	remoteHost := ""

@@ -109,11 +109,11 @@ func Collect(ctx context.Context, cs kubernetes.Interface, lf logFetcher, opts C
 	snap.FailedJobs, _ = collectJobIssues(ctx, cs, ns)
 	snap.CronJobIssues, _ = collectCronJobIssues(ctx, cs, ns, now)
 
-	// Phase 2 extended analyzers.
+	// extended analyzers.
 	snap.SelectorMismatches, _ = collectSelectorMismatches(ctx, cs, ns)
 	snap.CrossNamespaceIssues, _ = collectCrossNamespaceIssues(ctx, cs)
 
-	// Phase 3 IaC change detection — best-effort; nil dynamic client is safe.
+	// IaC change detection — best-effort; nil dynamic client is safe.
 	snap.IaCChanges, _ = collectIaCChanges(ctx, cs, opts.DynamicClient, ns)
 
 	return snap, nil

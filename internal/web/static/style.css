@@ -1048,7 +1048,7 @@ body {
   filter: brightness(1.4) drop-shadow(0 0 4px currentColor);
 }
 
-/* ── Phase 4: Likely-cause badge (purple, near title) ── */
+/* ── Likely-cause badge (purple, near title) ── */
 .likely-cause-badge {
   display: inline-flex;
   align-items: center;
@@ -1064,7 +1064,7 @@ body {
   letter-spacing: 0.02em;
 }
 
-/* ── Phase 4: Evidence chain section ── */
+/* ── Evidence chain section ── */
 .evidence-section {
   margin: 10px 0;
   padding: 10px 12px;

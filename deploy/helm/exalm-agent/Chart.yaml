@@ -35,10 +35,10 @@ annotations:
 # Optional LGTM-lite subcharts. Disabled by default — flip storage.enabled=true
 # in values.yaml to install Loki + Prometheus + Grafana alongside the agent.
 #
-# Phase 1: these are installed but NOT yet queried by the dashboard.
-# Phase 2: dashboard will read LogQL / PromQL from these sources.
+# Currently these are installed but NOT yet queried by the dashboard.
+# A future release will read LogQL / PromQL from these sources.
 #
-# Subcharts are intentionally NOT listed in this file in Phase 1 so a vanilla
+# Subcharts are intentionally NOT listed in this file currently, so a vanilla
 # `helm install` works offline without a `helm dependency update`. To enable
 # storage, uncomment the dependencies below and run:
 #

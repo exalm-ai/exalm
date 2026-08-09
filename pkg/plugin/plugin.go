@@ -8,7 +8,7 @@
 //
 // Plugins MUST declare via Mutates() whether they can change state in the
 // user's environment. The CLI refuses to run any mutating plugin without
-// the --apply flag and an explicit confirmation prompt. For Phase 1 every
+// the --apply flag and an explicit confirmation prompt. Every
 // plugin is read-only.
 //
 // # PRIVACY MODEL

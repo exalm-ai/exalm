@@ -45,7 +45,7 @@ func (p *Plugin) Subcommands() []plugin.Subcommand {
 func (p *Plugin) analyze(ctx context.Context, args plugin.RunArgs) (plugin.Report, error) {
 	session := investigate.NewLogSession("httplog")
 
-	// Phase 2: SSH remote collection.
+	// SSH remote collection.
 	// Fetch both access log and error log when a remote host is given.
 	remoteHost := ""
 	if rem, err := exassh.CollectIfNeeded(ctx, args,

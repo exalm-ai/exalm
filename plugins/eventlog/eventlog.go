@@ -76,7 +76,7 @@ func (p *Plugin) summarize(ctx context.Context, args plugin.RunArgs) (plugin.Rep
 
 	session := investigate.NewLogSession("eventlog")
 
-	// Phase 2: SSH remote collection.
+	// SSH remote collection.
 	// Connect to a Windows host via SSH (requires OpenSSH for Windows on the target)
 	// and run Get-WinEvent | ConvertTo-Json remotely.
 	logName := args.Flags["log-name"]

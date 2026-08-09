@@ -210,7 +210,7 @@ in `internal/network` remains dormant, wired to nothing).
 
 ---
 
-## [0.7.0] — Phase 7: Publication Prep · v0.1.0-beta
+## [0.7.0] — Publication Prep · v0.1.0-beta
 
 ### Added
 - **MCP SSE authentication** — `RequireToken()` exported from `internal/web/server.go`;
@@ -266,7 +266,7 @@ in `internal/network` remains dormant, wired to nothing).
 
 ---
 
-## [0.6.0] — Phase 6: Security Hardening, CI Gates, Production Readiness
+## [0.6.0] — Security Hardening, CI Gates, Production Readiness
 
 ### Added
 - `exalm init` — prerequisite check wizard (LLM key, kube context, data dir, dashboard token)
@@ -286,7 +286,7 @@ in `internal/network` remains dormant, wired to nothing).
 
 ---
 
-## [0.5.0] — Phase 5: Hubble eBPF gRPC Client
+## [0.5.0] — Hubble eBPF gRPC Client
 
 ### Added
 - `internal/network/hubble_grpc.go`: real lazy gRPC connection to Hubble Relay (`/observer.Observer/GetFlows`)
@@ -307,7 +307,7 @@ in `internal/network` remains dormant, wired to nothing).
 
 ---
 
-## [0.4.0] — Phase 4: Cross-Signal Timeline, DORA Lead Time, Chaos, Webhooks
+## [0.4.0] — Cross-Signal Timeline, DORA Lead Time, Chaos, Webhooks
 
 ### Added
 - **Cross-signal correlation timeline**: `/timeline` (SVG swimlane) + `/api/timeline` (JSON)
@@ -320,7 +320,7 @@ in `internal/network` remains dormant, wired to nothing).
 
 ---
 
-## [0.3.0] — Phase 3: SSH TOFU, Incident Plugin, DORA Metrics, K8s IaC Detection
+## [0.3.0] — SSH TOFU, Incident Plugin, DORA Metrics, K8s IaC Detection
 
 ### Added
 - **SSH TOFU** (`internal/ssh/known_hosts.go`): trust-on-first-use host-key verification persisted to `~/.exalm/known_hosts`
@@ -334,7 +334,7 @@ in `internal/network` remains dormant, wired to nothing).
 
 ---
 
-## [0.2.0] — Phase 2: SSH Remote Collection, Bubble Tea TUI
+## [0.2.0] — SSH Remote Collection, Bubble Tea TUI
 
 ### Added
 - **SSH remote log collection**: all log plugins accept `--host`, `--ssh-user`, `--ssh-key`, `--ssh-port`, `--ssh-password`
@@ -344,7 +344,7 @@ in `internal/network` remains dormant, wired to nothing).
 
 ---
 
-## [0.1.0] — Phase 1: Core CLI
+## [0.1.0] — Core CLI
 
 ### Added
 - `logs summarize`: LLM-powered log analysis

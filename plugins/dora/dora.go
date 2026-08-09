@@ -49,7 +49,7 @@ func (p *Plugin) Description() string {
 //
 // NOTE: log-deploy does write to ~/.exalm/deployments.jsonl, but this is
 // treated as append-only local telemetry rather than a mutation that requires
-// --apply confirmation. Phase 4 may revisit if we add delete/edit capabilities.
+// --apply confirmation. We may revisit if we add delete/edit capabilities.
 func (p *Plugin) Mutates() bool { return false }
 
 // Subcommands returns the DORA plugin actions.
