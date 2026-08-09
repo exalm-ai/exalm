@@ -34,29 +34,15 @@ It reads Kubernetes cluster state, Linux and Windows logs, AWS cost anomalies, T
 
 ## See it in action
 
-Exalm runs as a CLI or opens a local web dashboard (`--output web`) with a
-findings panel, a log explorer, timelines, and a conversational AI
-investigation workspace.
+Point Exalm at a cluster or a log file and it returns severity-ranked findings —
+each with a likely **root cause** and a safe, copy-paste **fix** — in your
+terminal, or in a local web dashboard (`--output web`) with a findings panel, a
+log explorer, timelines, and a conversational AI investigation workspace. Secrets
+are redacted before anything reaches your LLM.
 
-<!--
-  The demo GIF and dashboard screenshots are generated reproducibly from the
-  real tool (no mockups) — see docs/screenshots.md. After running the commands
-  there, uncomment the two lines below and commit the generated assets:
+![Exalm dashboard — findings with root causes, proposed fixes, and signal counts](docs/assets/dashboard.png)
 
-  ![exalm CLI demo](docs/assets/demo.gif)
-  ![exalm dashboard](docs/assets/dashboard.png)
--->
-
-**Generate the visuals** (deterministic, no API key — uses the mock provider):
-
-```bash
-# Terminal GIF of `exalm syslog analyze` (Charm vhs)
-vhs docs/assets/demo.tape                       # → docs/assets/demo.gif
-
-# Dashboard PNG (shot-scraper / Playwright)
-EXALM_LLM_PROVIDER=mock exalm syslog analyze --file examples/syslog/wsl-live-session.jsonl --output web &
-shot-scraper http://localhost:7433 -o docs/assets/dashboard.png --width 1360 --wait 1500 --retina
-```
+<sub>Captured from the real tool with the mock provider (no API key). Contributors: see [docs/screenshots.md](docs/screenshots.md) to regenerate this shot and a terminal demo GIF.</sub>
 
 Full guide, alternatives (asciinema, silicon), and the recommended shot list:
 [docs/screenshots.md](docs/screenshots.md).
