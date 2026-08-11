@@ -138,6 +138,13 @@ func (e *Engine) executePlan(ctx context.Context, plan []plugin.PlanStep, cc Col
 			if ev[j].CollectedAt.IsZero() {
 				ev[j].CollectedAt = cc.Now
 			}
+			// Redact every excerpt here rather than trusting each collector to
+			// remember. Evidence is persisted in the transcript, rendered in the
+			// browser, and written into Markdown/HTML/JSON exports, so the LLM
+			// call's own redaction pass does not cover it. This is the last
+			// chokepoint before a raw secret leaves the process, and it is
+			// idempotent for collectors that already redact.
+			ev[j].Excerpt = redactWith(cc.Red, ev[j].Excerpt)
 		}
 		steps = append(steps, s...)
 		evidence = append(evidence, ev...)

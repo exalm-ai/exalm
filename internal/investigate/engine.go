@@ -79,7 +79,13 @@ func (e *Engine) Converse(ctx context.Context, req ConverseReq, d Deps) (*plugin
 	}
 
 	conv := loadOrCreateConversation(ctx, d.Store, req.ConvoID, req.AnchorID, req.Scope, now)
-	conv.Messages = append(conv.Messages, plugin.ConversationMessage{Role: "user", Content: message, At: now})
+	// Persist the REDACTED user turn. The transcript is written to disk (or
+	// SQLite) and re-rendered in exports, so a credential pasted into the chat
+	// box must not survive there — the per-call redaction in synthesizeReply
+	// only protects the copy sent to the LLM. The raw message stays in a local
+	// variable for focus resolution and intent matching, which need the
+	// original wording and never leave the process.
+	conv.Messages = append(conv.Messages, plugin.ConversationMessage{Role: "user", Content: redactWith(d.Red, message), At: now})
 
 	conv.Focus = e.profile.ResolveFocus(conv.Focus, req.AnchorID, message, d.Facts)
 	target := ParseFocus(conv.Focus)

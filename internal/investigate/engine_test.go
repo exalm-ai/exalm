@@ -267,6 +267,83 @@ func TestConverse_ToyTurnPipeline(t *testing.T) {
 	}
 }
 
+// The transcript is written to disk/SQLite and re-rendered in exports, so the
+// user's own turn must be stored redacted — synthesizeReply only redacts the
+// copy handed to the LLM. Documented contract: engine.go's package comment and
+// convo.Store ("only the message transcript (already redacted) persists").
+func TestConverse_PersistedTranscriptIsRedacted(t *testing.T) {
+	e := newToyEngine(t)
+	store := newTestStore(t)
+
+	conv, err := e.Converse(context.Background(),
+		ConverseReq{Scope: "factory", Message: "why is the widget sick? token=sk-toy-secret"},
+		Deps{LLM: &toyLLM{}, Red: toyRedactor{}, Store: store, Facts: toyFacts{sick: true}})
+	if err != nil {
+		t.Fatalf("Converse: %v", err)
+	}
+
+	var user plugin.ConversationMessage
+	for _, m := range conv.Messages {
+		if m.Role == "user" {
+			user = m
+			break
+		}
+	}
+	if user.Content == "" {
+		t.Fatal("no user turn recorded")
+	}
+	if strings.Contains(user.Content, "sk-toy-secret") {
+		t.Errorf("SECRET PERSISTED in the returned transcript: %q", user.Content)
+	}
+	if !strings.Contains(user.Content, "[REDACTED]") {
+		t.Errorf("user turn should carry a redaction marker, got %q", user.Content)
+	}
+
+	// And it must be redacted at rest, not just in the returned value.
+	stored, err := store.Get(context.Background(), conv.ID)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	for _, m := range stored.Messages {
+		if strings.Contains(m.Content, "sk-toy-secret") {
+			t.Errorf("SECRET PERSISTED AT REST in %s turn: %q", m.Role, m.Content)
+		}
+	}
+}
+
+// Collectors are not trusted to redact their own excerpts — the engine redacts
+// at the collection chokepoint so a collector that forgets (the "alpha" toy
+// collector here, mirroring k8s previous-logs) still cannot leak a raw secret
+// into the persisted transcript, the browser, or an exported report.
+func TestConverse_EvidenceExcerptsRedactedAtChokepoint(t *testing.T) {
+	e := newToyEngine(t)
+	store := newTestStore(t)
+
+	conv, err := e.Converse(context.Background(),
+		ConverseReq{Scope: "factory", Message: "why is the widget sick?"},
+		Deps{LLM: &toyLLM{}, Red: toyRedactor{}, Store: store, Facts: toyFacts{sick: true}})
+	if err != nil {
+		t.Fatalf("Converse: %v", err)
+	}
+
+	last := conv.Messages[len(conv.Messages)-1]
+	var sawAlpha bool
+	for _, ev := range last.Evidence {
+		if ev.Source == "alpha" {
+			sawAlpha = true
+			if strings.Contains(ev.Excerpt, "sk-toy-secret") {
+				t.Errorf("SECRET LEAKED in evidence excerpt: %q", ev.Excerpt)
+			}
+			if !strings.Contains(ev.Excerpt, "[REDACTED]") {
+				t.Errorf("excerpt should carry a redaction marker, got %q", ev.Excerpt)
+			}
+		}
+	}
+	if !sawAlpha {
+		t.Fatal("expected evidence from the un-redacting alpha collector")
+	}
+}
+
 func TestConverse_NilLLMFallbackSections(t *testing.T) {
 	e := newToyEngine(t)
 	store := newTestStore(t)
