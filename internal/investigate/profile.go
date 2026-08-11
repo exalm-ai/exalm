@@ -39,6 +39,9 @@ func (t Target) String() string {
 	return t.Scope + "/" + t.Name
 }
 
+// IsZero reports whether the target names nothing — no focus has been resolved.
+func (t Target) IsZero() bool { return t.Scope == "" && t.Name == "" }
+
 // ParseFocus splits a "scope/name" focus string into a Target.
 func ParseFocus(focus string) Target {
 	if focus == "" {

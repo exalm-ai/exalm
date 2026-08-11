@@ -125,6 +125,25 @@ type Finding struct {
 	// Investigation holds the deep root-cause investigation result. nil until a
 	// user (or an agent) triggers an investigation for this finding.
 	Investigation *Investigation `json:"investigation,omitempty"`
+	// Entity is the resource this finding is about. nil for findings whose
+	// producer has not been migrated yet, in which case the resource is still
+	// recoverable from Title via ParseEntityFromTitle. Set it at collection
+	// time where the real identity is known: it is what lets the dashboard
+	// group findings by resource, jump from a finding to its logs, changes,
+	// and conversations, and filter by namespace without substring matching.
+	Entity *Entity `json:"entity,omitempty"`
+	// FirstSeen and LastSeen bound the window over which this finding was
+	// observed. Without them a finding cannot be placed on a time axis, which
+	// is why they are set by the producer rather than stamped at render time —
+	// a chart built from "now" for every finding is not a chart.
+	//
+	// Zero means unknown. Producers that observe a single moment should set
+	// both to that moment.
+	FirstSeen time.Time `json:"first_seen,omitempty"`
+	LastSeen  time.Time `json:"last_seen,omitempty"`
+	// Count is how many times the condition was observed between FirstSeen and
+	// LastSeen. 0 means uncounted; 1 means seen once.
+	Count int `json:"count,omitempty"`
 }
 
 // ID returns a stable identifier for a finding, derived from its category,
@@ -134,6 +153,14 @@ type Finding struct {
 func (f Finding) ID() string {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(f.Category + "\x1f" + f.Title + "\x1f" + f.Source))
+	// Entity disambiguates two resources that hit the same symptom under the
+	// same title — previously they collided onto one ID and merged in the UI.
+	// Mixed in only when set, so IDs for findings that predate Finding.Entity
+	// are byte-identical to before; in particular the finding_id values already
+	// persisted on conversation records keep resolving.
+	if f.Entity != nil && !f.Entity.IsZero() {
+		_, _ = h.Write([]byte("\x1f" + f.Entity.ID()))
+	}
 	return fmt.Sprintf("f%08x", h.Sum32())
 }
 

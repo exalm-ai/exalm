@@ -42,12 +42,60 @@ func enrichFindings(findings []plugin.Finding, snap Snapshot, store *changestore
 		if len(items) > 0 {
 			findings[i].Evidence = items
 		}
+		attachEntity(&findings[i])
 		// Classify the remediation (temporary vs root-cause), derive confidence
 		// + a root-cause sentence, and assemble the explainable Fixes set. Runs
 		// after evidence/correlation so it can use both as signals.
 		Classify(&findings[i])
 	}
 	return findings
+}
+
+// attachEntity gives a finding a typed resource identity. Detectors in
+// findings.go encode the resource in the title ("CrashLoopBackOff: ns/pod"), so
+// the identity is recovered here in one place rather than threading an Entity
+// through ~18 detector call sites. A detector that sets Entity itself wins;
+// this only fills the gap.
+//
+// Without this, the dashboard can only group and filter findings by
+// substring-matching the title, and the same symptom on two different pods
+// collides onto a single finding ID.
+func attachEntity(f *plugin.Finding) {
+	if f.Entity != nil && !f.Entity.IsZero() {
+		return
+	}
+	// A correlated change already carries an exact, typed identity — prefer it
+	// over re-parsing prose.
+	if c := f.LikelyCause; c != nil && c.Name != "" {
+		f.Entity = &plugin.Entity{Kind: c.Kind, Namespace: c.Namespace, Name: c.Name}
+		return
+	}
+	if r := f.Remediation; r != nil && r.Name != "" {
+		f.Entity = &plugin.Entity{Kind: r.Resource, Namespace: r.Namespace, Name: r.Name}
+		return
+	}
+	if e := plugin.ParseEntityFromTitle(f.Title, kindForCategory(f.Category)); !e.IsZero() {
+		f.Entity = &e
+	}
+}
+
+// kindForCategory maps a finding category onto the resource kind its detectors
+// report on. Best-effort: an unknown category yields an untyped entity, which
+// still carries a usable namespace/name identity.
+func kindForCategory(category string) string {
+	switch category {
+	case "Pods":
+		return "Pod"
+	case "Nodes":
+		return "Node"
+	case "Storage":
+		return "PersistentVolumeClaim"
+	case "Networking", "Services":
+		return "Service"
+	case "Workloads":
+		return "Deployment"
+	}
+	return ""
 }
 
 // defaultStore returns a Store at the default location or nil if it can't be

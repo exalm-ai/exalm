@@ -23,7 +23,6 @@ package k8s
 // LikelyCause set where applicable, leaving the input slice untouched.
 
 import (
-	"strings"
 	"time"
 
 	"github.com/exalm-ai/exalm/internal/changestore"
@@ -94,37 +93,9 @@ func parseResourceFromTitle(title string) (ns, name string) {
 	//   "Log db-error in ns/pod"
 	//   "Selector mismatch: ns/svc"
 	//   "Container missing limits: ns/pod"
-	for _, sep := range []string{": ", " in "} {
-		if i := strings.Index(title, sep); i >= 0 {
-			rest := title[i+len(sep):]
-			if slash := strings.Index(rest, "/"); slash > 0 {
-				maybeNs := rest[:slash]
-				maybeName := rest[slash+1:]
-				maybeName = strings.TrimRight(maybeName, " .,;")
-				if isValidK8sIdent(maybeNs) && maybeName != "" && !strings.Contains(maybeNs, ".") {
-					return maybeNs, firstWord(maybeName)
-				}
-			}
-		}
-	}
-	return "", ""
-}
-
-func isValidK8sIdent(s string) bool {
-	if len(s) < 2 {
-		return false
-	}
-	for _, r := range s {
-		if r != '-' && (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
-			return false
-		}
-	}
-	return true
-}
-
-func firstWord(s string) string {
-	if i := strings.IndexAny(s, " \t\n"); i >= 0 {
-		return s[:i]
-	}
-	return s
+	//
+	// The heuristic lives in plugin.ParseEntityFromTitle so this and
+	// internal/evidence share one implementation instead of two copies.
+	e := plugin.ParseEntityFromTitle(title, "")
+	return e.Namespace, e.Name
 }

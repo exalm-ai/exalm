@@ -22,6 +22,9 @@ type (
 	EvidenceItem      = plugin.EvidenceItem
 	ChangeRef         = plugin.ChangeRef
 	Severity          = plugin.Severity
+	// Entity is the canonical identity of an observed resource — the join key
+	// between findings, evidence, changes, and conversations.
+	Entity = plugin.Entity
 )
 
 // Severity constants re-exported for convenience.
