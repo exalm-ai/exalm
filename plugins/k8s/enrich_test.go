@@ -45,6 +45,41 @@ func TestEnrichFindings_AttachesEntity(t *testing.T) {
 	}
 }
 
+// Findings must carry the real times their resource was observed misbehaving.
+// Without them the frequency chart has nothing to bucket by, which is what
+// drove the previous synthetic series.
+func TestEnrichFindings_AttachesObservationWindow(t *testing.T) {
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	snap := Snapshot{Events: []EventSummary{
+		{Namespace: "prod", PodName: "api-0", Reason: "BackOff", Count: 3, LastSeenAt: now.Add(-2 * time.Hour)},
+		{Namespace: "prod", PodName: "api-0", Reason: "Unhealthy", Count: 4, LastSeenAt: now.Add(-30 * time.Minute)},
+		{Namespace: "prod", PodName: "other", Reason: "BackOff", Count: 1, LastSeenAt: now.Add(-5 * time.Hour)},
+	}}
+	in := []plugin.Finding{
+		{Severity: plugin.SeverityCritical, Category: "Pods", Title: "CrashLoopBackOff: prod/api-0"},
+		{Severity: plugin.SeverityHigh, Category: "Pods", Title: "CrashLoopBackOff: prod/no-events"},
+	}
+
+	out := enrichFindings(in, snap, nil, now)
+
+	got := out[0]
+	if !got.FirstSeen.Equal(now.Add(-2 * time.Hour)) {
+		t.Errorf("FirstSeen = %v, want the earliest event time", got.FirstSeen)
+	}
+	if !got.LastSeen.Equal(now.Add(-30 * time.Minute)) {
+		t.Errorf("LastSeen = %v, want the latest event time", got.LastSeen)
+	}
+	if got.Count != 7 {
+		t.Errorf("Count = %d, want 7 (summed across both events)", got.Count)
+	}
+
+	// A finding with no matching events must stay zero rather than be stamped
+	// with "now" — an unknown observation time is not the present moment.
+	if quiet := out[1]; !quiet.FirstSeen.IsZero() || !quiet.LastSeen.IsZero() {
+		t.Errorf("finding without events should keep zero times, got %v/%v", quiet.FirstSeen, quiet.LastSeen)
+	}
+}
+
 // A finding whose remediation already names the resource must use that exact
 // identity rather than re-parsing prose out of the title.
 func TestEnrichFindings_PrefersRemediationIdentityOverTitle(t *testing.T) {

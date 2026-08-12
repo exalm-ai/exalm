@@ -165,6 +165,32 @@ and a PVC approaching capacity.
 		k8s.Classify(&report.Findings[i])
 	}
 
+	// Stamp observation windows and entities the way enrichment does against a
+	// live cluster. Without these the frequency chart correctly refuses to plot
+	// anything — findings with no observation time cannot be placed on an hour —
+	// so the demo would show its empty state instead of exercising the chart.
+	// Spread across the last 24h so the trend has shape; the last finding is
+	// deliberately left undated to exercise the "not shown" notice.
+	demoStart := time.Now().Add(-23 * time.Hour)
+	for i := range report.Findings {
+		f := &report.Findings[i]
+		if e := plugin.ParseEntityFromTitle(f.Title, ""); !e.IsZero() {
+			f.Entity = &e
+		}
+		if i == len(report.Findings)-1 {
+			continue
+		}
+		// Cluster the criticals into the recent past and scatter the rest, so
+		// the chart shows a rise rather than a flat line.
+		offset := time.Duration(float64(i)/float64(len(report.Findings))*20) * time.Hour
+		if f.Severity == plugin.SeverityCritical {
+			offset = time.Duration(20+i%3) * time.Hour
+		}
+		f.LastSeen = demoStart.Add(offset)
+		f.FirstSeen = f.LastSeen.Add(-30 * time.Minute)
+		f.Count = 1 + i%7
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 

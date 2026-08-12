@@ -2,6 +2,7 @@ package web
 
 import (
 	"testing"
+	"time"
 
 	"github.com/exalm-ai/exalm/pkg/plugin"
 )
@@ -130,5 +131,39 @@ func TestBuildDashboard_NilPodInfoDegrades(t *testing.T) {
 	}
 	if len(d.Namespaces) != 1 || d.Namespaces[0].Pods != 0 {
 		t.Errorf("namespace pods should be 0 without pod info: %+v", d.Namespaces)
+	}
+}
+
+func TestAgeOf_UnknownStaysUnknown(t *testing.T) {
+	// A finding with no observation time must render as unknown, never as a
+	// guess — the dashboard previously hardcoded an em-dash for every row,
+	// which hid the fact that ages were never computed at all.
+	if got := ageOf(plugin.Finding{}); got != "—" {
+		t.Errorf("no timestamp should render as em-dash, got %q", got)
+	}
+	cases := []struct {
+		ago  time.Duration
+		want string
+	}{
+		{30 * time.Second, "just now"},
+		{45 * time.Minute, "45m"},
+		{5 * time.Hour, "5h"},
+		{50 * time.Hour, "2d"},
+	}
+	for _, tc := range cases {
+		f := plugin.Finding{LastSeen: time.Now().Add(-tc.ago)}
+		if got := ageOf(f); got != tc.want {
+			t.Errorf("ageOf(%v ago) = %q, want %q", tc.ago, got, tc.want)
+		}
+	}
+}
+
+func TestRFC3339OrEmpty(t *testing.T) {
+	if got := rfc3339OrEmpty(time.Time{}); got != "" {
+		t.Errorf("zero time must serialise as empty so the UI can tell it is unknown, got %q", got)
+	}
+	at := time.Date(2026, 8, 12, 9, 30, 0, 0, time.UTC)
+	if got := rfc3339OrEmpty(at); got != "2026-08-12T09:30:00Z" {
+		t.Errorf("rfc3339OrEmpty = %q", got)
 	}
 }

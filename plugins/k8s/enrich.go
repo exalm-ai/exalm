@@ -37,12 +37,14 @@ func enrichFindings(findings []plugin.Finding, snap Snapshot, store *changestore
 		changes, _ = store.All(now.Add(-1 * time.Hour))
 	}
 	src := buildEvidenceSource(snap)
+	observed := observationIndex(snap)
 	for i := range findings {
 		items := evidence.Build(findings[i], src, changes, now)
 		if len(items) > 0 {
 			findings[i].Evidence = items
 		}
 		attachEntity(&findings[i])
+		attachObservationWindow(&findings[i], observed)
 		// Classify the remediation (temporary vs root-cause), derive confidence
 		// + a root-cause sentence, and assemble the explainable Fixes set. Runs
 		// after evidence/correlation so it can use both as signals.
@@ -76,6 +78,60 @@ func attachEntity(f *plugin.Finding) {
 	}
 	if e := plugin.ParseEntityFromTitle(f.Title, kindForCategory(f.Category)); !e.IsZero() {
 		f.Entity = &e
+	}
+}
+
+// observed bounds when a resource's condition was actually seen, derived from
+// the real event timestamps in the snapshot.
+type observed struct {
+	first, last time.Time
+	count       int
+}
+
+// observationIndex maps "namespace/name" to the window of real event times for
+// that resource. Kubernetes events carry LastSeenAt plus an occurrence count,
+// so the window is bounded by what the cluster actually reported — nothing is
+// extrapolated.
+func observationIndex(snap Snapshot) map[string]observed {
+	idx := make(map[string]observed, len(snap.Events))
+	for _, ev := range snap.Events {
+		if ev.LastSeenAt.IsZero() || ev.PodName == "" {
+			continue
+		}
+		key := ev.Namespace + "/" + ev.PodName
+		o, ok := idx[key]
+		if !ok || ev.LastSeenAt.Before(o.first) {
+			o.first = ev.LastSeenAt
+		}
+		if ev.LastSeenAt.After(o.last) {
+			o.last = ev.LastSeenAt
+		}
+		o.count += int(ev.Count)
+		idx[key] = o
+	}
+	return idx
+}
+
+// attachObservationWindow stamps a finding with when its resource was actually
+// observed misbehaving. Findings without a matching event keep zero times,
+// which callers must read as "unknown" — a finding placed on a time axis at
+// render time is not on a time axis at all, it is just stacked at "now".
+func attachObservationWindow(f *plugin.Finding, idx map[string]observed) {
+	if f.Entity == nil || f.Entity.IsZero() {
+		return
+	}
+	o, ok := idx[f.Entity.Path()]
+	if !ok {
+		return
+	}
+	if f.FirstSeen.IsZero() {
+		f.FirstSeen = o.first
+	}
+	if f.LastSeen.IsZero() {
+		f.LastSeen = o.last
+	}
+	if f.Count == 0 {
+		f.Count = o.count
 	}
 }
 

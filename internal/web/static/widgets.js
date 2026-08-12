@@ -158,15 +158,42 @@
     }).join('');
     var legend = [['crit', 'critical'], ['high', 'high'], ['med', 'medium'], ['low', 'low']].map(function (x) { return '<span style="display:flex;align-items:center;gap:5px;font-size:10.5px;color:var(--muted);"><span style="width:8px;height:8px;border-radius:2px;background:var(--' + x[0] + ');"></span>' + x[1] + '</span>'; }).join('');
     var bars = v.tsBars.map(function (b) {
-      return '<div class="ex-chart-bar" data-act="drilldown" data-kind="time" data-label="' + esc(b.title) + '" title="' + esc(b.title) + '" style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;min-width:0;cursor:pointer;">' +
+      return '<div class="ex-chart-bar" data-act="drilldown" data-kind="time" data-label="' + esc(b.title) + '" data-at="' + esc(b.iso || '') + '" title="' + esc(b.title) + '" style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;min-width:0;cursor:pointer;">' +
         b.segs.map(function (sg) { return '<div style="width:100%;height:' + sg.h + 'px;background:' + sg.bg + ';border-radius:' + (sg.first ? '3px 3px 0 0' : '0') + ';"></div>'; }).join('') + '</div>';
     }).join('');
+
+    // Axis ticks come from the real bucket times, not fixed clock labels — the
+    // window ends at the current hour, so it rarely starts at midnight.
+    var ticks = [0, 6, 12, 18].map(function (i) {
+      var b = v.tsBars[i];
+      if (!b || !b.iso) { return '<span></span>'; }
+      var d = new Date(b.iso);
+      return '<span>' + ('0' + d.getHours()).slice(-2) + ':00</span>';
+    }).join('') + '<span>now</span>';
+
+    // Say plainly when there is nothing to plot, rather than drawing a shape.
+    // Findings with no observation time cannot be placed on an hour and are
+    // reported instead of being quietly dropped.
+    var body;
+    if (!v.freqDated) {
+      body = '<div style="height:150px;display:flex;align-items:center;justify-content:center;text-align:center;color:var(--muted);font-size:12px;line-height:1.5;">' +
+        (v.freqUndated
+          ? esc(v.freqUndated + ' finding' + (v.freqUndated === 1 ? '' : 's') + ' carry no observation time,<br>so they cannot be placed on a timeline.')
+          : 'No findings in the last 24 hours.') + '</div>';
+    } else {
+      body = '<div style="display:flex;align-items:flex-end;gap:3px;height:150px;">' + bars + '</div>' +
+        '<div style="display:flex;justify-content:space-between;margin-top:7px;font-family:var(--font-mono),monospace;font-size:10px;color:var(--faint);">' + ticks + '</div>';
+    }
+
+    var note = (v.freqDated && v.freqUndated)
+      ? '<div style="margin-top:8px;font-size:10.5px;color:var(--faint);">' + esc(v.freqUndated + ' finding' + (v.freqUndated === 1 ? '' : 's') + ' without an observation time not shown') + '</div>'
+      : '';
+
     return kCard('<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px;">' +
       '<div>' + kCardLabel('Error frequency · last 24h') + '<div style="font-size:11px;color:var(--muted);margin-top:2px;">Findings trend ' + (state.freqScope === 'namespace' && !v.allMode ? 'by namespace · ' + esc(v.nsLabel) : 'by cluster') + '</div></div>' +
       '<div style="display:flex;gap:6px;">' + toggle + '</div></div>' +
       '<div style="display:flex;gap:14px;margin-bottom:8px;">' + legend + '</div>' +
-      '<div style="display:flex;align-items:flex-end;gap:3px;height:150px;">' + bars + '</div>' +
-      '<div style="display:flex;justify-content:space-between;margin-top:7px;font-family:var(--font-mono),monospace;font-size:10px;color:var(--faint);"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>now</span></div>');
+      body + note);
   }
 
   // ── Hover tooltips for .ex-chart-bar elements (moved from charts.js) ──

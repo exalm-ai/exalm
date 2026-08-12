@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/exalm-ai/exalm/pkg/plugin"
 )
@@ -60,6 +61,13 @@ type dashFinding struct {
 	Confidence string         `json:"confidence,omitempty"` // "low" | "medium" | "high"
 	Fixes      []dashFix      `json:"fixes,omitempty"`      // classified temporary + root-cause fixes
 	Evidence   []dashEvidence `json:"evidence,omitempty"`   // verifiable supporting items
+	// FirstSeen/LastSeen are RFC3339 observation bounds, empty when the
+	// producer could not determine them. They are what lets the frontend place
+	// findings on a real time axis; a chart cannot be built without them.
+	FirstSeen string `json:"firstSeen,omitempty"`
+	LastSeen  string `json:"lastSeen,omitempty"`
+	// Count is how many times the condition was observed. 0 = uncounted.
+	Count int `json:"count,omitempty"`
 }
 
 // dashFix is the front-end shape of a classified remediation.
@@ -280,6 +288,36 @@ func restartsOf(f plugin.Finding) string {
 	return "—"
 }
 
+// rfc3339OrEmpty renders a timestamp for the frontend, or "" when the producer
+// could not determine it. An em-dash or a substituted "now" would let the UI
+// present a guess as an observation.
+func rfc3339OrEmpty(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+// ageOf renders how long ago the finding was last observed. Returns an em-dash
+// when the producer supplied no timestamp — the honest answer for a finding
+// whose age is genuinely unknown.
+func ageOf(f plugin.Finding) string {
+	if f.LastSeen.IsZero() {
+		return "—"
+	}
+	d := time.Since(f.LastSeen)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
+}
+
 // firstSentence returns the first sentence of s (used as the short "reason").
 func firstSentence(s string) string {
 	s = strings.TrimSpace(s)
@@ -403,7 +441,7 @@ func buildDashboard(r plugin.Report, podInfo *PodInfo, provider string, autoRefr
 			Sev:        sevKey(f.Severity),
 			Title:      f.Title,
 			Ns:         resourcePath(f, ns),
-			Age:        "—",
+			Age:        ageOf(f),
 			Restarts:   restartsOf(f),
 			Reason:     firstSentence(f.Detail),
 			Root:       rootOf(f),
@@ -413,6 +451,9 @@ func buildDashboard(r plugin.Report, podInfo *PodInfo, provider string, autoRefr
 			Confidence: f.Confidence,
 			Fixes:      mapFixes(f.Fixes),
 			Evidence:   mapEvidence(f.Evidence),
+			FirstSeen:  rfc3339OrEmpty(f.FirstSeen),
+			LastSeen:   rfc3339OrEmpty(f.LastSeen),
+			Count:      f.Count,
 		})
 	}
 
