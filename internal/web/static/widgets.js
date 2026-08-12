@@ -40,6 +40,20 @@
 
   // ── chart primitives (inline, CSS-var themed, drill-enabled) ──
 
+  // bucketWindow turns a stats bucket into an exact [from,to) ISO range using
+  // the instant the analyzer recorded. Returns null when the bucket predates
+  // the `at` field, so callers can fall back to the old label match.
+  function bucketWindow(b) {
+    if (!b || !b.at) return null;
+    var start = new Date(b.at);
+    if (isNaN(start.getTime())) return null;
+    // widthNs is a Go time.Duration (nanoseconds); default to one minute, the
+    // granularity every analyzer timeline currently uses.
+    var ms = b.widthNs ? Math.round(b.widthNs / 1e6) : 60000;
+    if (!ms || ms < 1000) ms = 60000;
+    return { from: start.toISOString(), to: new Date(start.getTime() + ms).toISOString() };
+  }
+
   // timeline: vertical bars per bucket; click drills into that minute.
   function timelineChart(buckets, drillBase) {
     if (!buckets || !buckets.length) return '<div style="color:var(--faint);font-size:12px;">No timestamped events.</div>';
@@ -47,7 +61,20 @@
     buckets.forEach(function (b) { if (b.count > max) max = b.count; });
     var bars = buckets.map(function (b) {
       var h = Math.max(3, Math.round((b.count / max) * 64));
-      var drill = drillBase + '&contains=&bucket=' + encodeURIComponent(b.t) + (b.sev ? '&severity=' + encodeURIComponent(b.sev) : '');
+      // Drill on the bucket's real instant when the analyzer supplies one, so
+      // the log query is an exact time range. The older bucket=HH:MM form is a
+      // text match on the timestamp and is kept only as a fallback for stats
+      // payloads produced before buckets carried `at`.
+      //
+      // b.sev is the WORST severity in the bucket and drives the bar colour —
+      // it is not a filter. Passing it as one turned "5 events at 21:55" into a
+      // drilldown showing 2, silently hiding the warns underneath. The bucket
+      // is a time slice, so the drill is a time slice: every line in that
+      // minute, which is also the context you want when reading a spike.
+      var win = bucketWindow(b);
+      var drill = win
+        ? drillBase + '&contains=&from=' + encodeURIComponent(win.from) + '&to=' + encodeURIComponent(win.to)
+        : drillBase + '&contains=&bucket=' + encodeURIComponent(b.t);
       return '<div class="ex-an-drill" data-drill="' + esc(drill) + '" title="' + esc(b.t + ' · ' + b.count + (b.sev ? ' ' + b.sev : '')) + '"' +
         ' style="flex:1;min-width:3px;max-width:22px;height:' + h + 'px;background:' + sevColor(b.sev) + ';border-radius:2px 2px 0 0;cursor:pointer;opacity:.85;"></div>';
     }).join('');

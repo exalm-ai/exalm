@@ -162,11 +162,10 @@ type NameCount struct {
 }
 
 // TimeBucket is one per-minute ("15:04") bucket in a stats timeline.
-type TimeBucket struct {
-	T     string `json:"t"`
-	Count int    `json:"count"`
-	Sev   string `json:"sev,omitempty"`
-}
+// TimeBucket is the shared timeline bucket. Aliased rather than redeclared:
+// all six analyzers had byte-identical copies, and the chart drilldown needs
+// the bucket instant that the local copies did not carry.
+type TimeBucket = investigate.TimeBucket
 
 // HTTPStats is the dashboard stats payload for an httplog session.
 type HTTPStats struct {
@@ -191,8 +190,8 @@ func buildStats(s *investigate.LogSession) HTTPStats {
 	uriHist := map[string]int{}
 	clientHist := map[string]int{}
 	uaHist := map[string]int{}
-	perMinute := map[string]int{}
-	perMinute5xx := map[string]int{}
+	perMinute := map[time.Time]int{}
+	perMinute5xx := map[time.Time]int{}
 	for _, e := range events {
 		if e.Code == "" {
 			continue // error-log line, not an access record
@@ -220,7 +219,7 @@ func buildStats(s *investigate.LogSession) HTTPStats {
 		if e.At.IsZero() {
 			continue
 		}
-		bucket := e.At.Format("15:04")
+		bucket := investigate.BucketMinute(e.At)
 		perMinute[bucket]++
 		if e.Severity == "5xx" {
 			perMinute5xx[bucket]++
@@ -236,20 +235,20 @@ func buildStats(s *investigate.LogSession) HTTPStats {
 }
 
 // minuteTimeline converts per-minute counts into a time-ordered timeline.
-func minuteTimeline(m map[string]int) []TimeBucket {
+func minuteTimeline(m map[time.Time]int) []TimeBucket {
 	out := make([]TimeBucket, 0, len(m))
 	for t, n := range m {
-		out = append(out, TimeBucket{T: t, Count: n})
+		out = append(out, TimeBucket{T: t.Format("15:04"), At: t, Width: time.Minute, Count: n})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].T < out[j].T })
+	sort.Slice(out, func(i, j int) bool { return out[i].At.Before(out[j].At) })
 	return out
 }
 
 // burstBuckets returns the n busiest minutes, worst first.
-func burstBuckets(m map[string]int, n int) []TimeBucket {
+func burstBuckets(m map[time.Time]int, n int) []TimeBucket {
 	out := make([]TimeBucket, 0, len(m))
 	for t, c := range m {
-		out = append(out, TimeBucket{T: t, Count: c})
+		out = append(out, TimeBucket{T: t.Format("15:04"), At: t, Width: time.Minute, Count: c})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Count != out[j].Count {

@@ -164,3 +164,45 @@ func TestAnalyze_BuildsInvestigationSession(t *testing.T) {
 		t.Errorf("Vocabulary units = %v, want sshd/cron/kernel", units)
 	}
 }
+
+// Timeline buckets must carry the instant they cover, not just a "15:04"
+// label. The label alone drops the date, so a chart click cannot be resolved
+// back to a time range — which is why the drilldown used to fall back to a
+// text match on the timestamp.
+func TestBuildStats_TimelineBucketsCarryInstant(t *testing.T) {
+	s := investigate.NewLogSession("syslog")
+	idx := s.AddSource(investigate.SourceDesc{Path: "test"})
+	at := time.Date(2026, 5, 13, 10, 0, 30, 0, time.UTC)
+	s.Append(
+		investigate.LogEvent{At: at, Severity: "err", Unit: "sshd", Message: "boom", Raw: "x", Source: idx},
+		investigate.LogEvent{At: at.Add(10 * time.Second), Severity: "warn", Unit: "sshd", Message: "meh", Raw: "x", Source: idx},
+		investigate.LogEvent{At: at.Add(3 * time.Minute), Severity: "err", Unit: "sshd", Message: "boom again", Raw: "x", Source: idx},
+	)
+
+	tl := buildStats(s).SeverityTimeline
+	if len(tl) != 2 {
+		t.Fatalf("expected 2 minute buckets, got %d: %+v", len(tl), tl)
+	}
+	for _, b := range tl {
+		if b.At.IsZero() {
+			t.Fatalf("bucket %q carries no instant", b.T)
+		}
+		if !b.At.Equal(b.At.Truncate(time.Minute)) {
+			t.Errorf("bucket instant %v is not minute-aligned", b.At)
+		}
+		if b.Width != time.Minute {
+			t.Errorf("bucket width = %v, want 1m", b.Width)
+		}
+		if b.T != b.At.Format("15:04") {
+			t.Errorf("label %q does not match instant %v", b.T, b.At)
+		}
+	}
+	// Ascending by real time, so the chart's x-axis is chronological.
+	if !tl[0].At.Before(tl[1].At) {
+		t.Errorf("buckets not sorted by instant: %v then %v", tl[0].At, tl[1].At)
+	}
+	// The first bucket holds both events from that minute.
+	if tl[0].Count != 2 {
+		t.Errorf("first bucket count = %d, want 2", tl[0].Count)
+	}
+}
