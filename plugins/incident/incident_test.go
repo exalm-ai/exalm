@@ -146,11 +146,22 @@ func TestList_StatusFilter(t *testing.T) {
 
 	_, _ = p.open(ctx, baseArgs(map[string]string{"title": "Open one"}))
 
-	// Manually open a second incident and immediately close it.
+	// Manually open a second incident and immediately close it. Select it by
+	// title rather than by list position: both incidents are opened in the same
+	// instant, so relying on "newest first" put the test at the mercy of the
+	// sort's tie-break and it would intermittently close "Open one" instead.
 	_, _ = p.open(ctx, baseArgs(map[string]string{"title": "Closed one", "severity": "low"}))
 	incidents, _ := p.store.List(ctx)
-	// incidents are sorted newest-first; the second open is incidents[0].
-	incToClose := incidents[0]
+	var incToClose Incident
+	for _, inc := range incidents {
+		if inc.Title == "Closed one" {
+			incToClose = inc
+			break
+		}
+	}
+	if incToClose.ID == "" {
+		t.Fatalf("could not find the incident to close in %d incidents", len(incidents))
+	}
 	_, _ = p.close(ctx, baseArgs(map[string]string{"incident-id": incToClose.ID}))
 
 	// Filter for open only.

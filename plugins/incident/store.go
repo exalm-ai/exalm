@@ -139,7 +139,16 @@ func (s *fileStore) List(_ context.Context) ([]Incident, error) {
 	}
 
 	sort.Slice(incidents, func(i, j int) bool {
-		return incidents[i].OpenedAt.After(incidents[j].OpenedAt)
+		if !incidents[i].OpenedAt.Equal(incidents[j].OpenedAt) {
+			return incidents[i].OpenedAt.After(incidents[j].OpenedAt)
+		}
+		// Incidents opened within the same timestamp granularity would otherwise
+		// come back in an unspecified order — sort.Slice is not stable and the
+		// directory read order is not either, so a listing could reshuffle
+		// between refreshes. IDs embed a monotonic per-process counter
+		// (INC-<date>-<time>-NNN), which makes descending ID an exact
+		// newest-first tie-break.
+		return incidents[i].ID > incidents[j].ID
 	})
 	return incidents, nil
 }
