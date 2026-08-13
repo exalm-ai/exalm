@@ -186,8 +186,9 @@ and a PVC approaching capacity.
 		if f.Severity == plugin.SeverityCritical {
 			offset = time.Duration(20+i%3) * time.Hour
 		}
-		f.LastSeen = demoStart.Add(offset)
-		f.FirstSeen = f.LastSeen.Add(-30 * time.Minute)
+		last := demoStart.Add(offset)
+		first := last.Add(-30 * time.Minute)
+		f.LastSeen, f.FirstSeen = &last, &first
 		f.Count = 1 + i%7
 	}
 

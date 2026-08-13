@@ -291,8 +291,8 @@ func restartsOf(f plugin.Finding) string {
 // rfc3339OrEmpty renders a timestamp for the frontend, or "" when the producer
 // could not determine it. An em-dash or a substituted "now" would let the UI
 // present a guess as an observation.
-func rfc3339OrEmpty(t time.Time) string {
-	if t.IsZero() {
+func rfc3339OrEmpty(t *time.Time) string {
+	if t == nil || t.IsZero() {
 		return ""
 	}
 	return t.UTC().Format(time.RFC3339)
@@ -302,10 +302,10 @@ func rfc3339OrEmpty(t time.Time) string {
 // when the producer supplied no timestamp — the honest answer for a finding
 // whose age is genuinely unknown.
 func ageOf(f plugin.Finding) string {
-	if f.LastSeen.IsZero() {
+	if f.LastSeen == nil || f.LastSeen.IsZero() {
 		return "—"
 	}
-	d := time.Since(f.LastSeen)
+	d := time.Since(*f.LastSeen)
 	switch {
 	case d < time.Minute:
 		return "just now"

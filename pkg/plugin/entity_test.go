@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestEntity_PathAndString(t *testing.T) {
@@ -183,9 +184,37 @@ func TestFinding_NewFieldsOmittedFromJSONWhenUnset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	for _, key := range []string{`"entity"`, `"count"`} {
+	for _, key := range []string{`"entity"`, `"count"`, `"first_seen"`, `"last_seen"`} {
 		if strings.Contains(string(raw), key) {
 			t.Errorf("unset field %s should be omitted, got %s", key, raw)
 		}
+	}
+	// The specific trap: a plain time.Time cannot be omitted by encoding/json,
+	// so an unknown observation time would serialise as the year 1 and any
+	// consumer plotting it would place the finding in 0001. The timestamps are
+	// pointers precisely to make "unknown" absent rather than ancient.
+	if strings.Contains(string(raw), "0001-01-01") {
+		t.Errorf("unknown timestamps must be absent, not the zero instant: %s", raw)
+	}
+}
+
+func TestFinding_TimestampsRoundTripWhenSet(t *testing.T) {
+	at := time.Date(2026, 8, 12, 9, 30, 0, 0, time.UTC)
+	raw, err := json.Marshal(Finding{Title: "x", FirstSeen: &at, LastSeen: &at, Count: 3})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var back Finding
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if back.FirstSeen == nil || !back.FirstSeen.Equal(at) {
+		t.Errorf("FirstSeen did not round-trip: %v", back.FirstSeen)
+	}
+	if back.LastSeen == nil || !back.LastSeen.Equal(at) {
+		t.Errorf("LastSeen did not round-trip: %v", back.LastSeen)
+	}
+	if back.Count != 3 {
+		t.Errorf("Count = %d, want 3", back.Count)
 	}
 }

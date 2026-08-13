@@ -124,11 +124,13 @@ func attachObservationWindow(f *plugin.Finding, idx map[string]observed) {
 	if !ok {
 		return
 	}
-	if f.FirstSeen.IsZero() {
-		f.FirstSeen = o.first
+	if f.FirstSeen == nil && !o.first.IsZero() {
+		first := o.first
+		f.FirstSeen = &first
 	}
-	if f.LastSeen.IsZero() {
-		f.LastSeen = o.last
+	if f.LastSeen == nil && !o.last.IsZero() {
+		last := o.last
+		f.LastSeen = &last
 	}
 	if f.Count == 0 {
 		f.Count = o.count

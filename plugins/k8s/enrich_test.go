@@ -63,10 +63,10 @@ func TestEnrichFindings_AttachesObservationWindow(t *testing.T) {
 	out := enrichFindings(in, snap, nil, now)
 
 	got := out[0]
-	if !got.FirstSeen.Equal(now.Add(-2 * time.Hour)) {
+	if got.FirstSeen == nil || !got.FirstSeen.Equal(now.Add(-2*time.Hour)) {
 		t.Errorf("FirstSeen = %v, want the earliest event time", got.FirstSeen)
 	}
-	if !got.LastSeen.Equal(now.Add(-30 * time.Minute)) {
+	if got.LastSeen == nil || !got.LastSeen.Equal(now.Add(-30*time.Minute)) {
 		t.Errorf("LastSeen = %v, want the latest event time", got.LastSeen)
 	}
 	if got.Count != 7 {
@@ -75,8 +75,8 @@ func TestEnrichFindings_AttachesObservationWindow(t *testing.T) {
 
 	// A finding with no matching events must stay zero rather than be stamped
 	// with "now" — an unknown observation time is not the present moment.
-	if quiet := out[1]; !quiet.FirstSeen.IsZero() || !quiet.LastSeen.IsZero() {
-		t.Errorf("finding without events should keep zero times, got %v/%v", quiet.FirstSeen, quiet.LastSeen)
+	if quiet := out[1]; quiet.FirstSeen != nil || quiet.LastSeen != nil {
+		t.Errorf("finding without events must keep nil times, got %v/%v", quiet.FirstSeen, quiet.LastSeen)
 	}
 }
 

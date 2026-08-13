@@ -151,7 +151,8 @@ func TestAgeOf_UnknownStaysUnknown(t *testing.T) {
 		{50 * time.Hour, "2d"},
 	}
 	for _, tc := range cases {
-		f := plugin.Finding{LastSeen: time.Now().Add(-tc.ago)}
+		last := time.Now().Add(-tc.ago)
+		f := plugin.Finding{LastSeen: &last}
 		if got := ageOf(f); got != tc.want {
 			t.Errorf("ageOf(%v ago) = %q, want %q", tc.ago, got, tc.want)
 		}
@@ -159,11 +160,14 @@ func TestAgeOf_UnknownStaysUnknown(t *testing.T) {
 }
 
 func TestRFC3339OrEmpty(t *testing.T) {
-	if got := rfc3339OrEmpty(time.Time{}); got != "" {
+	if got := rfc3339OrEmpty(nil); got != "" {
+		t.Errorf("nil must serialise as empty, got %q", got)
+	}
+	if got := rfc3339OrEmpty(&time.Time{}); got != "" {
 		t.Errorf("zero time must serialise as empty so the UI can tell it is unknown, got %q", got)
 	}
 	at := time.Date(2026, 8, 12, 9, 30, 0, 0, time.UTC)
-	if got := rfc3339OrEmpty(at); got != "2026-08-12T09:30:00Z" {
+	if got := rfc3339OrEmpty(&at); got != "2026-08-12T09:30:00Z" {
 		t.Errorf("rfc3339OrEmpty = %q", got)
 	}
 }

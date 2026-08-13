@@ -137,10 +137,12 @@ type Finding struct {
 	// is why they are set by the producer rather than stamped at render time —
 	// a chart built from "now" for every finding is not a chart.
 	//
-	// Zero means unknown. Producers that observe a single moment should set
-	// both to that moment.
-	FirstSeen time.Time `json:"first_seen,omitempty"`
-	LastSeen  time.Time `json:"last_seen,omitempty"`
+	// nil means unknown. They are pointers because encoding/json cannot omit a
+	// non-empty struct type: a plain time.Time would serialise unknown as
+	// "0001-01-01T00:00:00Z", and a consumer would faithfully plot the finding
+	// in the year 1. Producers observing a single moment set both to it.
+	FirstSeen *time.Time `json:"first_seen,omitempty"`
+	LastSeen  *time.Time `json:"last_seen,omitempty"`
 	// Count is how many times the condition was observed between FirstSeen and
 	// LastSeen. 0 means uncounted; 1 means seen once.
 	Count int `json:"count,omitempty"`
