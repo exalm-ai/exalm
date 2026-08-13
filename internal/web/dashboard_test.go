@@ -171,3 +171,23 @@ func TestRFC3339OrEmpty(t *testing.T) {
 		t.Errorf("rfc3339OrEmpty = %q", got)
 	}
 }
+
+func TestRootOf_NeverPresentsDetailAsACause(t *testing.T) {
+	// Detail describes what was observed. Labelling it "Likely cause" both
+	// duplicates the line above it in the card and asserts a conclusion nothing
+	// derived — most visibly for anomaly findings, which deliberately carry no
+	// root cause.
+	f := plugin.Finding{
+		Title:  "Activity spiked +7000% at 07:20",
+		Detail: "70 events in 1m versus a median of 0 across the preceding 15 buckets (+7000%).",
+	}
+	if got := rootOf(f); got != "" {
+		t.Errorf("a finding with no root cause must yield no cause line, got %q", got)
+	}
+
+	// An explicit root cause still renders.
+	f.RootCause = "Connection pool exhausted"
+	if got := rootOf(f); got != "Connection pool exhausted" {
+		t.Errorf("explicit root cause = %q", got)
+	}
+}

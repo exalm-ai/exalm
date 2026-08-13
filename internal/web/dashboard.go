@@ -332,14 +332,17 @@ func firstSentence(s string) string {
 
 // rootOf builds the root-cause line, enriching with change-correlation when set.
 func rootOf(f plugin.Finding) string {
-	// Prefer the explicit root cause (set by classify.go for k8s and by the
-	// analyzer findings promoter) so the dashboard's "Likely cause" line shows
-	// the underlying cause, not a repeat of the observed detail. Fall back to
-	// Detail only when no root cause was derived.
+	// Only an explicit root cause (set by classify.go for k8s and by the analyzer
+	// findings promoter) may appear under the "Likely cause" label.
+	//
+	// This deliberately does NOT fall back to Detail. Detail is what was
+	// observed; presenting it as a cause both duplicates the line above it and
+	// asserts a conclusion nothing derived. Anomaly findings make the problem
+	// obvious — the detector knows a bucket moved and says so in Detail, but has
+	// no cause to offer, and the card rendered "Likely cause: 70 events in 1m
+	// versus a median of 0" as though that were an explanation. The UI omits the
+	// line when this returns empty.
 	root := strings.TrimSpace(f.RootCause)
-	if root == "" {
-		root = strings.TrimSpace(f.Detail)
-	}
 	if f.LikelyCause != nil {
 		lc := f.LikelyCause
 		ago := humanizeAgo(lc.AgoSeconds)
@@ -356,9 +359,9 @@ func rootOf(f plugin.Finding) string {
 			root += " — " + cause
 		}
 	}
-	if root == "" {
-		return "—"
-	}
+	// Empty, not an em-dash: the card renders the "Likely cause" line only when
+	// this is non-empty, and "—" is truthy in JS, so a placeholder here produced
+	// a cause line reading "Likely cause: —".
 	return root
 }
 
