@@ -80,25 +80,47 @@ func TestEnrichFindings_AttachesObservationWindow(t *testing.T) {
 	}
 }
 
-// A finding whose remediation already names the resource must use that exact
-// identity rather than re-parsing prose out of the title.
-func TestEnrichFindings_PrefersRemediationIdentityOverTitle(t *testing.T) {
-	in := []plugin.Finding{{
-		Severity: plugin.SeverityCritical,
-		Category: "Pods",
-		Title:    "CrashLoopBackOff: prod/api-0",
-		Remediation: &plugin.RemediationAction{
-			Kind: "rollout-restart", Resource: "Deployment", Namespace: "prod", Name: "api",
+// The title names the resource the finding is ABOUT; the remediation names the
+// resource to ACT ON. A live cluster showed the k8s remediation builder pairing
+// Resource:"deployment" with a Pod's name, so trusting it first mislabelled the
+// entity. The subject wins; the remediation is only a fallback for titles that
+// name no resource.
+func TestEnrichFindings_TitleSubjectWinsOverRemediationTarget(t *testing.T) {
+	in := []plugin.Finding{
+		{
+			Severity: plugin.SeverityCritical,
+			Category: "Pods",
+			Title:    "CrashLoopBackOff: prod/api-0",
+			// Mirrors the real builder: a deployment-shaped action derived from
+			// the pod, carrying the POD's name.
+			Remediation: &plugin.RemediationAction{
+				Kind: "rollout-restart", Resource: "deployment", Namespace: "prod", Name: "api-0",
+			},
 		},
-	}}
+		{
+			Severity: plugin.SeverityHigh,
+			Category: "Security",
+			Title:    "RBAC risk: cluster-admin",
+			Remediation: &plugin.RemediationAction{
+				Kind: "patch", Resource: "ClusterRoleBinding", Namespace: "", Name: "cluster-admin",
+			},
+		},
+	}
 
 	out := enrichFindings(in, Snapshot{}, nil, time.Now())
+
 	got := out[0].Entity
 	if got == nil {
 		t.Fatal("expected an entity")
 	}
-	if got.Kind != "Deployment" || got.Path() != "prod/api" {
-		t.Errorf("entity = %+v, want Deployment prod/api", got)
+	if got.Kind != "Pod" || got.Path() != "prod/api-0" {
+		t.Errorf("entity = %+v, want the Pod subject prod/api-0", got)
+	}
+
+	// A title naming no resource still falls back to the remediation.
+	fb := out[1].Entity
+	if fb == nil || fb.Name != "cluster-admin" || fb.Kind != "ClusterRoleBinding" {
+		t.Errorf("fallback entity = %+v, want ClusterRoleBinding cluster-admin", fb)
 	}
 }
 
@@ -112,5 +134,26 @@ func TestEnrichFindings_SameSymptomDifferentPodsStayDistinct(t *testing.T) {
 	out := enrichFindings(in, Snapshot{}, nil, time.Now())
 	if out[0].ID() == out[1].ID() {
 		t.Errorf("findings on different pods share an ID: %s", out[0].ID())
+	}
+}
+
+// Category alone cannot type a finding: a live cluster showed "Pods" covering
+// ImagePullBackOff, "Deployment stalled" and "ReplicaSet not ready" alike.
+func TestKindForFinding_TitlePrefixBeatsCoarseCategory(t *testing.T) {
+	cases := []struct{ title, category, want string }{
+		{"Deployment stalled: payments/checkout", "Pods", "Deployment"},
+		{"ReplicaSet not ready: payments/checkout-59fc", "Pods", "ReplicaSet"},
+		{"Service selector mismatch: payments/order-gateway", "Services", "Service"},
+		{"PVC near capacity: analytics/data-pvc", "Storage", "PersistentVolumeClaim"},
+		{"HPA maxed out: prod/auth", "Resources", "HorizontalPodAutoscaler"},
+		// No kind in the title: fall back to the category.
+		{"ImagePullBackOff: analytics/ml-inference-6b6c", "Pods", "Pod"},
+		{"Something odd: ns/name", "Nodes", "Node"},
+		{"Something odd: ns/name", "Mystery", ""},
+	}
+	for _, tc := range cases {
+		if got := kindForFinding(tc.title, tc.category); got != tc.want {
+			t.Errorf("kindForFinding(%q, %q) = %q, want %q", tc.title, tc.category, got, tc.want)
+		}
 	}
 }

@@ -76,7 +76,8 @@ func (p *Plugin) summarize(ctx context.Context, args plugin.RunArgs) (plugin.Rep
 	}
 	idx := session.AddSource(investigate.SourceDesc{Path: srcPath})
 	session.Append(parseEvents(idx, raw)...)
-	session.Stats = buildStats(session)
+	stats := buildStats(session)
+	session.Stats = stats
 
 	// CRITICAL: redact before any data leaves the process.
 	redacted := args.Redactor.Redact(string(raw))
@@ -97,12 +98,18 @@ func (p *Plugin) summarize(ctx context.Context, args plugin.RunArgs) (plugin.Rep
 
 	p.setSession(session)
 
+	source := investigate.FindingSource("logs", "", session)
+	findings := investigate.FindingsFrom(logsProfile(), session, investigate.Target{}, source)
+	// Candidate findings from the timeline: a bucket far outside its own recent
+	// baseline. These say something moved, not why — the investigation engine is
+	// what establishes cause.
+	findings = append(findings, investigate.DetectAnomalies(session, stats.ErrorTimeline, plugin.Entity{}, source)...)
+
 	return plugin.Report{
-		Title:   "Log analysis",
-		Summary: fmt.Sprintf("Analyzed %d bytes of log content using %s.", len(raw), args.LLM.Name()),
-		Raw:     resp.Content,
-		Findings: investigate.FindingsFrom(logsProfile(), session, investigate.Target{},
-			investigate.FindingSource("logs", "", session)),
+		Title:    "Log analysis",
+		Summary:  fmt.Sprintf("Analyzed %d bytes of log content using %s.", len(raw), args.LLM.Name()),
+		Raw:      resp.Content,
+		Findings: findings,
 	}, nil
 }
 

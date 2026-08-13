@@ -76,9 +76,15 @@ func (p *Plugin) analyze(ctx context.Context, args plugin.RunArgs) (plugin.Repor
 	if err != nil {
 		return plugin.Report{}, err
 	}
-	session.Stats = buildStats(session)
+	stats := buildStats(session)
+	session.Stats = stats
 	p.setSession(session)
 	rep.Findings = investigate.FindingsFrom(cloudtrailProfile(), session, investigate.Target{},
 		investigate.FindingSource("cloudtrail", "", session))
+	// Candidate findings from the timeline: a bucket far outside its own recent
+	// baseline. These say something moved, not why — the investigation engine is
+	// what establishes cause.
+	rep.Findings = append(rep.Findings, investigate.DetectAnomalies(session,
+		stats.EventTimeline, plugin.Entity{}, investigate.FindingSource("cloudtrail", "", session))...)
 	return rep, nil
 }

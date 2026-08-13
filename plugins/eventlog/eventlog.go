@@ -138,10 +138,16 @@ func (p *Plugin) summarize(ctx context.Context, args plugin.RunArgs) (plugin.Rep
 	if err != nil {
 		return plugin.Report{}, err
 	}
-	session.Stats = buildStats(session)
+	stats := buildStats(session)
+	session.Stats = stats
 	p.setSession(session)
 	rep.Findings = investigate.FindingsFrom(p.InvestigationProfile(), session, investigate.Target{},
 		investigate.FindingSource("eventlog", remoteHost, session))
+	// Candidate findings from the timeline: a bucket far outside its own
+	// recent baseline. These say something moved, not why — the investigation
+	// engine is what establishes cause.
+	rep.Findings = append(rep.Findings, investigate.DetectAnomalies(session,
+		stats.LevelTimeline, plugin.Entity{}, investigate.FindingSource("eventlog", remoteHost, session))...)
 	return rep, nil
 }
 
