@@ -41,7 +41,7 @@ echo "kernel: out of memory: killed pid 8123 (nginx)" | ./bin/exalm logs summari
 
 ## Adding a new plugin
 
-The plugin interface is 3 methods. All 13 existing plugins follow the same structure.
+The plugin interface is 4 methods. All 14 existing plugins follow the same structure.
 A new plugin that reads a data source and returns an LLM-powered report is a half-day
 of work.
 

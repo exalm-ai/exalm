@@ -454,7 +454,7 @@ make lint         # gofmt + go vet + golangci-lint
 
 ## Contributing
 
-The plugin interface is 3 methods. All existing plugins follow the same pattern.
+The plugin interface is 4 methods. All existing plugins follow the same pattern.
 Adding a new data source is a half-day of work.
 
 See [CONTRIBUTOR_WORKFLOW.md](CONTRIBUTOR_WORKFLOW.md) for:
