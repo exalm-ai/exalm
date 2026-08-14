@@ -2,6 +2,11 @@ module github.com/exalm-ai/exalm
 
 go 1.26.0
 
+// Pinned to the patch that carries the current stdlib security fixes:
+// go1.26.5 is affected by GO-2026-6089/6090/6091/5972/5026 (net/http,
+// crypto/tls, html/template, encoding/asn1), all fixed in go1.26.6.
+toolchain go1.26.6
+
 require (
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10

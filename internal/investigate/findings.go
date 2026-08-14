@@ -62,6 +62,15 @@ func findingFromSymptom(p Profile, s Symptom, f Facts, t Target, source string) 
 		Source:    source,
 	}
 
+	// Carry the investigation target through as the finding's entity. Scope maps
+	// to Namespace so Entity.Path() reproduces Target.String() exactly — the
+	// same "scope/name" string already used by Conversation.Focus — which keeps
+	// every existing consumer working while giving the dashboard a typed
+	// identity to group and filter on instead of substring-matching the title.
+	if !t.IsZero() {
+		fnd.Entity = &plugin.Entity{Namespace: t.Scope, Name: t.Name}
+	}
+
 	// Detail: prefer the domain's count-rich description; else a generic line
 	// built from the ranked top cause.
 	if s.Describe != nil {

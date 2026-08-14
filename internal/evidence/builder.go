@@ -124,44 +124,12 @@ func Build(finding plugin.Finding, src Source, changes []changestore.ChangeEvent
 //	"Selector mismatch: ns/svc"
 //	"Log db-error in exalm-prod/api-gateway-7c9b"
 //
-// Returns ("", "") when no match. Best-effort — extra-cautious to avoid
-// matching image paths like gcr.io/google-containers.
+// Returns ("", "") when no match. The heuristic itself lives in
+// plugin.ParseEntityFromTitle — it used to exist here and in plugins/k8s as
+// two near-identical copies that could drift apart.
 func extractNamespaceAndName(title string) (ns, name string) {
-	for _, sep := range []string{": ", " in ", "blocked: "} {
-		if i := strings.Index(title, sep); i >= 0 {
-			rest := title[i+len(sep):]
-			if slash := strings.Index(rest, "/"); slash > 0 {
-				maybeNs := rest[:slash]
-				maybeName := rest[slash+1:]
-				// Trim trailing punctuation/garbage.
-				maybeName = strings.TrimRight(maybeName, " .,;")
-				if isValidIdent(maybeNs) && maybeName != "" && !strings.Contains(maybeNs, ".") {
-					return maybeNs, firstWord(maybeName)
-				}
-			}
-		}
-	}
-	return "", ""
-}
-
-func isValidIdent(s string) bool {
-	if len(s) < 2 {
-		return false
-	}
-	for _, r := range s {
-		if r != '-' && (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
-			return false
-		}
-	}
-	return true
-}
-
-// firstWord returns the first whitespace-delimited token of s.
-func firstWord(s string) string {
-	if i := strings.IndexAny(s, " \t\n"); i >= 0 {
-		return s[:i]
-	}
-	return s
+	e := plugin.ParseEntityFromTitle(title, "")
+	return e.Namespace, e.Name
 }
 
 // firstErrorLine scans a log tail for the first line containing an error

@@ -142,11 +142,10 @@ type NameCount struct {
 }
 
 // TimeBucket is one per-minute ("15:04") bucket in a stats timeline.
-type TimeBucket struct {
-	T     string `json:"t"`
-	Count int    `json:"count"`
-	Sev   string `json:"sev,omitempty"`
-}
+// TimeBucket is the shared timeline bucket. Aliased rather than redeclared:
+// all six analyzers had byte-identical copies, and the chart drilldown needs
+// the bucket instant that the local copies did not carry.
+type TimeBucket = investigate.TimeBucket
 
 // IISStats is the dashboard stats payload for an IIS session.
 type IISStats struct {
@@ -168,7 +167,7 @@ func buildStats(s *investigate.LogSession) IISStats {
 	codeHist := map[string]int{}
 	uriHist := map[string]int{}
 	siteHist := map[string]int{}
-	perMinute := map[string]int{}
+	perMinute := map[time.Time]int{}
 	for _, e := range events {
 		if e.Code != "" {
 			codeHist[e.Code]++
@@ -185,13 +184,13 @@ func buildStats(s *investigate.LogSession) IISStats {
 			}
 		}
 		if !e.At.IsZero() {
-			perMinute[e.At.Format("15:04")]++
+			perMinute[investigate.BucketMinute(e.At)]++
 		}
 	}
 	for t, n := range perMinute {
-		st.RequestTimeline = append(st.RequestTimeline, TimeBucket{T: t, Count: n})
+		st.RequestTimeline = append(st.RequestTimeline, TimeBucket{T: t.Format("15:04"), At: t, Width: time.Minute, Count: n})
 	}
-	sort.Slice(st.RequestTimeline, func(i, j int) bool { return st.RequestTimeline[i].T < st.RequestTimeline[j].T })
+	sort.Slice(st.RequestTimeline, func(i, j int) bool { return st.RequestTimeline[i].At.Before(st.RequestTimeline[j].At) })
 	st.CodeHistogram = topCounts(codeHist, 10)
 	st.TopURIs = topCounts(uriHist, 10)
 	st.TopSites = topCounts(siteHist, 10)

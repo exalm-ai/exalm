@@ -204,11 +204,10 @@ type NameCount struct {
 }
 
 // TimeBucket is one per-minute ("15:04") bucket in a stats timeline.
-type TimeBucket struct {
-	T     string `json:"t"`
-	Count int    `json:"count"`
-	Sev   string `json:"sev,omitempty"`
-}
+// TimeBucket is the shared timeline bucket. Aliased rather than redeclared:
+// all six analyzers had byte-identical copies, and the chart drilldown needs
+// the bucket instant that the local copies did not carry.
+type TimeBucket = investigate.TimeBucket
 
 // EventLogStats is the dashboard stats payload for an eventlog session.
 type EventLogStats struct {
@@ -244,8 +243,8 @@ func buildStats(s *investigate.LogSession) EventLogStats {
 	var st EventLogStats
 	idHist := map[string]int{}
 	provHist := map[string]int{}
-	minuteCount := map[string]int{}
-	minuteWorst := map[string]int{}
+	minuteCount := map[time.Time]int{}
+	minuteWorst := map[time.Time]int{}
 	for _, e := range events {
 		if e.Code != "" {
 			idHist[e.Code]++
@@ -266,7 +265,7 @@ func buildStats(s *investigate.LogSession) EventLogStats {
 		if e.At.IsZero() {
 			continue
 		}
-		bucket := e.At.Format("15:04")
+		bucket := investigate.BucketMinute(e.At)
 		minuteCount[bucket]++
 		rank := levelRank(e.Severity)
 		if cur, ok := minuteWorst[bucket]; !ok || rank < cur {
@@ -275,7 +274,7 @@ func buildStats(s *investigate.LogSession) EventLogStats {
 	}
 	levelNames := []string{"Critical", "Error", "Warning", "Information"}
 	for bucket, n := range minuteCount {
-		st.LevelTimeline = append(st.LevelTimeline, TimeBucket{T: bucket, Count: n, Sev: levelNames[minuteWorst[bucket]]})
+		st.LevelTimeline = append(st.LevelTimeline, TimeBucket{T: bucket.Format("15:04"), At: bucket, Width: time.Minute, Count: n, Sev: levelNames[minuteWorst[bucket]]})
 	}
 	sort.Slice(st.LevelTimeline, func(i, j int) bool { return st.LevelTimeline[i].T < st.LevelTimeline[j].T })
 	st.TopEventIDs = topCounts(idHist, 10)

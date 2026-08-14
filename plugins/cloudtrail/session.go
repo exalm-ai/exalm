@@ -88,11 +88,10 @@ type NameCount struct {
 }
 
 // TimeBucket is one per-minute ("15:04") bucket in a stats timeline.
-type TimeBucket struct {
-	T     string `json:"t"`
-	Count int    `json:"count"`
-	Sev   string `json:"sev,omitempty"`
-}
+// TimeBucket is the shared timeline bucket. Aliased rather than redeclared:
+// all six analyzers had byte-identical copies, and the chart drilldown needs
+// the bucket instant that the local copies did not carry.
+type TimeBucket = investigate.TimeBucket
 
 // CloudTrailStats is the dashboard stats payload for a cloudtrail session.
 type CloudTrailStats struct {
@@ -116,7 +115,7 @@ func buildStats(s *investigate.LogSession) CloudTrailStats {
 	eventHist := map[string]int{}
 	principalHist := map[string]int{}
 	ipHist := map[string]int{}
-	perMinute := map[string]int{}
+	perMinute := map[time.Time]int{}
 
 	for _, e := range events {
 		eventHist[e.Unit]++
@@ -142,7 +141,7 @@ func buildStats(s *investigate.LogSession) CloudTrailStats {
 		if e.At.IsZero() {
 			continue
 		}
-		perMinute[e.At.Format("15:04")]++
+		perMinute[investigate.BucketMinute(e.At)]++
 	}
 
 	st.EventTimeline = minuteTimeline(perMinute)
@@ -153,12 +152,12 @@ func buildStats(s *investigate.LogSession) CloudTrailStats {
 }
 
 // minuteTimeline converts per-minute counts into a time-ordered timeline.
-func minuteTimeline(m map[string]int) []TimeBucket {
+func minuteTimeline(m map[time.Time]int) []TimeBucket {
 	out := make([]TimeBucket, 0, len(m))
 	for t, n := range m {
-		out = append(out, TimeBucket{T: t, Count: n})
+		out = append(out, TimeBucket{T: t.Format("15:04"), At: t, Width: time.Minute, Count: n})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].T < out[j].T })
+	sort.Slice(out, func(i, j int) bool { return out[i].At.Before(out[j].At) })
 	return out
 }
 

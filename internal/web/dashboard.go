@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/exalm-ai/exalm/pkg/plugin"
 )
@@ -60,6 +61,13 @@ type dashFinding struct {
 	Confidence string         `json:"confidence,omitempty"` // "low" | "medium" | "high"
 	Fixes      []dashFix      `json:"fixes,omitempty"`      // classified temporary + root-cause fixes
 	Evidence   []dashEvidence `json:"evidence,omitempty"`   // verifiable supporting items
+	// FirstSeen/LastSeen are RFC3339 observation bounds, empty when the
+	// producer could not determine them. They are what lets the frontend place
+	// findings on a real time axis; a chart cannot be built without them.
+	FirstSeen string `json:"firstSeen,omitempty"`
+	LastSeen  string `json:"lastSeen,omitempty"`
+	// Count is how many times the condition was observed. 0 = uncounted.
+	Count int `json:"count,omitempty"`
 }
 
 // dashFix is the front-end shape of a classified remediation.
@@ -280,6 +288,36 @@ func restartsOf(f plugin.Finding) string {
 	return "—"
 }
 
+// rfc3339OrEmpty renders a timestamp for the frontend, or "" when the producer
+// could not determine it. An em-dash or a substituted "now" would let the UI
+// present a guess as an observation.
+func rfc3339OrEmpty(t *time.Time) string {
+	if t == nil || t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+// ageOf renders how long ago the finding was last observed. Returns an em-dash
+// when the producer supplied no timestamp — the honest answer for a finding
+// whose age is genuinely unknown.
+func ageOf(f plugin.Finding) string {
+	if f.LastSeen == nil || f.LastSeen.IsZero() {
+		return "—"
+	}
+	d := time.Since(*f.LastSeen)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
+}
+
 // firstSentence returns the first sentence of s (used as the short "reason").
 func firstSentence(s string) string {
 	s = strings.TrimSpace(s)
@@ -294,14 +332,17 @@ func firstSentence(s string) string {
 
 // rootOf builds the root-cause line, enriching with change-correlation when set.
 func rootOf(f plugin.Finding) string {
-	// Prefer the explicit root cause (set by classify.go for k8s and by the
-	// analyzer findings promoter) so the dashboard's "Likely cause" line shows
-	// the underlying cause, not a repeat of the observed detail. Fall back to
-	// Detail only when no root cause was derived.
+	// Only an explicit root cause (set by classify.go for k8s and by the analyzer
+	// findings promoter) may appear under the "Likely cause" label.
+	//
+	// This deliberately does NOT fall back to Detail. Detail is what was
+	// observed; presenting it as a cause both duplicates the line above it and
+	// asserts a conclusion nothing derived. Anomaly findings make the problem
+	// obvious — the detector knows a bucket moved and says so in Detail, but has
+	// no cause to offer, and the card rendered "Likely cause: 70 events in 1m
+	// versus a median of 0" as though that were an explanation. The UI omits the
+	// line when this returns empty.
 	root := strings.TrimSpace(f.RootCause)
-	if root == "" {
-		root = strings.TrimSpace(f.Detail)
-	}
 	if f.LikelyCause != nil {
 		lc := f.LikelyCause
 		ago := humanizeAgo(lc.AgoSeconds)
@@ -318,9 +359,9 @@ func rootOf(f plugin.Finding) string {
 			root += " — " + cause
 		}
 	}
-	if root == "" {
-		return "—"
-	}
+	// Empty, not an em-dash: the card renders the "Likely cause" line only when
+	// this is non-empty, and "—" is truthy in JS, so a placeholder here produced
+	// a cause line reading "Likely cause: —".
 	return root
 }
 
@@ -403,7 +444,7 @@ func buildDashboard(r plugin.Report, podInfo *PodInfo, provider string, autoRefr
 			Sev:        sevKey(f.Severity),
 			Title:      f.Title,
 			Ns:         resourcePath(f, ns),
-			Age:        "—",
+			Age:        ageOf(f),
 			Restarts:   restartsOf(f),
 			Reason:     firstSentence(f.Detail),
 			Root:       rootOf(f),
@@ -413,6 +454,9 @@ func buildDashboard(r plugin.Report, podInfo *PodInfo, provider string, autoRefr
 			Confidence: f.Confidence,
 			Fixes:      mapFixes(f.Fixes),
 			Evidence:   mapEvidence(f.Evidence),
+			FirstSeen:  rfc3339OrEmpty(f.FirstSeen),
+			LastSeen:   rfc3339OrEmpty(f.LastSeen),
+			Count:      f.Count,
 		})
 	}
 

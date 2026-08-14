@@ -118,20 +118,40 @@
     }).map(function (x) { return x.f; });
   }
 
-  function buildSeries(scale) {
-    var seed = 7;
-    function rng() { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; }
-    var out = [];
-    for (var i = 0; i < 24; i++) {
-      var wave = 0.5 + 0.5 * Math.sin(i / 24 * Math.PI * 2 - 1.1);
-      var base = wave * 55 + 12;
-      var med = Math.max(0, Math.round(base * (0.5 + rng() * 0.4) * scale));
-      var high = Math.max(0, Math.round(base * (0.25 + rng() * 0.2) * scale));
-      var low = Math.max(0, Math.round(base * (0.1 + rng() * 0.15) * scale));
-      var crit = Math.round((rng() < 0.16 ? (1 + rng() * 3) : 0) * scale);
-      out.push({ crit: crit, high: high, med: med, low: low, hour: i });
+  // buildSeries buckets findings into the last 24 hourly slots by the time they
+  // were actually observed (finding.lastSeen, RFC3339 from the server).
+  //
+  // Findings without a timestamp are NOT placed on the axis — a finding whose
+  // observation time is unknown cannot honestly be drawn at a particular hour.
+  // They are counted in `undated` so the UI can say so rather than silently
+  // under-reporting. Returns bucket[0] = 23h ago … bucket[23] = current hour.
+  function buildSeries(findings, now) {
+    var out = [], i;
+    var end = new Date(now.getTime());
+    end.setMinutes(0, 0, 0); // align to the top of the current hour
+    for (i = 0; i < 24; i++) {
+      out.push({ crit: 0, high: 0, med: 0, low: 0, hour: new Date(end.getTime() - (23 - i) * 3600000) });
     }
-    return out;
+    var oldest = end.getTime() - 23 * 3600000;
+    var undated = 0, dated = 0;
+
+    (findings || []).forEach(function (f) {
+      var stamp = f.lastSeen || f.firstSeen;
+      if (!stamp) { undated++; return; }
+      var t = Date.parse(stamp);
+      if (isNaN(t)) { undated++; return; }
+      dated++;
+      if (t < oldest || t > end.getTime() + 3600000) return; // outside the window
+      var idx = Math.floor((t - oldest) / 3600000);
+      if (idx < 0) idx = 0;
+      if (idx > 23) idx = 23;
+      var key = f.sev === 'crit' || f.sev === 'critical' ? 'crit'
+        : f.sev === 'high' ? 'high'
+          : f.sev === 'med' || f.sev === 'medium' ? 'med' : 'low';
+      out[idx][key]++;
+    });
+
+    return { buckets: out, undated: undated, dated: dated };
   }
 
   function mdInline(s) {
@@ -207,9 +227,11 @@
     });
     var sevCounts = { crit: agg.crit, high: agg.high, med: agg.med, low: agg.low };
     var podCount = allMode ? (data.pods || agg.pods) : (nsObj.pods || 0);
-    var unhealthy = (allMode && data.unhealthy) ? data.unhealthy : Math.round(podCount * 0.085);
-    var errorRate = ((agg.crit * 3 + agg.high) / Math.max(podCount, 1) * 1.4).toFixed(1) + '%';
-    var bigNumber = fmt(Math.round(1617017 * (podCount / 165)));
+    // Only the cluster-wide unhealthy count is real (it comes from the k8s pod
+    // provider). Per-namespace, and when no provider is wired, we do not know
+    // it — null means "unknown" and the UI omits the claim rather than
+    // estimating one.
+    var unhealthy = (allMode && typeof data.unhealthy === 'number') ? data.unhealthy : null;
 
     var C = 213.6, gap = 1.5;
     var donutTotal = NS.reduce(function (a, n) { return a + n.findings; }, 0) || 1;
@@ -227,16 +249,27 @@
     var healthScore = Math.max(12, Math.round(100 - (agg.crit * 6 + agg.high * 0.4 + agg.med * 0.1)));
     var healthColor = healthScore < 40 ? 'var(--crit)' : healthScore < 70 ? 'var(--high)' : 'var(--good)';
 
+    // Scope the frequency chart to the same findings the rest of the page is
+    // showing, so the chart and the tables can never disagree.
     var nsScopeFreq = (s.freqScope === 'namespace' && !allMode);
-    var scale = (allMode || !nsScopeFreq) ? 1 : Math.max(0.35, podCount / 92);
-    var series = buildSeries(scale);
+    var freqSource = (data.findings || []).filter(function (f) {
+      return (allMode && !nsScopeFreq) || f.nsKey === s.selectedNs || allMode;
+    });
+    var freq = buildSeries(freqSource, new Date());
+    var series = freq.buckets;
     var maxTot = Math.max.apply(null, series.map(function (b) { return b.crit + b.high + b.med + b.low; }).concat([1]));
     var H = 116, segColor = { crit: 'var(--crit)', high: 'var(--high)', med: 'var(--med)', low: 'var(--low)' };
     var tsBars = series.map(function (b) {
       var total = b.crit + b.high + b.med + b.low;
+      var hh = ('0' + b.hour.getHours()).slice(-2);
       var segs = [['crit', b.crit], ['high', b.high], ['med', b.med], ['low', b.low]].filter(function (x) { return x[1] > 0; })
         .map(function (x, i) { return { h: Math.max(1, (x[1] / maxTot) * H), bg: segColor[x[0]], first: i === 0 }; });
-      return { title: b.hour + ':00 · ' + total + ' findings', segs: segs };
+      return {
+        title: hh + ':00 · ' + total + ' finding' + (total === 1 ? '' : 's'),
+        segs: segs,
+        iso: b.hour.toISOString(),
+        total: total
+      };
     });
 
     var q = s.query.trim().toLowerCase();
@@ -270,12 +303,13 @@
     return {
       allMode: allMode, nsObj: nsObj, NS: NS, agg: agg, sevCounts: sevCounts,
       nsLabel: allMode ? 'all namespaces' : nsObj.key, nsDot: allMode ? 'var(--accent)' : nsObj.color,
-      totalFindings: agg.findings, podCount: podCount, unhealthy: unhealthy, errorRate: errorRate, bigNumber: bigNumber,
+      totalFindings: agg.findings, podCount: podCount, unhealthy: unhealthy,
       donutSegs: donutSegs, donutCenter: allMode ? donutTotal : nsObj.findings,
       ringSegs: ringSegs, ringTotal: ringTotal, healthScore: healthScore, healthColor: healthColor,
       healthDash: ((healthScore / 100) * C).toFixed(1) + ' ' + C,
       sloColor: agg.crit > 0 ? 'var(--high)' : 'var(--good)', sloLabel: agg.crit > 0 ? 'SLO at risk' : 'SLO all green',
-      tsBars: tsBars, groups: groups, rows: rows, shownTotal: shownTotal, fixableCount: fixableCount, tabCounts: tabCounts
+      tsBars: tsBars, freqUndated: freq.undated, freqDated: freq.dated,
+      groups: groups, rows: rows, shownTotal: shownTotal, fixableCount: fixableCount, tabCounts: tabCounts
     };
   }
 
@@ -294,7 +328,11 @@
       '<div style="font-size:18px;font-weight:700;color:var(--fg);margin-top:3px;">' + esc(verdict) + '</div>' +
       '<div style="margin-top:5px;color:var(--muted);">' + v.sevCounts.crit + ' critical and ' + v.sevCounts.high + ' high findings across ' + v.totalFindings + ' total.</div></div>' +
       '<div style="display:flex;flex-direction:column;gap:9px;">' +
-      '<div style="display:flex;gap:10px;' + box + '"><span style="color:var(--crit);">●</span><div><strong style="color:var(--fg)">Availability</strong><div style="color:var(--muted)">' + v.unhealthy + ' of ' + v.podCount + ' pods unhealthy.</div></div></div>' +
+      '<div style="display:flex;gap:10px;' + box + '"><span style="color:var(--crit);">●</span><div><strong style="color:var(--fg)">Availability</strong><div style="color:var(--muted)">' +
+      (v.unhealthy === null
+        ? (v.podCount ? v.podCount + ' pods in scope; unhealthy count not reported.' : 'Pod inventory not available.')
+        : v.unhealthy + ' of ' + v.podCount + ' pods unhealthy.') +
+      '</div></div></div>' +
       '<div style="display:flex;gap:10px;' + box + '"><span style="color:var(--high);">●</span><div><strong style="color:var(--fg)">Severity mix</strong><div style="color:var(--muted)">crit ' + v.sevCounts.crit + ' · high ' + v.sevCounts.high + ' · med ' + v.sevCounts.med + ' · low ' + v.sevCounts.low + '</div></div></div>' +
       '<div style="display:flex;gap:10px;' + box + '"><span style="color:' + (degraded ? 'var(--high)' : 'var(--good)') + ';">●</span><div><strong style="color:var(--fg)">SLO</strong><div style="color:var(--muted)">' + esc(v.sloLabel) + '</div></div></div></div>';
   }

@@ -2,6 +2,7 @@ package web
 
 import (
 	"testing"
+	"time"
 
 	"github.com/exalm-ai/exalm/pkg/plugin"
 )
@@ -130,5 +131,63 @@ func TestBuildDashboard_NilPodInfoDegrades(t *testing.T) {
 	}
 	if len(d.Namespaces) != 1 || d.Namespaces[0].Pods != 0 {
 		t.Errorf("namespace pods should be 0 without pod info: %+v", d.Namespaces)
+	}
+}
+
+func TestAgeOf_UnknownStaysUnknown(t *testing.T) {
+	// A finding with no observation time must render as unknown, never as a
+	// guess — the dashboard previously hardcoded an em-dash for every row,
+	// which hid the fact that ages were never computed at all.
+	if got := ageOf(plugin.Finding{}); got != "—" {
+		t.Errorf("no timestamp should render as em-dash, got %q", got)
+	}
+	cases := []struct {
+		ago  time.Duration
+		want string
+	}{
+		{30 * time.Second, "just now"},
+		{45 * time.Minute, "45m"},
+		{5 * time.Hour, "5h"},
+		{50 * time.Hour, "2d"},
+	}
+	for _, tc := range cases {
+		last := time.Now().Add(-tc.ago)
+		f := plugin.Finding{LastSeen: &last}
+		if got := ageOf(f); got != tc.want {
+			t.Errorf("ageOf(%v ago) = %q, want %q", tc.ago, got, tc.want)
+		}
+	}
+}
+
+func TestRFC3339OrEmpty(t *testing.T) {
+	if got := rfc3339OrEmpty(nil); got != "" {
+		t.Errorf("nil must serialise as empty, got %q", got)
+	}
+	if got := rfc3339OrEmpty(&time.Time{}); got != "" {
+		t.Errorf("zero time must serialise as empty so the UI can tell it is unknown, got %q", got)
+	}
+	at := time.Date(2026, 8, 12, 9, 30, 0, 0, time.UTC)
+	if got := rfc3339OrEmpty(&at); got != "2026-08-12T09:30:00Z" {
+		t.Errorf("rfc3339OrEmpty = %q", got)
+	}
+}
+
+func TestRootOf_NeverPresentsDetailAsACause(t *testing.T) {
+	// Detail describes what was observed. Labelling it "Likely cause" both
+	// duplicates the line above it in the card and asserts a conclusion nothing
+	// derived — most visibly for anomaly findings, which deliberately carry no
+	// root cause.
+	f := plugin.Finding{
+		Title:  "Activity spiked +7000% at 07:20",
+		Detail: "70 events in 1m versus a median of 0 across the preceding 15 buckets (+7000%).",
+	}
+	if got := rootOf(f); got != "" {
+		t.Errorf("a finding with no root cause must yield no cause line, got %q", got)
+	}
+
+	// An explicit root cause still renders.
+	f.RootCause = "Connection pool exhausted"
+	if got := rootOf(f); got != "Connection pool exhausted" {
+		t.Errorf("explicit root cause = %q", got)
 	}
 }

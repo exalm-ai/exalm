@@ -35,6 +35,18 @@
     return 'var(--codeFg)';
   }
 
+  // toLocalInput renders an ISO instant as the "YYYY-MM-DDTHH:mm" form a
+  // datetime-local input requires, in the viewer's own timezone. readFilters()
+  // converts back with new Date(value).toISOString(), so the round-trip holds.
+  function toLocalInput(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    var p = function (n) { return ('0' + n).slice(-2); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
+      'T' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+
   function ctrl(extra) {
     return 'height:30px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--fg);font-family:inherit;font-size:12.5px;padding:0 9px;outline:none;' + (extra || '');
   }
@@ -91,8 +103,11 @@
           '<input class="ex-le-scope" placeholder="host / site" value="' + esc(filters.scope || '') + '" style="' + ctrl('width:110px;') + '">';
       }
       if (caps.time) {
-        h += '<input class="ex-le-from" type="datetime-local" title="from" style="' + ctrl('') + '">' +
-          '<input class="ex-le-to" type="datetime-local" title="to" style="' + ctrl('') + '">';
+        // Show the active window in the inputs. Without a value the range a
+        // chart drilled into is invisible, and readFilters() — which reads the
+        // inputs — would silently clear it on the next search or Apply.
+        h += '<input class="ex-le-from" type="datetime-local" title="from" value="' + esc(toLocalInput(filters.from)) + '" style="' + ctrl('') + '">' +
+          '<input class="ex-le-to" type="datetime-local" title="to" value="' + esc(toLocalInput(filters.to)) + '" style="' + ctrl('') + '">';
       }
       if (corpus) h += '<button class="ex-le-apply" style="height:30px;border:none;background:var(--accent);color:#04222b;border-radius:8px;cursor:pointer;font-size:12.5px;font-weight:600;padding:0 13px;">Apply</button>';
       if (caps.export !== false) {

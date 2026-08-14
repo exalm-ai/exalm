@@ -40,6 +40,20 @@
 
   // ── chart primitives (inline, CSS-var themed, drill-enabled) ──
 
+  // bucketWindow turns a stats bucket into an exact [from,to) ISO range using
+  // the instant the analyzer recorded. Returns null when the bucket predates
+  // the `at` field, so callers can fall back to the old label match.
+  function bucketWindow(b) {
+    if (!b || !b.at) return null;
+    var start = new Date(b.at);
+    if (isNaN(start.getTime())) return null;
+    // widthNs is a Go time.Duration (nanoseconds); default to one minute, the
+    // granularity every analyzer timeline currently uses.
+    var ms = b.widthNs ? Math.round(b.widthNs / 1e6) : 60000;
+    if (!ms || ms < 1000) ms = 60000;
+    return { from: start.toISOString(), to: new Date(start.getTime() + ms).toISOString() };
+  }
+
   // timeline: vertical bars per bucket; click drills into that minute.
   function timelineChart(buckets, drillBase) {
     if (!buckets || !buckets.length) return '<div style="color:var(--faint);font-size:12px;">No timestamped events.</div>';
@@ -47,7 +61,20 @@
     buckets.forEach(function (b) { if (b.count > max) max = b.count; });
     var bars = buckets.map(function (b) {
       var h = Math.max(3, Math.round((b.count / max) * 64));
-      var drill = drillBase + '&contains=&bucket=' + encodeURIComponent(b.t) + (b.sev ? '&severity=' + encodeURIComponent(b.sev) : '');
+      // Drill on the bucket's real instant when the analyzer supplies one, so
+      // the log query is an exact time range. The older bucket=HH:MM form is a
+      // text match on the timestamp and is kept only as a fallback for stats
+      // payloads produced before buckets carried `at`.
+      //
+      // b.sev is the WORST severity in the bucket and drives the bar colour —
+      // it is not a filter. Passing it as one turned "5 events at 21:55" into a
+      // drilldown showing 2, silently hiding the warns underneath. The bucket
+      // is a time slice, so the drill is a time slice: every line in that
+      // minute, which is also the context you want when reading a spike.
+      var win = bucketWindow(b);
+      var drill = win
+        ? drillBase + '&contains=&from=' + encodeURIComponent(win.from) + '&to=' + encodeURIComponent(win.to)
+        : drillBase + '&contains=&bucket=' + encodeURIComponent(b.t);
       return '<div class="ex-an-drill" data-drill="' + esc(drill) + '" title="' + esc(b.t + ' · ' + b.count + (b.sev ? ' ' + b.sev : '')) + '"' +
         ' style="flex:1;min-width:3px;max-width:22px;height:' + h + 'px;background:' + sevColor(b.sev) + ';border-radius:2px 2px 0 0;cursor:pointer;opacity:.85;"></div>';
     }).join('');
@@ -158,15 +185,42 @@
     }).join('');
     var legend = [['crit', 'critical'], ['high', 'high'], ['med', 'medium'], ['low', 'low']].map(function (x) { return '<span style="display:flex;align-items:center;gap:5px;font-size:10.5px;color:var(--muted);"><span style="width:8px;height:8px;border-radius:2px;background:var(--' + x[0] + ');"></span>' + x[1] + '</span>'; }).join('');
     var bars = v.tsBars.map(function (b) {
-      return '<div class="ex-chart-bar" data-act="drilldown" data-kind="time" data-label="' + esc(b.title) + '" title="' + esc(b.title) + '" style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;min-width:0;cursor:pointer;">' +
+      return '<div class="ex-chart-bar" data-act="drilldown" data-kind="time" data-label="' + esc(b.title) + '" data-at="' + esc(b.iso || '') + '" title="' + esc(b.title) + '" style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;min-width:0;cursor:pointer;">' +
         b.segs.map(function (sg) { return '<div style="width:100%;height:' + sg.h + 'px;background:' + sg.bg + ';border-radius:' + (sg.first ? '3px 3px 0 0' : '0') + ';"></div>'; }).join('') + '</div>';
     }).join('');
+
+    // Axis ticks come from the real bucket times, not fixed clock labels — the
+    // window ends at the current hour, so it rarely starts at midnight.
+    var ticks = [0, 6, 12, 18].map(function (i) {
+      var b = v.tsBars[i];
+      if (!b || !b.iso) { return '<span></span>'; }
+      var d = new Date(b.iso);
+      return '<span>' + ('0' + d.getHours()).slice(-2) + ':00</span>';
+    }).join('') + '<span>now</span>';
+
+    // Say plainly when there is nothing to plot, rather than drawing a shape.
+    // Findings with no observation time cannot be placed on an hour and are
+    // reported instead of being quietly dropped.
+    var body;
+    if (!v.freqDated) {
+      body = '<div style="height:150px;display:flex;align-items:center;justify-content:center;text-align:center;color:var(--muted);font-size:12px;line-height:1.5;">' +
+        (v.freqUndated
+          ? esc(v.freqUndated + ' finding' + (v.freqUndated === 1 ? '' : 's') + ' carry no observation time,<br>so they cannot be placed on a timeline.')
+          : 'No findings in the last 24 hours.') + '</div>';
+    } else {
+      body = '<div style="display:flex;align-items:flex-end;gap:3px;height:150px;">' + bars + '</div>' +
+        '<div style="display:flex;justify-content:space-between;margin-top:7px;font-family:var(--font-mono),monospace;font-size:10px;color:var(--faint);">' + ticks + '</div>';
+    }
+
+    var note = (v.freqDated && v.freqUndated)
+      ? '<div style="margin-top:8px;font-size:10.5px;color:var(--faint);">' + esc(v.freqUndated + ' finding' + (v.freqUndated === 1 ? '' : 's') + ' without an observation time not shown') + '</div>'
+      : '';
+
     return kCard('<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px;">' +
       '<div>' + kCardLabel('Error frequency · last 24h') + '<div style="font-size:11px;color:var(--muted);margin-top:2px;">Findings trend ' + (state.freqScope === 'namespace' && !v.allMode ? 'by namespace · ' + esc(v.nsLabel) : 'by cluster') + '</div></div>' +
       '<div style="display:flex;gap:6px;">' + toggle + '</div></div>' +
       '<div style="display:flex;gap:14px;margin-bottom:8px;">' + legend + '</div>' +
-      '<div style="display:flex;align-items:flex-end;gap:3px;height:150px;">' + bars + '</div>' +
-      '<div style="display:flex;justify-content:space-between;margin-top:7px;font-family:var(--font-mono),monospace;font-size:10px;color:var(--faint);"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>now</span></div>');
+      body + note);
   }
 
   // ── Hover tooltips for .ex-chart-bar elements (moved from charts.js) ──

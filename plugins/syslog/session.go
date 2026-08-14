@@ -154,11 +154,10 @@ type NameCount struct {
 }
 
 // TimeBucket is one per-minute ("15:04") bucket in a stats timeline.
-type TimeBucket struct {
-	T     string `json:"t"`
-	Count int    `json:"count"`
-	Sev   string `json:"sev,omitempty"`
-}
+// TimeBucket is the shared timeline bucket. Aliased rather than redeclared:
+// all six analyzers had byte-identical copies, and the chart drilldown needs
+// the bucket instant that the local copies did not carry.
+type TimeBucket = investigate.TimeBucket
 
 // SyslogStats is the dashboard stats payload for a syslog session.
 type SyslogStats struct {
@@ -194,8 +193,8 @@ func buildStats(s *investigate.LogSession) SyslogStats {
 	var st SyslogStats
 	unitHist := map[string]int{}
 	hostHist := map[string]int{}
-	minuteCount := map[string]int{}
-	minuteWorst := map[string]int{}
+	minuteCount := map[time.Time]int{}
+	minuteWorst := map[time.Time]int{}
 	for _, e := range events {
 		if e.Unit != "" {
 			unitHist[e.Unit]++
@@ -217,7 +216,7 @@ func buildStats(s *investigate.LogSession) SyslogStats {
 		if rank < 0 || e.At.IsZero() {
 			continue
 		}
-		bucket := e.At.Format("15:04")
+		bucket := investigate.BucketMinute(e.At)
 		minuteCount[bucket]++
 		if cur, ok := minuteWorst[bucket]; !ok || rank < cur {
 			minuteWorst[bucket] = rank
@@ -225,9 +224,9 @@ func buildStats(s *investigate.LogSession) SyslogStats {
 	}
 	sevNames := []string{"emerg", "alert", "crit", "err", "warn"}
 	for bucket, n := range minuteCount {
-		st.SeverityTimeline = append(st.SeverityTimeline, TimeBucket{T: bucket, Count: n, Sev: sevNames[minuteWorst[bucket]]})
+		st.SeverityTimeline = append(st.SeverityTimeline, TimeBucket{T: bucket.Format("15:04"), At: bucket, Width: time.Minute, Count: n, Sev: sevNames[minuteWorst[bucket]]})
 	}
-	sort.Slice(st.SeverityTimeline, func(i, j int) bool { return st.SeverityTimeline[i].T < st.SeverityTimeline[j].T })
+	sort.Slice(st.SeverityTimeline, func(i, j int) bool { return st.SeverityTimeline[i].At.Before(st.SeverityTimeline[j].At) })
 	st.TopUnits = topCounts(unitHist, 10)
 	st.TopHosts = topCounts(hostHist, 10)
 	return st

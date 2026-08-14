@@ -130,9 +130,12 @@
   }
 
   // parseDrillQuery turns a chart element's data-drill query string into the
-  // explorer's filter object. "bucket=HH:MM" is a UI-side minute filter;
-  // translate via contains on the timestamp text as a best-effort (corpus
-  // timestamps vary).
+  // explorer's filter object.
+  //
+  // from/to are an exact time range and are passed straight through to the
+  // corpus query. "bucket=HH:MM" is the legacy form emitted by charts whose
+  // stats payload has no bucket instant: it can only be matched as text against
+  // the timestamp, which is why buckets now carry `at`.
   function parseDrillQuery(query) {
     var filters = {};
     String(query || '').split('&').forEach(function (pair) {
@@ -141,7 +144,8 @@
       var k = eq === -1 ? pair : pair.slice(0, eq);
       var v = eq === -1 ? '' : decodeURIComponent(pair.slice(eq + 1).replace(/\+/g, ' '));
       if (k === 'bucket') { k = 'contains'; }
-      if (k === 'severity' || k === 'unit' || k === 'scope' || k === 'code' || k === 'contains') filters[k] = v;
+      if (k === 'severity' || k === 'unit' || k === 'scope' || k === 'code' ||
+        k === 'contains' || k === 'from' || k === 'to') filters[k] = v;
     });
     return filters;
   }
