@@ -149,10 +149,14 @@ func TOFUCallback(strict bool) (gocrypto.HostKeyCallback, error) {
 			)
 
 		case !exists && strict:
-			// Unknown and strict mode — reject.
+			// Unknown and strict mode — reject. Strict mode is currently only
+			// reachable programmatically (Opts.StrictHostKey); there is no CLI
+			// flag for it, so this message must not send the user looking for
+			// one. Add the flag name here when one is exposed.
 			return fmt.Errorf(
-				"ssh: unknown host %s — use --no-ssh-strict-host-key to auto-accept on first connection",
-				host,
+				"ssh: unknown host %s — its key is not in %s; connect once with strict host-key checking disabled, "+
+					"or add the key to that file after verifying the fingerprint out-of-band",
+				host, path,
 			)
 
 		default:

@@ -290,8 +290,8 @@ SSH flags available on all log plugins:
 **Security:** host-key verification uses TOFU — the first connection to any
 host auto-accepts and persists the key fingerprint to `~/.exalm/known_hosts`.
 Subsequent connections verify the stored fingerprint. A mismatch returns an
-actionable error. Use `--ssh-strict-host-key` to reject unknown hosts without
-prompting.
+actionable error. A strict mode that rejects unknown hosts outright exists in
+the SSH layer (`Opts.StrictHostKey`) but is not currently exposed as a CLI flag.
 
 Test infrastructure: `internal/ssh/sshtest` provides an in-process SSH server
 (no real SSH daemon needed) following the `net/http/httptest` pattern.

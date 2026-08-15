@@ -276,8 +276,9 @@ clicked slice). Chat sessions are keyed per dashboard.
 
 **TOFU (trust on first use):** the first connection to any host auto-accepts and stores the
 key fingerprint at `~/.exalm/known_hosts`. Subsequent connections verify the stored fingerprint.
-A mismatch returns an error before any data is exchanged. Use `--ssh-strict-host-key` to reject
-unknown hosts without prompting.
+A mismatch returns an error before any data is exchanged. A strict mode that rejects unknown
+hosts outright exists in the SSH layer (`Opts.StrictHostKey`) but is not currently exposed as a
+CLI flag.
 
 **Test infrastructure:** `internal/ssh/sshtest` provides an in-process SSH server following the
 `net/http/httptest` pattern. All SSH tests are hermetic — no real SSH daemon required.

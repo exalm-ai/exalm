@@ -232,8 +232,8 @@ host-key verification:
    `~/.exalm/known_hosts` (same format as OpenSSH).
 2. **Subsequent connections**: stored fingerprint is verified. A mismatch
    causes a hard error with an actionable message.
-3. **Strict mode**: `--ssh-strict-host-key` rejects unknown hosts without
-   storing them.
+3. **Strict mode**: `Opts.StrictHostKey` rejects unknown hosts without storing
+   them. Programmatic only — no CLI flag exposes it yet.
 
 `internal/ssh/sshtest` provides an in-process SSH server for hermetic
 testing — no real `sshd` needed, following the `net/http/httptest` pattern.

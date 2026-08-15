@@ -162,6 +162,11 @@ kubectl logs -l app=api --since=1h | exalm logs summarize
 All log plugins collect from remote hosts over SSH — no agent, no daemon, no port other
 than 22 required on the target.
 
+> **"How does this work on my cluster / hosts?"** —
+> [docs/faq.md](docs/faq.md) lists every command exalm runs on a host, every
+> Kubernetes permission it needs, and exactly what "no agent, no account" does
+> and does not mean.
+
 ```sh
 # Linux syslog
 exalm syslog analyze --host db-01 --ssh-key ~/.ssh/id_rsa

@@ -68,8 +68,13 @@ to remain anonymous.
   a token set.
 - **TOFU host-key verification** is used for SSH connections. The first
   connection to a new host is auto-accepted and stored in
-  `~/.exalm/known_hosts`. Use `--ssh-strict-host-key` to reject unknown
-  hosts instead of auto-accepting them.
+  `~/.exalm/known_hosts`; subsequent connections verify against it and a
+  mismatch aborts before any data is exchanged. Note the limitation this
+  implies: TOFU protects against later tampering, not against an attacker
+  already in position on the very first connection. Verify the stored
+  fingerprint out-of-band if that is part of your threat model. A strict
+  mode that rejects unknown hosts outright exists in the SSH layer
+  (`Opts.StrictHostKey`) but is **not currently exposed as a CLI flag**.
 - **File-based persistence** (`~/.exalm/`) has no encryption at rest.
   DORA deployment records and incident JSON files are stored in plaintext.
   Ensure your home directory has appropriate permissions (`chmod 700 ~/.exalm`).
