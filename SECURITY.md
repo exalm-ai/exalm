@@ -52,8 +52,10 @@ to remain anonymous.
 
 - **Redaction before every LLM call**: All environment data passes through
   `internal/redact/` before it is sent to any LLM provider. The redaction
-  engine contains 28+ patterns covering API keys, passwords, tokens, IP
-  addresses, email addresses, and more.
+  engine contains 24 patterns: 18 always on (API keys, passwords, tokens,
+  private keys, JWTs, connection strings) plus 6 higher-false-positive ones
+  that are opt-in (e-mail, IPv4, credit card, internal IPv4, Windows account,
+  Linux username). Each has a test in `internal/redact/redact_test.go`.
 - **No telemetry by default**: Exalm does not phone home. There is no
   analytics, crash reporting, or usage tracking unless you explicitly
   opt in.

@@ -354,7 +354,7 @@ in `internal/network` remains dormant, wired to nothing).
 - `syslog analyze`, `httplog analyze`, `eventlog summarize`, `iis analyze`
 - `slo check`: SLO burn-rate calculation with Prometheus backend
 - `incident` (stubbed)
-- `internal/redact/`: 28+ secret/PII redaction patterns; always runs before LLM calls
+- `internal/redact/`: 24 secret/PII redaction patterns (18 always on, 6 opt-in); always runs before LLM calls
 - `internal/llm/`: Claude, OpenAI, OpenRouter, Ollama adapters
 - `pkg/plugin/`: plugin interface contract (`Name`, `Description`, `Mutates`, `Subcommands`)
 - `internal/web/`: live HTTP dashboard with `exalm serve`

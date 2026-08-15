@@ -376,16 +376,24 @@ exalm k8s analyze
 passes through the redaction engine before it reaches an LLM. This is enforced at the
 architecture level — there is no flag to bypass it and no code path that skips it.
 
-**What gets redacted (28+ patterns):**
+**What gets redacted — 18 patterns always on, 6 more opt-in, each with a test:**
 
-- AWS, GCP, and Azure access keys
-- Anthropic, OpenAI, OpenRouter, Stripe, and Twilio API keys
-- Bearer tokens and Authorization headers
-- Private key blocks (RSA, EC, OpenSSH, PKCS8)
-- JWT tokens
-- Password fields (`password=`, `passwd:`, `PGPASSWORD`, `DB_PASSWORD`, ...)
-- Database connection strings (`postgres://`, `mysql://`, `mongodb://`, ...)
-- IP addresses and email addresses (opt-in — off by default)
+Always on (18):
+
+- Cloud keys — AWS access key, AWS temporary access key, AWS secret access key,
+  Azure storage key, Google API key
+- Service tokens — Anthropic, OpenAI, GitHub, Slack, Stripe
+- Auth material — JWTs, `Authorization: Bearer` headers, private key blocks
+  (RSA, EC, OpenSSH, PKCS8)
+- Credentials in config — password assignments (`password=`, `passwd:`,
+  `PGPASSWORD`, `DB_PASSWORD`, …), database connection strings (`postgres://`,
+  `mysql://`, `mongodb://`, …), Docker `config.json` auth blobs
+- Windows identifiers — SIDs, NTLM hashes
+
+Opt-in (6, off by default because they false-positive on ordinary text):
+
+- E-mail addresses, IPv4 addresses, internal IPv4 ranges, credit card numbers,
+  Windows account names, Linux usernames
 
 The full pattern list is in [`internal/redact/patterns.go`](internal/redact/patterns.go).
 Every pattern has a corresponding test in

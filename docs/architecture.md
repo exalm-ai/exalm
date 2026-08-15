@@ -124,7 +124,7 @@ exalm/
    (log lines, k8s JSON, AWS cost JSON, Terraform plan JSON, …)
 
 2. internal/redact.Engine.Redact(rawData)
-   ├─ Applies 28+ regex patterns (API keys, passwords, JWTs, IPs, …)
+   ├─ Applies 18 always-on regex patterns (API keys, passwords, JWTs, …)
    ├─ Replaces matches with [REDACTED]
    └─ Returns sanitised string — NEVER returns partially redacted data
 
@@ -198,8 +198,8 @@ the plugin interface.
 
 | Property | Implementation |
 |---|---|
-| 28+ patterns | `DefaultPatterns` in `patterns.go` — API keys, JWTs, passwords, IPs, credit card numbers, … |
-| High-FP patterns | `OptionalPatterns` — e-mail, IPv4 — opt-in via `--redact email,ipv4` |
+| 18 always-on patterns | `DefaultPatterns` in `patterns.go` — API keys, JWTs, passwords, private keys, connection strings, … |
+| 6 opt-in patterns | `OptionalPatterns` — e-mail, IPv4, credit card, internal IPv4, Windows account, Linux username — higher false-positive rate, so off by default |
 | Surrounding context preserved | Patterns capture prefix/suffix groups; only the secret group is replaced |
 | Never fails silently | `Redact()` never returns a partially-redacted string marked as clean; on any internal failure it returns the input unchanged and logs to stderr |
 | 100% test coverage | `internal/redact/redact_test.go` verifies every pattern: secret gone, context preserved |

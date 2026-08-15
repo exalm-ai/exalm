@@ -107,7 +107,7 @@ exalm/
 │    │         │  └── notify/      (Slack / webhook POST)              │
 │    │         │                                                        │
 │    │         └── internal/                                            │
-│    │              ├── redact/    (28+ patterns, always runs)          │
+│    │              ├── redact/    (24 patterns, always runs)           │
 │    │              ├── llm/       (claude│openai│openrouter│ollama)    │
 │    │              ├── store/     (SQLite, WAL mode, migrations)       │
 │    │              ├── ssh/       (TOFU known_hosts)                   │
