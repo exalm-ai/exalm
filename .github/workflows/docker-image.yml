@@ -62,7 +62,7 @@ jobs:
 
       - name: Build image (load locally for Trivy scan)
         id: build
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           file: ./Dockerfile
@@ -96,7 +96,7 @@ jobs:
 
       - name: Push to GitHub Container Registry
         if: ${{ github.event_name != 'pull_request' }}
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         # continue-on-error: push may fail until org package permissions are
         # configured in the GitHub org Settings → Actions → Workflow permissions.
         continue-on-error: true
